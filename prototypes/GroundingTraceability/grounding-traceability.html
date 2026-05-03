@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grounding & Traceability Prototype</title>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+            padding: 20px; 
+            display: flex; 
+            gap: 20px; 
+            background: #fdfdfd;
+            color: #333;
+        }
+        .container { 
+            flex: 1; 
+            padding: 24px; 
+            background: #fff;
+            border: 1px solid #e1e4e8; 
+            border-radius: 8px; 
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        h2 { margin-top: 0; font-size: 1.2rem; border-bottom: 1px solid #eee; padding-bottom: 12px; }
+        .text-content { 
+            line-height: 1.6; 
+            white-space: pre-wrap; 
+            font-size: 16px; 
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .data-list { list-style: none; padding: 0; margin: 0; }
+        .data-item { 
+            padding: 12px; 
+            border: 1px solid #eaebec; 
+            margin-bottom: 8px; 
+            cursor: pointer; 
+            border-radius: 6px; 
+            transition: all 0.2s ease;
+        }
+        .data-item:hover { background: #f8f9fa; border-color: #ccc; }
+        .data-item.active { 
+            border-color: #0366d6; 
+            background: #f1f8ff; 
+            box-shadow: inset 3px 0 0 #0366d6;
+        }
+        /* Highlight specific styling */
+        mark { 
+            background-color: #fff3cd; /* Yellow highlight */
+            color: #856404;
+            padding: 2px 0; 
+            border-radius: 3px; 
+            box-shadow: 0 0 0 1px #ffeeba;
+            transition: background-color 0.2s;
+        }
+    </style>
+</head>
+<body>
+    <div class="container" style="display: flex; flex-direction: column;">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; border-bottom: 1px solid #eee; padding-bottom: 12px; margin-bottom: 12px;">
+            <h2 style="border:none; margin:0; padding:0;">Source Document</h2>
+            <button id="edit-btn" style="display:none; font-size:12px; padding: 4px 8px; cursor:pointer; border: 1px solid #ccc; border-radius: 4px; background: #fdfdfd;">Edit Text</button>
+        </div>
+        <textarea id="source-editor" class="text-content" style="width: 100%; min-height: 250px; flex: 1; border: 1px solid #ccc; font-family: inherit; resize: vertical;"></textarea>
+        <div id="text-container" class="text-content" style="display:none; flex: 1; border: 1px solid transparent;"></div>
+    </div>
+    <div class="container">
+        <h2>Extracted Data (Python Backend)</h2>
+        <div style="margin-bottom: 20px;">
+            <button id="extract-btn" style="width: 100%; padding: 8px 16px; background: #0366d6; color: white; border: none; border-radius: 4px; cursor: pointer;">Run Server Extraction</button>
+        </div>
+        <ul id="data-list" class="data-list"></ul>
+        <div style="margin-top:24px; padding:12px; background:#f6f8fa; font-size:0.85rem; border-radius:6px; color:#586069;">
+            <strong>Note:</strong> Ensure the local Python backend is running on port 5000 to extract the tabular values via Gemini.
+        </div>
+    </div>
+
+    <script>
+        // 1. Mutable variable for the text payload
+        let sourceText = `Apple Inc. announced its Q3 earnings today, reporting a revenue of $81.8 billion, down 1% year-over-year. The services sector saw an all-time high of $21.2 billion. Tim Cook, the CEO, mentioned that active devices reached a new record across all geographic segments. Operating expenses for the quarter were $13.4 billion.`;
+
+        const sourceEditor = document.getElementById('source-editor');
+        const textContainer = document.getElementById('text-container');
+        const editBtn = document.getElementById('edit-btn');
+        const dataList = document.getElementById('data-list');
+        const extractBtn = document.getElementById('extract-btn');
+
+        // Initial render: show text area ready for editing
+        sourceEditor.value = sourceText;
+
+        // Toggle back to edit mode
+        editBtn.addEventListener('click', () => {
+            textContainer.style.display = 'none';
+            editBtn.style.display = 'none';
+            sourceEditor.style.display = 'block';
+            // Clear highlights when going back to edit mode
+            document.querySelectorAll('.data-item').forEach(el => el.classList.remove('active'));
+        });
+
+        /**
+         * 3. Renders the substring dynamically without breaking DOM boundaries.
+         */
+        function highlightText(start, end) {
+            // Update UI constraints: hide textarea, show div renderer
+            sourceEditor.style.display = 'none';
+            editBtn.style.display = 'inline-block';
+            textContainer.style.display = 'block';
+
+            // Guard clauses for boundary safety
+            if (start < 0 || end > sourceText.length || start > end) {
+                console.error("Invalid char_interval:", {start, end});
+                return;
+            }
+
+            const before = sourceText.slice(0, start);
+            const highlight = sourceText.slice(start, end);
+            const after = sourceText.slice(end);
+
+            textContainer.innerHTML = ''; // clear parent safely
+            textContainer.appendChild(document.createTextNode(before));
+            const markNode = document.createElement('mark');
+            markNode.textContent = highlight;
+            textContainer.appendChild(markNode);
+            textContainer.appendChild(document.createTextNode(after));
+        }
+
+        /**
+         * 4. List data to bind "Accept/Decline" logic UX interactions
+         */
+        function renderDataList(extractedData) {
+            dataList.innerHTML = ''; // Ensure we clear out old/loading items
+            extractedData.forEach((item) => {
+                const li = document.createElement('li');
+                li.className = 'data-item';
+                li.innerHTML = `
+                    <div style="font-size:12px; color:#666; text-transform:uppercase; letter-spacing:0.5px;">${item.entity}</div>
+                    <div style="font-size:16px; margin-top:4px; font-weight:600;">${item.value}</div>
+                    <div style="font-size:11px; margin-top:6px; color:#aaa;">[ Interval: ${item.char_start} - ${item.char_end} ]</div>
+                `;
+                
+                li.addEventListener('click', () => {
+                    document.querySelectorAll('.data-item').forEach(el => el.classList.remove('active'));
+                    li.classList.add('active');
+                    highlightText(item.char_start, item.char_end);
+                });
+                
+                dataList.appendChild(li);
+            });
+        }
+
+        // 5. Connect to Python Local Backend API
+        async function fetchFromBackend() {
+            try {
+                const response = await fetch(`http://127.0.0.1:5000/extract`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ text: sourceText })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`API Error: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                return data;
+            } catch (e) {
+                console.error("Failed to parse backend response", e);
+                alert("Failed to extract data. Is the backend server running on port 5000?");
+                return [];
+            }
+        }
+
+        extractBtn.addEventListener('click', async () => {
+            // Read whatever is in the editor before extracting so changes are tracked natively
+            sourceText = sourceEditor.value;
+
+            dataList.innerHTML = `<li class="data-item"><div style="font-size:14px; text-align:center;">Extracting mapping data from Python backend...</div></li>`;
+            
+            extractBtn.disabled = true;
+            extractBtn.style.opacity = '0.5';
+            
+            const extractedData = await fetchFromBackend();
+            renderDataList(extractedData);
+            
+            extractBtn.disabled = false;
+            extractBtn.style.opacity = '1';
+        });
+
+    </script>
+</body>
+</html>
