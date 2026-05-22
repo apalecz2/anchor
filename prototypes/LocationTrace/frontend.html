@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LocationTrace Prototype</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 20px;
+            display: flex;
+            gap: 20px;
+            background-color: #f5f5f5;
+        }
+
+        .left-panel {
+            flex: 1;
+            max-width: 60%;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .right-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        /* The container matches the image size and anchors the absolute elements */
+        .image-container {
+            position: relative;
+            display: inline-block;
+        }
+
+        .source-image {
+            display: block;
+            max-width: 100%; /* Ensure responsive scaling if needed */
+            height: auto;
+        }
+
+        /* The actual bounding box highlight */
+        .ocr-highlight {
+            position: absolute;
+            border: 2px solid transparent;
+            background-color: rgba(255, 255, 0, 0); /* Invisible by default */
+            cursor: pointer;
+            transition: all 0.2s;
+            pointer-events: none; /* Let clicks pass through if needed */
+        }
+
+        /* When a user hovers over a table row, or the box itself */
+        .ocr-highlight.active, .ocr-highlight:hover {
+            border-color: #ff9800; /* Orange border */
+            background-color: rgba(255, 255, 0, 0.4); /* Yellow highlight */
+            pointer-events: auto;
+            z-index: 10;
+        }
+
+        .extracted-text-item {
+            display: inline-block;
+            margin: 4px;
+            padding: 6px 10px;
+            background: #eef2f5;
+            border: 1px solid #cddde6;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.2s;
+        }
+
+        .extracted-text-item:hover, .extracted-text-item.active {
+            background: #ffe0b2;
+            border-color: #ffb74d;
+        }
+        
+        #text-container {
+            display: flex;
+            flex-wrap: wrap;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="left-panel">
+        <h2>Document Viewer</h2>
+        <div class="image-container" id="document-viewer">
+            <img src="http://127.0.0.1:5000/api/image" class="source-image" id="invoice-img" crossorigin="anonymous" />
+            <!-- Highlights will be injected here by Javascript -->
+        </div>
+    </div>
+    <div class="right-panel">
+        <h2>Output Verification</h2>
+        <p>Click on any text element below to trace its origin on the image using fuzzy matching.</p>
+        <div id="text-container">Running Tesseract OCR on image...</div>
+    </div>
+
+    <script>
+        let ocrElements = [];
+
+        // Simple Levenshtein distance for fuzzy matching
+        function levenshteinDistance(a, b) {
+            const matrix = [];
+            for (let i = 0; i <= b.length; i++) {
+                matrix[i] = [i];
+            }
+            for (let j = 0; j <= a.length; j++) {
+                matrix[0][j] = j;
+            }
+            for (let i = 1; i <= b.length; i++) {
+                for (let j = 1; j <= a.length; j++) {
+                    if (b.charAt(i - 1) == a.charAt(j - 1)) {
+                        matrix[i][j] = matrix[i - 1][j - 1];
+                    } else {
+                        matrix[i][j] = Math.min(matrix[i - 1][j - 1] + 1, Math.min(matrix[i][j - 1] + 1, matrix[i - 1][j] + 1));
+                    }
+                }
+            }
+            return matrix[b.length][a.length];
+        }
+
+        function findBestMatch(targetText, targetIndex, totalItems) {
+            let bestMatch = null;
+            let bestScore = Infinity;
+            
+            // Expected relative position of the word in the sequence
+            let expectedRatio = totalItems > 1 ? targetIndex / (totalItems - 1) : 0;
+            
+            ocrElements.forEach((element, index) => {
+                const dist = levenshteinDistance(targetText.toLowerCase(), element.text.toLowerCase());
+                
+                // Valid matches must have a reasonable edit distance
+                if (dist <= Math.max(2, targetText.length * 0.4)) {
+                    let relativePos = ocrElements.length > 1 ? index / (ocrElements.length - 1) : 0;
+                    
+                    // Distance penalty based on the difference in relative sequence position.
+                    // This resolves duplicates by picking the one physically closest in the sequence sequence order.
+                    let posDiff = Math.abs(relativePos - expectedRatio);
+                    let score = dist + (posDiff * 5); 
+                    
+                    if (score < bestScore) {
+                        bestScore = score;
+                        bestMatch = index;
+                    }
+                }
+            });
+            
+            return bestMatch;
+        }
+
+        function renderBoundingBoxes(elements) {
+            const container = document.getElementById('document-viewer');
+            const img = document.getElementById('invoice-img');
+            
+            // Calculate scale factor in case the image is scaled via CSS
+            const scaleX = img.clientWidth / img.naturalWidth;
+            const scaleY = img.clientHeight / img.naturalHeight;
+            
+            // Remove old highlights if any
+            document.querySelectorAll('.ocr-highlight').forEach(el => el.remove());
+            
+            elements.forEach((element, index) => {
+                const box = document.createElement('div');
+                box.className = 'ocr-highlight';
+                box.id = `highlight-${index}`;
+                
+                box.style.left = (element.left * scaleX) + 'px';
+                box.style.top = (element.top * scaleY) + 'px';
+                box.style.width = (element.width * scaleX) + 'px';
+                box.style.height = (element.height * scaleY) + 'px';
+                
+                box.dataset.text = element.text; 
+                box.dataset.index = index;
+                
+                container.appendChild(box);
+            });
+        }
+
+        function renderTextItems(elements) {
+            const container = document.getElementById('text-container');
+            container.innerHTML = ''; // clear loading
+            
+            elements.forEach((element, idx) => {
+                const span = document.createElement('span');
+                span.className = 'extracted-text-item';
+                span.textContent = element.text;
+                span.id = `text-item-${idx}`;
+                
+                span.addEventListener('click', () => {
+                    // Remove active from all text items and highlights
+                    document.querySelectorAll('.extracted-text-item').forEach(el => el.classList.remove('active'));
+                    document.querySelectorAll('.ocr-highlight').forEach(el => el.classList.remove('active'));
+                    
+                    span.classList.add('active');
+                    
+                    const matchIndex = findBestMatch(element.text, idx, elements.length);
+                    if (matchIndex !== null) {
+                        const targetBox = document.getElementById(`highlight-${matchIndex}`);
+                        if (targetBox) {
+                            targetBox.classList.add('active');
+                            targetBox.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+                        }
+                    } else {
+                        console.log("No confident match found for", element.text);
+                    }
+                });
+                
+                container.appendChild(span);
+            });
+        }
+
+        async function init() {
+            try {
+                const response = await fetch('http://127.0.0.1:5000/api/ocr');
+                if (!response.ok) throw new Error("Failed to fetch OCR data. Make sure the backend is running.");
+                const data = await response.json();
+                ocrElements = data.elements;
+                
+                // Need to wait for image to load to get natural width correctly
+                const img = document.getElementById('invoice-img');
+                if (img.complete && img.naturalHeight !== 0) {
+                    renderBoundingBoxes(ocrElements);
+                } else {
+                    img.onload = () => renderBoundingBoxes(ocrElements);
+                }
+                
+                renderTextItems(ocrElements);
+                
+            } catch (err) {
+                document.getElementById('text-container').textContent = 'Error: ' + err.message;
+            }
+        }
+        
+        // Setup window resize handler to rescale bounding boxes
+        window.addEventListener('resize', () => {
+             if (ocrElements.length) {
+                 renderBoundingBoxes(ocrElements);
+             }
+        });
+
+        init();
+    </script>
+</body>
+</html>
