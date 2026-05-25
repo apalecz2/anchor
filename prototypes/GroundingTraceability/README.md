@@ -1,6 +1,6 @@
 # Grounding & Traceability Prototype
 
-## Overvew
+## Overview
 This prototype demonstrates the critical **"Grounding & Traceability"** mechanism for an AI-powered data extraction tool. The system allows users to input unstructured text and uses a large language model (Gemini) to extract specific tabular data points (like financial metrics). 
 
 Crucially, it maps the extracted values back to their **exact character intervals** in the original source document. When a user clicks on an extracted data row in the UI, the exact substring that the LLM pulled the information from is highlighted in yellow. This visual feedback loop serves as the foundational "trust and verify" mechanism, ensuring users can quickly trace where the AI got its answers without breaking DOM rendering or encountering off-by-one errors from tokenization.
@@ -8,7 +8,6 @@ Crucially, it maps the extracted values back to their **exact character interval
 ## Directory of Files
 * **`grounding-traceability.html`**: The frontend interface. It contains a mutable text area for adjusting the source document, a trigger button, and UI logic for safely tracking text indices utilizing `document.createTextNode` and `<mark>` tags to prevent DOM injection vulnerabilities.
 * **`backend.py`**: A localized Flask REST API (`http://127.0.0.1:5000/extract`). It interfaces between the HTML frontend and the Gemini API. It handles the prompt engineering, enforces the JSON schema, and applies a post-processing heuristic that searches the text natively to correct any index miscounts caused by the LLM's tokenization logic.
-* **`gemini_extractor.py`**: A standalone terminal execution script. It replicates the core extraction and exact-index calculation logic without the Flask wrapper or HTML frontend, letting you easily run extraction tests in your CI/CD pipelines or command line.
 
 ## Getting Started
 
