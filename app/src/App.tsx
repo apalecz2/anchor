@@ -12,7 +12,18 @@ type TraceItem = {
   severity: TraceSeverity;
 };
 
-const stripThinkBlocks = (content: string) => content.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+const stripThinkBlocks = (content: string) => content.replace(/<think>[\s\S]*?<\/think>/g, "").replace(/<think>[\s\S]*$/g, "").trim();
+
+const parseThinkBlocks = (content: string) => {
+  const thinkingBlocks = Array.from(content.matchAll(/<think>([\s\S]*?)(?:<\/think>|$)/g), match => match[1].trim()).filter(Boolean);
+
+  return {
+    visibleContent: stripThinkBlocks(content),
+    thinking: thinkingBlocks.join("\n").trim(),
+    hasThinking: thinkingBlocks.length > 0,
+    isThinkingOpen: /<think>[\s\S]*$/.test(content) && !/<\/think>\s*$/.test(content),
+  };
+};
 
 const getPlatformKey = () => {
   const platform = navigator.platform.toLowerCase();
@@ -55,29 +66,31 @@ const getLlamaServerResourceCandidates = () => {
 };
 
 // Helper function to format message content
-const MessageContent = ({ content, isModel }: { content: string, isModel?: boolean }) => {
-  const hasHiddenReasoning = content.includes('<think>');
-  const visibleContent = stripThinkBlocks(content);
+const MessageContent = ({ content, thinking, isStreaming }: { content: string, thinking?: string, isStreaming?: boolean }) => {
+  const parsedContent = parseThinkBlocks(content);
+  const visibleContent = parsedContent.visibleContent;
+  const thinkingContent = thinking ?? parsedContent.thinking;
+  const showThinkingBlock = Boolean(thinkingContent) || Boolean(isStreaming);
+  const showVisiblePlaceholder = !visibleContent && !thinkingContent && !isStreaming;
 
   return (
     <div className="flex flex-col">
-      <p className="whitespace-pre-wrap leading-relaxed">{visibleContent || "[No visible response text]"}</p>
-      {hasHiddenReasoning && (
-        <details className="mt-3 rounded-xl border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-900">
-          <summary className="cursor-pointer select-none font-medium">Hidden reasoning omitted</summary>
-          <p className="mt-2 leading-relaxed">
-            The model returned internal reasoning blocks, but this UI only shows user-facing output and a safe analysis trace.
-          </p>
-        </details>
-      )}
-      {isModel && (
-        <details className="mt-3 opacity-60 hover:opacity-100 transition-opacity border-t border-gray-400/30 pt-2">
-          <summary className="cursor-pointer text-xs font-mono select-none">Sanitized LLM Output</summary>
-          <pre className="mt-2 p-3 bg-gray-900 text-gray-100 rounded-md text-xs font-mono whitespace-pre-wrap overflow-x-auto shadow-inner">
-            {visibleContent || "[No visible response text]"}
+      {showThinkingBlock && (
+        <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50/80 p-3 text-amber-950 shadow-inner shadow-amber-100/40">
+          <div className="flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-800">
+            <span>Thinking</span>
+            {isStreaming && <span className="rounded-full bg-amber-200/80 px-2 py-0.5 text-[10px] tracking-[0.18em] text-amber-900">Live</span>}
+          </div>
+          <pre className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-amber-950/90">
+            {thinkingContent || "Thinking..."}
           </pre>
-        </details>
+        </div>
       )}
+      {visibleContent ? (
+        <p className="whitespace-pre-wrap leading-relaxed">{visibleContent}</p>
+      ) : showVisiblePlaceholder ? (
+        <p className="whitespace-pre-wrap leading-relaxed">[No visible response text]</p>
+      ) : null}
     </div>
   );
 };
@@ -90,8 +103,11 @@ type FileAttachment = {
 };
 
 type AppMessage = {
+  id: number;
   role: 'user'|'model';
   content: string;
+  thinking?: string;
+  isStreaming?: boolean;
   attachments?: FileAttachment[];
 };
 
@@ -107,7 +123,13 @@ function App() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const traceCounterRef = useRef(0);
+  const messageCounterRef = useRef(0);
   const serverReadyLoggedRef = useRef(false);
+
+  const allocateMessageId = () => {
+    messageCounterRef.current += 1;
+    return messageCounterRef.current;
+  };
 
   const pushTrace = (target: "system" | "request", message: string, severity: TraceSeverity = "info", detail?: string) => {
     const item = {
@@ -166,6 +188,7 @@ function App() {
       }
     };
     
+    // Bug: Called twice, also no cleanup
     startLlamaServer();
 
     healthCheckInterval = setInterval(async () => {
@@ -230,6 +253,8 @@ function App() {
 
     const userMsg = input.trim();
     const currentAttachment = pendingAttachment;
+    const userMessageId = allocateMessageId();
+    const assistantMessageId = allocateMessageId();
 
     setRequestTrace([]);
     pushTrace("request", "Building request payload", "progress", "Combining conversation history and the new turn");
@@ -237,15 +262,22 @@ function App() {
     setInput("");
     setPendingAttachment(null);
     setMessages(prev => [...prev, { 
+      id: userMessageId,
       role: 'user', 
       content: userMsg,
       attachments: currentAttachment ? [currentAttachment] : undefined
+    }, {
+      id: assistantMessageId,
+      role: 'model',
+      content: '',
+      thinking: '',
+      isStreaming: true,
     }]);
     
     setIsLoading(true);
 
     const apiMessages: any[] = [];
-    const allMessagesList = [...messages, { role: 'user', content: userMsg, attachments: currentAttachment ? [currentAttachment] : undefined }];
+    const allMessagesList = [...messages, { id: userMessageId, role: 'user', content: userMsg, attachments: currentAttachment ? [currentAttachment] : undefined }];
     const hasImageAttachment = Boolean(currentAttachment && currentAttachment.type.startsWith("image/"));
 
     if (currentAttachment) {
@@ -303,7 +335,7 @@ function App() {
       messages: apiMessages,
       max_tokens: 1024,
       temperature: 0.7,
-      stream: false,
+      stream: true,
       stop: ["<|im_start|>", "<|im_end|>"]
     };
 
@@ -311,7 +343,7 @@ function App() {
       "request",
       "Sending chat completion request",
       "progress",
-      `${apiMessages.length} message(s), ${currentAttachment ? 1 : 0} attachment(s), stream=false`
+      `${apiMessages.length} message(s), ${currentAttachment ? 1 : 0} attachment(s), stream=true`
     );
 
     try {
@@ -324,27 +356,104 @@ function App() {
       });
 
       if (response.ok) {
-        const data = await response.json();
-        console.log('API Response:', data);
-        pushTrace("request", "Received model response", "success", `HTTP ${response.status}`);
-        
-        let responseMessage = 'Error: No response generated.';
-        if (data.choices && data.choices.length > 0) {
-          if (data.choices[0].message && data.choices[0].message.content !== undefined) {
-             responseMessage = data.choices[0].message.content;
+        const reader = response.body?.getReader();
+
+        if (!reader) {
+          throw new Error('Streaming response body is unavailable.');
+        }
+
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+        let rawAssistantContent = '';
+        let sawModelToken = false;
+
+        const updateStreamingMessage = (nextContent: string, nextThinking: string) => {
+          setMessages(prev => prev.map(msg => msg.id === assistantMessageId ? {
+            ...msg,
+            content: nextContent,
+            thinking: nextThinking,
+            isStreaming: true,
+          } : msg));
+        };
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            break;
+          }
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split(/\r?\n/);
+          buffer = lines.pop() ?? '';
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) {
+              continue;
+            }
+
+            const data = line.slice(6).trim();
+
+            if (!data || data === '[DONE]') {
+              continue;
+            }
+
+            try {
+              const parsed = JSON.parse(data);
+              const delta = parsed.choices?.[0]?.delta ?? {};
+              const reasoningToken = delta.reasoning ?? delta.thinking ?? delta.reasoning_content ?? '';
+              const contentToken = delta.content ?? '';
+
+              if (reasoningToken) {
+                rawAssistantContent += `<think>${reasoningToken}</think>`;
+              }
+
+              if (contentToken) {
+                rawAssistantContent += contentToken;
+              }
+
+              if (reasoningToken || contentToken) {
+                const parsedAssistantContent = parseThinkBlocks(rawAssistantContent);
+                updateStreamingMessage(parsedAssistantContent.visibleContent, parsedAssistantContent.thinking);
+                sawModelToken = true;
+              }
+            } catch (streamError) {
+              console.error('Stream parse error:', streamError, data);
+            }
           }
         }
-        
-        setMessages(prev => [...prev, { role: 'model', content: responseMessage }]);
+
+        const finalAssistantContent = parseThinkBlocks(rawAssistantContent);
+        setMessages(prev => prev.map(msg => msg.id === assistantMessageId ? {
+          ...msg,
+          content: finalAssistantContent.visibleContent,
+          thinking: finalAssistantContent.thinking,
+          isStreaming: false,
+        } : msg));
+
+        if (sawModelToken) {
+          pushTrace("request", "Received model response stream", "success", `HTTP ${response.status}`);
+        } else {
+          pushTrace("request", "Model response stream completed", "success", `HTTP ${response.status}`);
+        }
       } else {
         console.error('Server returned an error:', response.statusText);
         pushTrace("request", "Model request failed", "error", `HTTP ${response.status} ${response.statusText}`);
-        setMessages(prev => [...prev, { role: 'model', content: 'Error: Failed to fetch response.' }]);
+        setMessages(prev => prev.map(msg => msg.id === assistantMessageId ? {
+          ...msg,
+          content: 'Error: Failed to fetch response.',
+          thinking: '',
+          isStreaming: false,
+        } : msg));
       }
     } catch (error) {
       console.error('Request failed:', error);
       pushTrace("request", "Request exception", "error", String(error));
-      setMessages(prev => [...prev, { role: 'model', content: 'Error: Request failed.' }]);
+      setMessages(prev => prev.map(msg => msg.id === assistantMessageId ? {
+        ...msg,
+        content: 'Error: Request failed.',
+        thinking: '',
+        isStreaming: false,
+      } : msg));
     } finally {
       setIsLoading(false);
     }
@@ -430,8 +539,8 @@ function App() {
               </div>
             )}
             
-            {messages.map((msg, idx) => (
-              <div key={idx} className={`p-4 rounded-2xl max-w-[85%] ${msg.role === 'user' ? 'bg-blue-600 text-white self-end rounded-br-sm shadow-md' : 'bg-gray-100 text-gray-800 self-start rounded-bl-sm shadow-sm border border-gray-200'}`}>
+            {messages.map((msg) => (
+              <div key={msg.id} className={`p-4 rounded-2xl max-w-[85%] ${msg.role === 'user' ? 'bg-blue-600 text-white self-end rounded-br-sm shadow-md' : 'bg-gray-100 text-gray-800 self-start rounded-bl-sm shadow-sm border border-gray-200'}`}>
                 
                 {/* Render Attachments in History */}
                 {msg.attachments && msg.attachments.length > 0 && (
@@ -439,7 +548,7 @@ function App() {
                     {msg.attachments.map((att, i) => (
                       <div key={i} className={`text-xs px-3 py-1.5 rounded flex items-center gap-2 ${msg.role === 'user' ? 'bg-white/20' : 'bg-white border border-gray-300'}`}>
                         <svg className="w-4 h-4 opacity-75" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
-                        <span className="truncate max-w-[150px] font-medium">{att.name}</span>
+                        <span className="truncate max-w-37.5 font-medium">{att.name}</span>
                         {att.type.startsWith('image/') && (
                           <span className="text-[10px] uppercase opacity-75 ml-1">IMAGE</span>
                         )}
@@ -448,20 +557,13 @@ function App() {
                   </div>
                 )}
                 
-                {msg.content && <MessageContent content={msg.content} isModel={msg.role === 'model'} />}
+                {msg.role === 'model' ? (
+                  <MessageContent content={msg.content} thinking={msg.thinking} isStreaming={msg.isStreaming} />
+                ) : msg.content ? (
+                  <MessageContent content={msg.content} />
+                ) : null}
               </div>
             ))}
-            
-            {isLoading && (
-              <div className="p-4 rounded-2xl max-w-[85%] bg-gray-100 text-gray-700 self-start italic shadow-sm border border-gray-200 rounded-bl-sm flex items-center gap-3">
-                <div className="animate-pulse flex space-x-1.5">
-                  <div className="h-2 w-2 bg-blue-500 rounded-full"></div>
-                  <div className="h-2 w-2 bg-blue-500 rounded-full"></div>
-                  <div className="h-2 w-2 bg-blue-500 rounded-full"></div>
-                </div>
-                <span className="text-sm font-medium text-gray-500">Processing...</span>
-              </div>
-            )}
             <div ref={messagesEndRef} />
           </div>
 

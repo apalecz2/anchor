@@ -1,5 +1,8 @@
 use std::{path::PathBuf, process::{Child, Command}, sync::Mutex};
 
+const DEFAULT_CTX_SIZE: &str = "8192";
+const DEFAULT_IMAGE_MIN_TOKENS: &str = "1024";
+
 struct AppState {
     llama_server: Mutex<Option<Child>>,
 }
@@ -59,10 +62,12 @@ fn start_llama_server(model_path: String, mmproj_path: String, llama_server_path
         .arg(model_path)
         .arg("--mmproj")
         .arg(mmproj_path)
+        .arg("--image-min-tokens")
+        .arg(DEFAULT_IMAGE_MIN_TOKENS)
         .arg("--port")
         .arg("8080")
         .arg("-c")
-        .arg("4096");
+        .arg(DEFAULT_CTX_SIZE);
 
     let child = command
         .spawn()
