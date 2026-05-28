@@ -106,6 +106,8 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
                 id: assistantMessageId,
                 role: "assistant",
                 content: "",
+                thinking: "",
+                isThinkingOpen: true,
                 isStreaming: true,
             },
         ]);
@@ -121,7 +123,7 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
 
         const requestBody = {
             messages: buildChatCompletionMessages(conversationMessages),
-            max_tokens: 1024,
+            max_tokens: 4096,
             temperature: 0.7,
             stream: true as const,
             stop: ["<|im_start|>", "<|im_end|>"],
@@ -131,13 +133,27 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
         activeRequestRef.current = new AbortController();
 
         try {
-            const finalAssistantContent = await streamChatCompletion({
+            const finalAssistantMessage = await streamChatCompletion({
                 messages: requestBody.messages,
-                onDelta: (nextVisibleContent: string) => {
+                onThinkingDelta: (nextThinkingContent: string) => {
+                    setMessages(prev => prev.map(message => message.id === assistantMessageId ? {
+                        ...message,
+                        thinking: nextThinkingContent,
+                        isThinkingOpen: true,
+                    } : message));
+                },
+                onContentDelta: (nextVisibleContent: string) => {
                     setMessages(prev => prev.map(message => message.id === assistantMessageId ? {
                         ...message,
                         content: nextVisibleContent,
+                        isThinkingOpen: false,
                         isStreaming: true,
+                    } : message));
+                },
+                onThinkingEnd: () => {
+                    setMessages(prev => prev.map(message => message.id === assistantMessageId ? {
+                        ...message,
+                        isThinkingOpen: false,
                     } : message));
                 },
                 signal: activeRequestRef.current.signal,
@@ -145,7 +161,9 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
 
             setMessages(prev => prev.map(message => message.id === assistantMessageId ? {
                 ...message,
-                content: finalAssistantContent,
+                content: finalAssistantMessage.content,
+                thinking: finalAssistantMessage.thinking,
+                isThinkingOpen: false,
                 isStreaming: false,
             } : message));
 

@@ -10,6 +10,8 @@ export type ChatMessage = {
     id: number;
     role: ChatRole;
     content: string;
+    thinking?: string;
+    isThinkingOpen?: boolean;
     isStreaming?: boolean;
     attachments?: FileAttachment[];
 };

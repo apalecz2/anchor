@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { useLlamaChat } from "./features/llama/useLlamaChat";
 import { OcrWorkspace } from "./features/ocr/OcrWorkspace";
@@ -50,6 +52,31 @@ function App() {
         if (wasSent) {
             setInput("");
         }
+    };
+
+    const markdownComponents = {
+        p: ({ children }: { children?: React.ReactNode }) => <p className="mb-3 last:mb-0 whitespace-pre-wrap leading-relaxed">{children}</p>,
+        ul: ({ children }: { children?: React.ReactNode }) => <ul className="mb-3 list-disc space-y-1 pl-5 last:mb-0">{children}</ul>,
+        ol: ({ children }: { children?: React.ReactNode }) => <ol className="mb-3 list-decimal space-y-1 pl-5 last:mb-0">{children}</ol>,
+        li: ({ children }: { children?: React.ReactNode }) => <li className="leading-relaxed">{children}</li>,
+        table: ({ children }: { children?: React.ReactNode }) => (
+            <div className="my-3 overflow-x-auto rounded-xl border border-slate-200 bg-white">
+                <table className="min-w-full border-collapse text-left text-sm">{children}</table>
+            </div>
+        ),
+        thead: ({ children }: { children?: React.ReactNode }) => <thead className="bg-slate-100 text-xs uppercase tracking-[0.16em] text-slate-500">{children}</thead>,
+        tbody: ({ children }: { children?: React.ReactNode }) => <tbody className="divide-y divide-slate-200">{children}</tbody>,
+        tr: ({ children }: { children?: React.ReactNode }) => <tr className="align-top">{children}</tr>,
+        th: ({ children }: { children?: React.ReactNode }) => <th className="border-b border-slate-200 px-3 py-2 font-semibold text-slate-600">{children}</th>,
+        td: ({ children }: { children?: React.ReactNode }) => <td className="border-b border-slate-200 px-3 py-2 text-slate-800">{children}</td>,
+        code: ({ inline, children, className }: { inline?: boolean; children?: React.ReactNode; className?: string }) =>
+            inline ? (
+                <code className="rounded bg-slate-200 px-1.5 py-0.5 font-mono text-[0.85em] text-slate-800">{children}</code>
+            ) : (
+                <code className={className}>{children}</code>
+            ),
+        pre: ({ children }: { children?: React.ReactNode }) => <pre className="mb-3 overflow-x-auto rounded-xl bg-slate-950 p-4 text-sm text-slate-100 last:mb-0">{children}</pre>,
+        blockquote: ({ children }: { children?: React.ReactNode }) => <blockquote className="mb-3 border-l-4 border-slate-300 pl-4 text-slate-600 last:mb-0">{children}</blockquote>,
     };
 
     return (
@@ -122,9 +149,28 @@ function App() {
                                             </div>
                                         )}
 
+                                        {msg.role === "assistant" && msg.thinking ? (
+                                            <details open={msg.isThinkingOpen ?? false} className="mb-3 rounded-xl border border-slate-200 bg-white/70 px-3 py-2">
+                                                <summary className="cursor-pointer list-none text-sm font-medium text-slate-600">Thinking</summary>
+                                                <div className="mt-2 text-sm text-slate-500">
+                                                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                                                        {msg.thinking}
+                                                    </ReactMarkdown>
+                                                </div>
+                                            </details>
+                                        ) : null}
+
                                         {msg.content ? (
-                                            <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
-                                        ) : msg.isStreaming ? (
+                                            <div className="leading-relaxed text-slate-800">
+                                                {msg.role === "assistant" ? (
+                                                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                                                        {msg.content}
+                                                    </ReactMarkdown>
+                                                ) : (
+                                                    <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                                                )}
+                                            </div>
+                                        ) : msg.isStreaming && msg.role === "assistant" && !msg.thinking ? (
                                             <p className="whitespace-pre-wrap leading-relaxed text-slate-500">Thinking...</p>
                                         ) : null}
                                     </div>

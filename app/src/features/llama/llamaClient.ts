@@ -30,23 +30,13 @@ type ChatCompletionRequestBody = {
 
 type StreamChatCompletionOptions = {
     messages: ChatCompletionMessage[];
-    onDelta: (content: string) => void;
+    onThinkingDelta: (content: string) => void;
+    onContentDelta: (content: string) => void;
+    onThinkingEnd: () => void;
     signal?: AbortSignal;
 };
 
 let llamaServerStartPromise: Promise<number | null> | null = null;
-
-const stripThinkBlocks = (content: string) =>
-    content.replace(/<think>[\s\S]*?<\/think>/g, "").replace(/<think>[\s\S]*$/g, "").trim();
-
-const parseThinkBlocks = (content: string) => {
-    const thinkingBlocks = Array.from(content.matchAll(/<think>([\s\S]*?)(?:<\/think>|$)/g), match => match[1].trim()).filter(Boolean);
-
-    return {
-        visibleContent: stripThinkBlocks(content),
-        thinking: thinkingBlocks.join("\n").trim(),
-    };
-};
 
 export const buildChatCompletionMessages = (messages: ChatMessage[]): ChatCompletionMessage[] => {
     return messages.map(message => {
@@ -123,10 +113,10 @@ export const checkLlamaServerHealth = async () => {
     }
 };
 
-export const streamChatCompletion = async ({ messages, onDelta, signal }: StreamChatCompletionOptions) => {
+export const streamChatCompletion = async ({ messages, onThinkingDelta, onContentDelta, onThinkingEnd, signal }: StreamChatCompletionOptions) => {
     const requestBody: ChatCompletionRequestBody = {
         messages,
-        max_tokens: 1024,
+        max_tokens: 4096,
         temperature: 0.7,
         stream: true,
         stop: ["<|im_start|>", "<|im_end|>"],
@@ -153,7 +143,9 @@ export const streamChatCompletion = async ({ messages, onDelta, signal }: Stream
 
     const decoder = new TextDecoder("utf-8");
     let buffer = "";
-    let rawAssistantContent = "";
+    let thinkingAssistantContent = "";
+    let visibleAssistantContent = "";
+    let contentStarted = false;
 
     while (true) {
         const { done, value } = await reader.read();
@@ -183,16 +175,18 @@ export const streamChatCompletion = async ({ messages, onDelta, signal }: Stream
                 const contentToken = delta.content ?? "";
 
                 if (reasoningToken) {
-                    rawAssistantContent += `<think>${reasoningToken}</think>`;
+                    thinkingAssistantContent += reasoningToken;
+                    onThinkingDelta(thinkingAssistantContent);
                 }
 
                 if (contentToken) {
-                    rawAssistantContent += contentToken;
-                }
+                    if (!contentStarted) {
+                        contentStarted = true;
+                        onThinkingEnd();
+                    }
 
-                if (reasoningToken || contentToken) {
-                    const parsedAssistantContent = parseThinkBlocks(rawAssistantContent);
-                    onDelta(parsedAssistantContent.visibleContent);
+                    visibleAssistantContent += contentToken;
+                    onContentDelta(visibleAssistantContent);
                 }
             } catch (streamError) {
                 console.error("Stream parse error:", streamError, data);
@@ -200,5 +194,15 @@ export const streamChatCompletion = async ({ messages, onDelta, signal }: Stream
         }
     }
 
-    return stripThinkBlocks(rawAssistantContent);
+    if (!contentStarted) {
+        onThinkingEnd();
+    }
+
+    const finalizedVisibleContent = visibleAssistantContent.trim();
+    const finalizedThinkingContent = thinkingAssistantContent.trim();
+
+    return {
+        content: finalizedVisibleContent || (finalizedThinkingContent ? "" : "No visible response returned."),
+        thinking: finalizedThinkingContent,
+    };
 };
