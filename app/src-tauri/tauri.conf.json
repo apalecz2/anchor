@@ -20,9 +20,7 @@
         "security": {
             "assetProtocol": {
                 "enable": true,
-                "scope": [
-                    "$APPDATA/sessions/**"
-                ]
+                "scope": ["$APPDIR/sessions/**", "$APPDATA/sessions/**"]
             }
         }
     },
@@ -38,7 +36,8 @@
         ],
         "resources": [
             "models/*",
-            "binaries/*"
+            "binaries/*",
+            "resources/tesseract/**/*"
         ]
     }
 }

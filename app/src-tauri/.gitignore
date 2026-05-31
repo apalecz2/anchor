@@ -6,6 +6,9 @@
 # will have schema files for capabilities auto-completion
 /gen/schemas
 
+# Bundled Tesseract runtime resources
+resources/tesseract/
+
 # Model files
 models/
 *.gguf

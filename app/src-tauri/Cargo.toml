@@ -26,3 +26,10 @@ tauri-plugin-shell = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-sql = { version = "2.4.0", features = ["sqlite"] }
 
+# PDF to Image conversion (Requires downloading the pdfium binaries)
+pdfium-render = "0.8.10" 
+
+# Tesseract OCR wrapper
+rusty-tesseract = "1.1.9"
+image = "0.25.10"
+
