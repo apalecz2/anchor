@@ -5,6 +5,7 @@ import Dashboard from './pages/Dashboard';
 import Session from './pages/Session';
 import Settings from './pages/Settings';
 import About from './pages/About';
+import Search from './pages/Search';
 
 //import AppShell from "./app/AppShell";
 
@@ -22,6 +23,7 @@ export default function App() {
                     {/* Child Routes */}
                     <Route index element={<Dashboard />} />
                     <Route path="session/:id" element={<Session />} />
+                    <Route path="search" element={<Search />} />
                     <Route path="settings" element={<Settings />} />
                     <Route path="about" element={<About />} />
                 </Route>

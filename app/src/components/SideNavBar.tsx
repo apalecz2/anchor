@@ -18,6 +18,7 @@ export interface NavItem {
 
 export const defaultNavItems: NavItem[] = [
     { id: 'dashboard', icon: 'add', label: 'New Extraction', href: '/' },
+    { id: 'search', icon: 'search', label: 'Search', href: '/search' },
     { id: 'settings', icon: 'settings', label: 'Settings', href: '/settings' },
     { id: 'about', icon: 'info', label: 'About', href: '/about' },
 ];
@@ -78,6 +79,19 @@ const SideNavBar: FC<SideNavBarProps> = ({
                     }
                 `}
             >
+                <Link
+                    to="/"
+                    className={`
+                        absolute top-4 left-6 flex h-10 items-center overflow-hidden whitespace-nowrap transition-all duration-300
+                        ${collapsed ? 'w-0 opacity-0 pointer-events-none' : 'w-48 opacity-100'}
+                    `}
+                    aria-hidden={collapsed}
+                    tabIndex={collapsed ? -1 : 0}
+                >
+                    <span className="text-2xl font-bold text-on-surface hover:opacity-80 transition-opacity">
+                        Artifact
+                    </span>
+                </Link>
 
                 <nav
                     className="mt-20 flex flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto px-3 pb-4"
@@ -110,10 +124,10 @@ const SideNavBar: FC<SideNavBarProps> = ({
                                  */}
                                 <span
                                     className={`
-                                        whitespace-nowrap text-sm font-medium
+                                        flex-1 truncate text-sm font-medium
                                         transition-[opacity,width,margin] duration-300
                                         ${collapsed
-                                            ? 'w-0 overflow-hidden opacity-0 md:ml-0 ml-4' // Removes margin on desktop collapsed, keeps it on mobile
+                                            ? 'w-0 opacity-0 md:ml-0 ml-4' // Removes margin on desktop collapsed, keeps it on mobile
                                             : 'opacity-100 ml-4' // Standard margin when expanded
                                         }
                                     `}
@@ -125,7 +139,7 @@ const SideNavBar: FC<SideNavBarProps> = ({
 
                         const sharedClassName = `
                             flex h-10 w-full cursor-pointer items-center rounded-[10px]
-                            transition-all duration-300 ease-out
+                            transition-all duration-300 ease-out overflow-hidden
                             ${collapsed ? 'md:px-2 px-3' : 'px-3'}
                             ${isActive
                                 ? 'bg-primary/10 text-primary'
@@ -192,10 +206,10 @@ const SideNavBar: FC<SideNavBarProps> = ({
                                         </span>
                                         <span
                                             className={`
-                                                whitespace-nowrap text-sm font-medium
+                                                flex-1 truncate text-sm font-medium
                                                 transition-[opacity,width,margin] duration-300
                                                 ${collapsed
-                                                    ? 'w-0 overflow-hidden opacity-0 md:ml-0 ml-4'
+                                                    ? 'w-0 opacity-0 md:ml-0 ml-4'
                                                     : 'opacity-100 ml-4'
                                                 }
                                             `}
@@ -207,7 +221,7 @@ const SideNavBar: FC<SideNavBarProps> = ({
 
                                 const sharedClassName = `
                                     flex h-10 w-full cursor-pointer items-center rounded-[10px]
-                                    transition-all duration-300 ease-out
+                                    transition-all duration-300 ease-out overflow-hidden
                                     ${collapsed ? 'md:px-2 px-3' : 'px-3'}
                                     ${isActive
                                         ? 'bg-primary/10 text-primary'
@@ -244,7 +258,6 @@ const SideNavBar: FC<SideNavBarProps> = ({
                             })}
                         </>
                     )}
-
 
                 </nav>
             </aside>
