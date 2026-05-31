@@ -1,6 +1,8 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useParams } from 'react-router';
-//import { getDb } from '../lib/db';
+import { getDb } from '../lib/db';
+import DocumentViewer from '../components/DocumentViewer';
+import { convertFileSrc } from '@tauri-apps/api/core';
 
 export default function Session(): React.ReactElement {
     // Grab the dynamic :id parameter from the URL
@@ -10,10 +12,54 @@ export default function Session(): React.ReactElement {
     const [leftWidth, setLeftWidth] = useState(50);
     const containerRef = useRef<HTMLDivElement>(null);
 
+    const [fileUrl, setFileUrl] = useState<string | null>(null);
+    const [isLoadingFile, setIsLoadingFile] = useState(true);
+    const [fileError, setFileError] = useState<string | null>(null);
+
     // We use a ref for dragging state so we don't trigger re-renders just for the boolean
     const isDragging = useRef(false);
 
-    // 2. Global mouse event handlers for smooth dragging
+    // 2. Fetch the file path from the database
+    useEffect(() => {
+        let isMounted = true;
+
+        async function fetchFileFromDb() {
+            if (!id) return;
+            
+            try {
+                setIsLoadingFile(true);
+                const db = await getDb();
+                
+                // Query the files table for the file associated with this session
+                const result = await db.select<{ file_path: string }[]>(
+                    'SELECT file_path FROM files WHERE session_id = $1 LIMIT 1',
+                    [id]
+                );
+
+                if (isMounted) {
+                    if (result && result.length > 0) {
+                        setFileUrl(convertFileSrc(result[0].file_path));
+                    } else {
+                        setFileError('No document attached to this session.');
+                    }
+                }
+            } catch (error) {
+                console.error("Failed to fetch file path:", error);
+                if (isMounted) setFileError('Failed to load document.');
+            } finally {
+                if (isMounted) setIsLoadingFile(false);
+            }
+        }
+
+        fetchFileFromDb();
+
+        return () => {
+            isMounted = false;
+        };
+    }, [id]);
+
+
+    // 3. Global mouse event handlers for smooth dragging
     useEffect(() => {
         const handleMouseMove = (e: MouseEvent) => {
             if (!isDragging.current || !containerRef.current) return;
@@ -59,16 +105,22 @@ export default function Session(): React.ReactElement {
             <div className="flex h-full w-full" ref={containerRef}>
 
                 {/* === LEFT SIDE: File Viewer === */}
-                <div
-                    className="flex h-full flex-col bg-surface-container-low p-6 transition-[width] duration-0"
+                <div 
+                    className="flex h-full flex-col bg-surface-container-lowest transition-[width] duration-0" 
                     style={{ width: `${leftWidth}%` }}
                 >
-                    <h2 className="mb-4 font-headline-md text-primary">Source Document</h2>
-                    <div className="flex flex-1 items-center justify-center rounded-2xl border border-outline-variant bg-surface-bright text-on-surface-variant">
-
-                        {/* The Tauri local file rendering will inject here */}
-                        <p>PDF / Image Viewport</p>
-
+                    <div className="border-b border-outline-variant p-4">
+                        <h2 className="font-headline-sm text-primary">Source Document</h2>
+                    </div>
+                    
+                    <div className="flex flex-1 overflow-hidden">
+                        {isLoadingFile ? (
+                            <div className="flex w-full items-center justify-center text-on-surface-variant">Loading file...</div>
+                        ) : fileError ? (
+                            <div className="flex w-full items-center justify-center text-error">{fileError}</div>
+                        ) : fileUrl ? (
+                            <DocumentViewer fileUrl={fileUrl} />
+                        ) : null}
                     </div>
                 </div>
 

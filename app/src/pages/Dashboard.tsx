@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router';
 import { getDb } from '../lib/db';
 
 import { writeFile, mkdir, BaseDirectory } from '@tauri-apps/plugin-fs';
-import { join } from '@tauri-apps/api/path';
+import { join, appDataDir } from '@tauri-apps/api/path';
 
 export default function Dashboard(): React.ReactElement {
     const [isDragging, setIsDragging] = useState(false);
@@ -42,16 +42,20 @@ export default function Dashboard(): React.ReactElement {
                 const safeFileName = `${fileId}.${extension}`;
 
                 const relativePath = await join('sessions', safeFileName);
+                
+                const appData = await appDataDir();
+                const absolutePath = await join(appData, relativePath);
 
                 await writeFile(relativePath, uint8Array, { baseDir: BaseDirectory.AppData });
 
+                // Save the ABSOLUTE path to the database so OCR and the Viewer can find it
                 await db.execute(
                     'INSERT INTO files (id, session_id, file_name, file_path) VALUES ($1, $2, $3, $4)',
-                    [fileId, newSessionId, file.name, relativePath]
+                    [fileId, newSessionId, file.name, absolutePath]
                 );
             }
 
-            // Navigate to the new workspace!
+            // Navigate to the new workspace
             navigate(`/session/${newSessionId}`);
 
         } catch (error) {
@@ -93,14 +97,14 @@ export default function Dashboard(): React.ReactElement {
         e.stopPropagation();
         setIsDragging(false);
 
-        const files: FileList = e.dataTransfer.files;
-        console.log('Files dropped:', files);
+        //const files: FileList = e.dataTransfer.files;
+        //console.log('Files dropped:', files);
         processFilesAndNavigate(e.dataTransfer.files);
     };
 
     const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const files = e.target.files as FileList | null;
-        console.log('Files selected:', files);
+        //const files = e.target.files as FileList | null;
+        //console.log('Files selected:', files);
         processFilesAndNavigate(e.target.files);
     };
 
