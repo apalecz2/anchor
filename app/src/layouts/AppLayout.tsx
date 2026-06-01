@@ -98,7 +98,7 @@ export default function AppLayout() {
 
                 {/* Dynamic Page Content injects here */}
                 <div className="flex-1 overflow-hidden">
-                    <Outlet />
+                    <Outlet key={location.pathname} />
                 </div>
             </main>
         </div>
