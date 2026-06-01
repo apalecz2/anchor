@@ -32,6 +32,40 @@ export interface ExtractionResult {
     pages: DocumentPageResult[];
 }
 
+const parseTsvToCleanLines = (rawTsv: string): string[] => {
+    const rows = rawTsv.trim().split('\n');
+    const dataRows = rows.slice(1); // Skip the header row
+
+    let currentLine = "";
+    const formattedLines: string[] = [];
+
+    dataRows.forEach(row => {
+        const cols = row.split('\t');
+        if (cols.length < 12) return;
+
+        const level = cols[0];
+        const text = cols[11]?.trim();
+
+        // Level 4 indicates a new line in the document
+        if (level === '4') {
+            if (currentLine) {
+                formattedLines.push(currentLine);
+                currentLine = "";
+            }
+        } 
+        // Level 5 indicates a word
+        else if (level === '5' && text) {
+            currentLine += (currentLine ? " " : "") + text;
+        }
+    });
+
+    if (currentLine) {
+        formattedLines.push(currentLine);
+    }
+
+    return formattedLines;
+};
+
 export default function Session(): React.ReactElement {
     const { id } = useParams<{ id: string }>();
 
@@ -46,21 +80,54 @@ export default function Session(): React.ReactElement {
     const [fileUrl, setFileUrl] = useState<string | null>(null);
     const [extractionResult, setExtractionResult] = useState<ExtractionResult | null>(null);
 
+    // Track started processing document to avoid issues with calling processDocument multiple times
+    const hasProcessed = useRef(false);
+
     // 2. Fetch the file path from the DB, then pass it to Rust for processing
     useEffect(() => {
-        let isMounted = true;
-
         async function processDocument() {
             if (!id) return;
-            
+
+            // Prevent double-execution in Strict Mode
+            if (hasProcessed.current) return;
+            hasProcessed.current = true;
+
             try {
                 setError(null);
                 setExtractionResult(null);
                 setFileUrl(null);
                 setIsLoading(true);
                 const db = await getDb();
-                
-                // A. Query the files table for the original file (e.g., the raw PDF)
+
+                // A. Check for cached OCR results in the database first
+                const cachedPages = await db.select<{
+                    image_path: string;
+                    natural_width: number;
+                    natural_height: number;
+                    full_text: string;
+                    words_json: string;
+                }[]>(
+                    'SELECT image_path, natural_width, natural_height, full_text, words_json FROM document_pages WHERE session_id = $1 ORDER BY page_index ASC',
+                    [id]
+                );
+
+                if (cachedPages && cachedPages.length > 0) {
+                    console.log("Restoring OCR results from cache...");
+                    
+                    const restoredPages: DocumentPageResult[] = cachedPages.map(page => ({
+                        image_path: page.image_path,
+                        natural_width: page.natural_width,
+                        natural_height: page.natural_height,
+                        text: page.full_text,
+                        words: JSON.parse(page.words_json)
+                    }));
+
+                    setExtractionResult({ session_id: id, pages: restoredPages });
+                    setFileUrl(convertFileSrc(restoredPages[0].image_path));
+                    return; // Exit early, no need to invoke Rust
+                }
+
+                // B. If no cache exists, query the files table for the original file
                 const dbResult = await db.select<{ file_path: string }[]>(
                     'SELECT file_path FROM files WHERE session_id = $1 LIMIT 1',
                     [id]
@@ -72,35 +139,52 @@ export default function Session(): React.ReactElement {
 
                 const originalFilePath = dbResult[0].file_path;
 
-                // B. Invoke the Rust backend to render the PDF to an image and run OCR
+                // C. Invoke the Rust backend to render the PDF to an image and run OCR
+                console.log("Processing document via Rust backend...");
                 const rustResult = await invoke<ExtractionResult>('process_document', {
                     sessionId: id,
                     filePath: originalFilePath
                 });
 
-                if (isMounted) {
-                    setExtractionResult(rustResult);
-                    
-                    // C. Convert the new PNG image path returned by Rust into a displayable URL
-                    if (rustResult.pages.length > 0) {
-                        setFileUrl(convertFileSrc(rustResult.pages[0].image_path));
-                    }
+                // D. Cache the result into the database for next time
+                for (let i = 0; i < rustResult.pages.length; i++) {
+                    const page = rustResult.pages[i];
+                    await db.execute(
+                        `INSERT INTO document_pages (id, session_id, page_index, image_path, natural_width, natural_height, full_text, words_json) 
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                        [
+                            crypto.randomUUID(),
+                            id,
+                            i,
+                            page.image_path,
+                            page.natural_width,
+                            page.natural_height,
+                            page.text,
+                            JSON.stringify(page.words)
+                        ]
+                    );
                 }
+
+                setExtractionResult(rustResult);
+
+                // E. Convert the new PNG image path returned by Rust into a displayable URL
+                if (rustResult.pages.length > 0) {
+                    setFileUrl(convertFileSrc(rustResult.pages[0].image_path));
+                }
+                
             } catch (err) {
                 console.error("Backend processing failed:", err);
-                if (isMounted) {
-                    setError(err instanceof Error ? err.message : 'Failed to process document.');
-                }
+                setError(err instanceof Error ? err.message : 'Failed to process document.');
+                // Only allow a retry if the backend actually threw an error
+                hasProcessed.current = false; 
             } finally {
-                if (isMounted) setIsLoading(false);
+                // ALWAYS turn off the loading state when finished
+                setIsLoading(false);
             }
         }
 
         processDocument();
 
-        return () => {
-            isMounted = false;
-        };
     }, [id]);
 
     // 3. Global mouse event handlers for smooth dragging
@@ -145,14 +229,14 @@ export default function Session(): React.ReactElement {
             <div className="flex h-full w-full" ref={containerRef}>
 
                 {/* === LEFT SIDE: File Viewer === */}
-                <div 
-                    className="flex h-full flex-col bg-surface-container-lowest transition-[width] duration-0" 
+                <div
+                    className="flex h-full flex-col bg-surface-container-lowest transition-[width] duration-0"
                     style={{ width: `${leftWidth}%` }}
                 >
                     <div className="border-b border-outline-variant p-4">
                         <h2 className="font-headline-sm text-primary">Source Document</h2>
                     </div>
-                    
+
                     <div className="flex flex-1 overflow-hidden">
                         {isLoading ? (
                             <div className="flex w-full items-center justify-center text-on-surface-variant">Processing with local AI...</div>
@@ -160,9 +244,9 @@ export default function Session(): React.ReactElement {
                             <div className="flex w-full items-center justify-center text-error">{error}</div>
                         ) : fileUrl && activePage ? (
                             // Pass both the image URL and the pre-calculated words down
-                            <DocumentViewer 
-                                fileUrl={fileUrl} 
-                                words={activePage.words} 
+                            <DocumentViewer
+                                fileUrl={fileUrl}
+                                words={activePage.words}
                             />
                         ) : null}
                     </div>
@@ -181,23 +265,28 @@ export default function Session(): React.ReactElement {
                     className="flex h-full flex-col p-6 transition-[width] duration-0"
                     style={{ width: `${100 - leftWidth}%` }}
                 >
-                    <div className="mb-6 space-y-1">
-                        <h1 className="font-display-sm text-primary">Extraction Output</h1>
-                        <p className="font-body-sm text-on-surface-variant">
-                            Session ID: <span className="font-mono text-xs">{id}</span>
-                        </p>
+                    <div className="mb-4">
+                        <h1 className="font-headline-sm text-primary">Document Text</h1>
                     </div>
 
-                    <div className="flex-1 overflow-auto rounded-2xl border border-dashed border-outline-variant bg-surface-container-lowest p-6">
+                    <div className="flex-1 overflow-auto rounded-2xl border border-outline-variant bg-surface-bright px-8 py-10 shadow-sm">
                         {isLoading ? (
                             <div className="flex h-full items-center justify-center font-body-md text-on-surface-variant">
                                 Awaiting extraction...
                             </div>
-                        ) : activePage ? (
-                            <div className="whitespace-pre-wrap font-body-md text-on-surface">
-                                {activePage.text}
+                        ) : activePage && activePage.text ? (
+                            <div className="space-y-2 font-body-md text-on-surface leading-relaxed">
+                                {parseTsvToCleanLines(activePage.text).map((line, index) => (
+                                    <p key={index} className="min-h-[1.5rem]">
+                                        {line}
+                                    </p>
+                                ))}
                             </div>
-                        ) : null}
+                        ) : (
+                            <div className="flex h-full items-center justify-center font-body-md text-on-surface-variant">
+                                No readable text found.
+                            </div>
+                        )}
                     </div>
                 </div>
 

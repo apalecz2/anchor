@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command},
     sync::Mutex,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use tauri::{Manager, WindowEvent};
@@ -103,7 +104,12 @@ async fn process_document(
         natural_width = bitmap.width() as i32;
         natural_height = bitmap.height() as i32;
 
-        let generated_path = session_dir.join(format!("{}_page_1.png", session_id));
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+
+        let generated_path = session_dir.join(format!("{}_page_1_{}.png", session_id, timestamp));
         bitmap
             .as_image()
             .save(&generated_path)

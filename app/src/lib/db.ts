@@ -38,5 +38,20 @@ export async function getDb(): Promise<Database> {
         );
     `);
 
+    // Table to cache OCR results and prevent reprocessing
+    await dbInstance.execute(`
+        CREATE TABLE IF NOT EXISTS document_pages (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            page_index INTEGER NOT NULL,
+            image_path TEXT NOT NULL,
+            natural_width INTEGER NOT NULL,
+            natural_height INTEGER NOT NULL,
+            full_text TEXT NOT NULL,
+            words_json TEXT NOT NULL,
+            FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+        );
+    `);
+
     return dbInstance;
 }
