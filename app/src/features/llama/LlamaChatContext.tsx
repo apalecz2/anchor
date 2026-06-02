@@ -14,7 +14,7 @@ type LlamaChatContextValue = {
     removePendingAttachment: () => void;
     startServer: () => Promise<void>;
     stopServer: () => Promise<void>;
-    sendMessage: (text: string) => Promise<boolean>;
+    sendMessage: (text: string, attachmentOverride?: FileAttachment | null) => Promise<boolean>;
 };
 
 export const LlamaChatContext = createContext<LlamaChatContextValue | null>(null);
@@ -117,14 +117,19 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
         setPendingAttachment(null);
     };
 
-    const sendMessage = async (text: string) => {
+    const sendMessage = async (text: string, attachmentOverride: FileAttachment | null = null) => {
         const userMessage = text.trim();
+        const serverReady = isServerReady || await checkLlamaServerHealth();
 
-        if ((!userMessage && !pendingAttachment) || !isServerReady || isLoading) {
+        if (serverReady && !isServerReady) {
+            setIsServerReady(true);
+        }
+
+        if ((!userMessage && !pendingAttachment) || !serverReady || isLoading) {
             return false;
         }
 
-        const currentAttachment = pendingAttachment;
+        const currentAttachment = attachmentOverride ?? pendingAttachment;
         const userMessageId = allocateMessageId();
         const assistantMessageId = allocateMessageId();
 
