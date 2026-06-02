@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import type { OcrWord, BoundingBox } from '../pages/Session';
+import type { OcrWord, BoundingBox } from '../features/ocr/types';
 
 interface DocumentViewerProps {
     fileUrl: string;

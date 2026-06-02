@@ -9,7 +9,7 @@ import { useLlamaChat } from '../features/llama/useLlamaChat';
 import { SplitLayout } from '../layouts/SplitLayout';
 import { WordEditModal } from '../features/extraction/WordEditModal';
 import { generateLinesFromWords } from '../utils/ocrTransforms';
-import { BoundingBox } from '../features/extraction/types';
+import type { BoundingBox } from '../features/ocr/types';
 
 export default function Session(): React.ReactElement {
     const { id } = useParams<{ id: string }>();

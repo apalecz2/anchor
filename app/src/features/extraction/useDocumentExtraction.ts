@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { getDb } from '../../lib/db';
-import { ExtractionResult, DocumentPageResult, BoundingBox } from './types';
+import { ExtractionResult, DocumentPageResult } from './types';
+import type { BoundingBox } from '../ocr/types';
 import { sortWords, generateLinesFromWords } from '../../utils/ocrTransforms';
 
 export function useDocumentExtraction(sessionId: string | undefined) {
@@ -93,7 +94,19 @@ export function useDocumentExtraction(sessionId: string | undefined) {
     const addWord = async (text: string, box: BoundingBox) => {
         if (!extractionResult) return;
         const updatedPage = structuredClone(extractionResult.pages[0]);
-        updatedPage.words = sortWords([...updatedPage.words, { text, confidence: 100, box_coords: box }]);
+        updatedPage.words = sortWords([
+            ...updatedPage.words,
+            {
+                text,
+                confidence: 100,
+                box_coords: box,
+                pageNumber: 1,
+                blockNumber: 1,
+                paragraphNumber: 1,
+                lineNumber: updatedPage.words.length + 1,
+                wordNumber: updatedPage.words.length + 1,
+            },
+        ]);
         await updateDb(updatedPage);
     };
 

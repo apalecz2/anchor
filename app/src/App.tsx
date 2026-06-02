@@ -7,14 +7,7 @@ import Settings from './pages/Settings';
 import About from './pages/About';
 import Search from './pages/Search';
 
-//import AppShell from "./app/AppShell";
-
 export default function App() {
-    
-    /*
-    return <AppShell />;
-    */
-
     return (
         <HashRouter>
             <Routes>

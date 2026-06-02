@@ -1,4 +1,5 @@
-import { OcrWord, LineWord } from '../features/extraction/types';
+import type { OcrWord } from '../features/ocr/types';
+import type { LineWord } from '../features/extraction/types';
 
 export const generateLinesFromWords = (words: OcrWord[]): LineWord[][] => {
     if (words.length === 0) return [];

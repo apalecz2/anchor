@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BoundingBox } from '../../features/extraction/types';
+import type { BoundingBox } from '../../features/ocr/types';
 
 interface WordEditModalProps {
     initialData: { box?: BoundingBox | null; index?: number; text?: string };

@@ -1,8 +1,12 @@
+import type { OcrWord } from '../ocr/types';
+
 export type FileAttachment = {
     name: string;
     type: string;
     data: string;
 };
+
+export type { BoundingBox, OcrWord } from '../ocr/types';
 
 export type ChatRole = "user" | "assistant";
 
@@ -15,19 +19,6 @@ export type ChatMessage = {
     isStreaming?: boolean;
     attachments?: FileAttachment[];
 };
-
-export interface BoundingBox {
-    left: number;
-    top: number;
-    width: number;
-    height: number;
-}
-
-export interface OcrWord {
-    text: string;
-    confidence: number;
-    box_coords: BoundingBox;
-}
 
 export interface DocumentPageResult {
     image_path: string;

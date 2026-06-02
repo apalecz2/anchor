@@ -1,4 +1,4 @@
-export type OcrBoundingBox = {
+export type BoundingBox = {
     left: number;
     top: number;
     width: number;
@@ -8,7 +8,7 @@ export type OcrBoundingBox = {
 export type OcrWord = {
     text: string;
     confidence: number;
-    box: OcrBoundingBox;
+    box_coords: BoundingBox;
     pageNumber: number;
     blockNumber: number;
     paragraphNumber: number;
