@@ -8,6 +8,8 @@ export async function getDb(): Promise<Database> {
     // This creates/loads a file named 'workspace.db' in the app's default data directory
     dbInstance = await Database.load('sqlite:workspace.db');
 
+    await dbInstance.execute('PRAGMA foreign_keys = ON;');
+
     // Initialize Schema
     await dbInstance.execute(`
         CREATE TABLE IF NOT EXISTS sessions (

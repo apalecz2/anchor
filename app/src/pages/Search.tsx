@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router';
+import ConfirmDialog from '../components/ConfirmDialog';
+import { deleteSession } from '../features/sessions/sessionActions';
 import { getDb } from '../lib/db';
 
 interface Session {
@@ -18,6 +20,8 @@ export default function Search(): React.ReactElement {
     const [page, setPage] = useState(1);
     const [totalPages, setTotalPages] = useState(1);
     const [isLoading, setIsLoading] = useState(false);
+    const [refreshToken, setRefreshToken] = useState(0);
+    const [sessionToDelete, setSessionToDelete] = useState<Session | null>(null);
 
     // 1. Debounce the search input
     useEffect(() => {
@@ -37,7 +41,6 @@ export default function Search(): React.ReactElement {
             try {
                 const db = await getDb();
                 const searchTerm = `%${debouncedQuery}%`;
-                const offset = (page - 1) * ITEMS_PER_PAGE;
 
                 // Fetch total count for pagination
                 const countRes = await db.select<{ count: number }[]>(
@@ -47,6 +50,16 @@ export default function Search(): React.ReactElement {
                 
                 const totalItems = countRes[0]?.count || 0;
                 const calculatedTotalPages = Math.max(1, Math.ceil(totalItems / ITEMS_PER_PAGE));
+
+                if (page > calculatedTotalPages) {
+                    if (isMounted) {
+                        setTotalPages(calculatedTotalPages);
+                        setPage(calculatedTotalPages);
+                    }
+                    return;
+                }
+
+                const offset = (page - 1) * ITEMS_PER_PAGE;
                 
                 // Fetch paginated results
                 const items = await db.select<Session[]>(
@@ -70,7 +83,22 @@ export default function Search(): React.ReactElement {
         return () => {
             isMounted = false;
         };
-    }, [debouncedQuery, page]);
+    }, [debouncedQuery, page, refreshToken]);
+
+    const handleDeleteSession = async () => {
+        if (!sessionToDelete) {
+            return;
+        }
+
+        try {
+            await deleteSession(sessionToDelete.id);
+            setRefreshToken((current) => current + 1);
+        } catch (error) {
+            console.error('Failed to delete session:', error);
+        } finally {
+            setSessionToDelete(null);
+        }
+    };
 
     return (
         <main className="relative flex h-full flex-col overflow-hidden bg-background px-6 pb-10 pt-18 md:px-10">
@@ -108,18 +136,34 @@ export default function Search(): React.ReactElement {
                     ) : results.length > 0 ? (
                         <div className="flex flex-col gap-3">
                             {results.map((session) => (
-                                <Link
+                                <div
                                     key={session.id}
-                                    to={`/session/${session.id}`}
-                                    className="group flex flex-col justify-center rounded-[10px] border border-surface-variant bg-surface-container/50 p-4 transition-all duration-300 ease-out hover:bg-surface-variant focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
+                                    className="group flex items-stretch overflow-hidden rounded-[10px] border border-surface-variant bg-surface-container/50 transition-all duration-300 ease-out hover:bg-surface-variant"
                                 >
-                                    <span className="text-lg font-medium text-on-surface transition-colors group-hover:text-primary">
-                                        {session.title}
-                                    </span>
-                                    <span className="mt-1 text-sm text-on-surface-variant">
-                                        Last updated: {new Date(session.updated_at).toLocaleDateString()}
-                                    </span>
-                                </Link>
+                                    <Link
+                                        to={`/session/${session.id}`}
+                                        className="flex min-w-0 flex-1 flex-col justify-center p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/20"
+                                    >
+                                        <span className="truncate text-lg font-medium text-on-surface transition-colors group-hover:text-primary">
+                                            {session.title}
+                                        </span>
+                                        <span className="mt-1 text-sm text-on-surface-variant">
+                                            Last updated: {new Date(session.updated_at).toLocaleDateString()}
+                                        </span>
+                                    </Link>
+
+                                    <button
+                                        type="button"
+                                        onClick={() => setSessionToDelete(session)}
+                                        className="flex shrink-0 items-center gap-2 border-l border-surface-variant bg-surface-container px-4 text-sm font-medium text-on-surface-variant transition-colors hover:bg-error/10 hover:text-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/20"
+                                        aria-label={`Delete session ${session.title}`}
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+                                            delete
+                                        </span>
+                                        Delete
+                                    </button>
+                                </div>
                             ))}
                         </div>
                     ) : (
@@ -156,6 +200,19 @@ export default function Search(): React.ReactElement {
                     </div>
                 )}
             </div>
+
+            <ConfirmDialog
+                open={sessionToDelete !== null}
+                title="Delete session?"
+                description={
+                    sessionToDelete
+                        ? `This will permanently delete "${sessionToDelete.title}" and all related files, outputs, and OCR data.`
+                        : ''
+                }
+                confirmLabel="Delete"
+                onConfirm={handleDeleteSession}
+                onCancel={() => setSessionToDelete(null)}
+            />
         </main>
     );
 }

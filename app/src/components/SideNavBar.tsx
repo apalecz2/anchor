@@ -1,5 +1,7 @@
-import { FC } from 'react';
+import { FC, useEffect, useState } from 'react';
 import { Link } from 'react-router';
+import ConfirmDialog from './ConfirmDialog';
+import { deleteSession } from '../features/sessions/sessionActions';
 
 // ─── Nav Item Definition ───────────────────────────────────────────────────────
 // Add, remove, or reorder items here to change the sidebar contents.
@@ -41,6 +43,47 @@ const SideNavBar: FC<SideNavBarProps> = ({
     activeId,
     recentItems = [],
 }) => {
+    const [recentContextMenu, setRecentContextMenu] = useState<{
+        x: number;
+        y: number;
+        item: NavItem;
+    } | null>(null);
+    const [sessionToDelete, setSessionToDelete] = useState<NavItem | null>(null);
+
+    useEffect(() => {
+        if (!recentContextMenu) {
+            return;
+        }
+
+        const closeMenu = () => setRecentContextMenu(null);
+
+        window.addEventListener('click', closeMenu);
+        window.addEventListener('resize', closeMenu);
+        window.addEventListener('scroll', closeMenu, true);
+
+        return () => {
+            window.removeEventListener('click', closeMenu);
+            window.removeEventListener('resize', closeMenu);
+            window.removeEventListener('scroll', closeMenu, true);
+        };
+    }, [recentContextMenu]);
+
+    const handleDeleteRecentSession = async () => {
+        if (!sessionToDelete?.href) {
+            return;
+        }
+
+        const sessionId = sessionToDelete.href.replace('/session/', '');
+
+        try {
+            await deleteSession(sessionId);
+        } catch (error) {
+            console.error('Failed to delete recent session:', error);
+        } finally {
+            setSessionToDelete(null);
+        }
+    };
+
     return (
         <>
             {/* Optional: Mobile overlay backdrop when expanded */}
@@ -217,6 +260,14 @@ const SideNavBar: FC<SideNavBarProps> = ({
                                             className={sharedClassName}
                                             aria-current={isActive ? 'page' : undefined}
                                             title={collapsed ? item.label : undefined}
+                                            onContextMenu={(event) => {
+                                                event.preventDefault();
+                                                setRecentContextMenu({
+                                                    x: event.clientX,
+                                                    y: event.clientY,
+                                                    item,
+                                                });
+                                            }}
                                         >
                                             {content}
                                         </Link>
@@ -240,7 +291,47 @@ const SideNavBar: FC<SideNavBarProps> = ({
                     )}
 
                 </nav>
+
+                {recentContextMenu && (
+                    <>
+                        <div
+                            className="fixed inset-0 z-40 bg-transparent"
+                            onClick={() => setRecentContextMenu(null)}
+                            aria-hidden="true"
+                        />
+                        <div
+                            className="fixed z-50 w-48 overflow-hidden rounded-[14px] border border-outline-variant bg-surface-bright p-1 shadow-2xl"
+                            style={{ left: recentContextMenu.x, top: recentContextMenu.y }}
+                            role="menu"
+                            aria-label={`Actions for ${recentContextMenu.item.label}`}
+                        >
+                            <button
+                                type="button"
+                                className="flex w-full items-center rounded-[10px] px-3 py-2 text-left text-sm font-medium text-error transition-colors hover:bg-error/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/20"
+                                onClick={() => {
+                                    setSessionToDelete(recentContextMenu.item);
+                                    setRecentContextMenu(null);
+                                }}
+                            >
+                                Delete session
+                            </button>
+                        </div>
+                    </>
+                )}
             </aside>
+
+            <ConfirmDialog
+                open={sessionToDelete !== null}
+                title="Delete session?"
+                description={
+                    sessionToDelete
+                        ? `This will permanently delete "${sessionToDelete.label}" and all related files, outputs, and OCR data.`
+                        : ''
+                }
+                confirmLabel="Delete"
+                onConfirm={handleDeleteRecentSession}
+                onCancel={() => setSessionToDelete(null)}
+            />
         </>
     );
 };

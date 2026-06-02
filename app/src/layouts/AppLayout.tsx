@@ -1,18 +1,35 @@
 import { useEffect, useState } from 'react';
 import { Outlet } from 'react-router';
 import SideNavBar, { NavItem } from '../components/SideNavBar';
-import { useLocation } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 import { getDb } from '../lib/db';
+import { subscribeToSessionChanges } from '../features/sessions/sessionEvents';
 
 interface SessionRow {
     id: string;
     title: string;
 }
 
+async function loadRecentSessions(): Promise<NavItem[]> {
+    const db = await getDb();
+
+    const sessions = await db.select<SessionRow[]>(
+        'SELECT id, title FROM sessions ORDER BY updated_at DESC LIMIT 10'
+    );
+
+    return sessions.map((session) => ({
+        id: session.id,
+        icon: 'description',
+        label: session.title,
+        href: `/session/${session.id}`,
+    }));
+}
+
 export default function AppLayout() {
     const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
     const location = useLocation();
+    const navigate = useNavigate();
     const [recentSessions, setRecentSessions] = useState<NavItem[]>([]);
 
     const activeId = location.pathname === '/'
@@ -43,28 +60,43 @@ export default function AppLayout() {
     }, [isDarkMode]);
 
     useEffect(() => {
+        let isActive = true;
+
         async function fetchRecents() {
             try {
-                const db = await getDb();
-                
-                // Use raw SQL to fetch the latest 10 sessions
-                const sessions = await db.select<SessionRow[]>(
-                    'SELECT id, title FROM sessions ORDER BY updated_at DESC LIMIT 10'
-                );
+                const sessions = await loadRecentSessions();
 
-                setRecentSessions(sessions.map(s => ({
-                    id: s.id,
-                    icon: 'description', // Or any material symbol you prefer
-                    label: s.title,
-                    href: `/session/${s.id}`
-                })));
+                if (isActive) {
+                    setRecentSessions(sessions);
+                }
             } catch (error) {
                 console.error("Failed to fetch recent sessions:", error);
             }
         }
         
         fetchRecents();
+
+        return () => {
+            isActive = false;
+        };
     }, [location.pathname]);
+
+    useEffect(() => {
+        return subscribeToSessionChanges(({ deletedSessionId }) => {
+            void (async () => {
+                try {
+                    const sessions = await loadRecentSessions();
+                    setRecentSessions(sessions);
+                } catch (error) {
+                    console.error('Failed to refresh recent sessions:', error);
+                }
+            })();
+
+            if (deletedSessionId && location.pathname === `/session/${deletedSessionId}`) {
+                navigate('/search', { replace: true });
+            }
+        });
+    }, [location.pathname, navigate]);
 
     return (
         <div className="bg-background text-on-surface font-body-md antialiased overflow-hidden flex h-screen w-full">

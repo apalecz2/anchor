@@ -202,7 +202,15 @@ export default function Session(): React.ReactElement {
                             {generateLinesFromWords(activePage.words).map((line, lineIndex) => (
                                 <p key={lineIndex} className="min-h-[1.5rem]">
                                     {line.map((word, wordIndex) => (
-                                        <span key={`${lineIndex}-${word.originalIndex}`} className="mr-2 inline-block">
+                                        <span
+                                            key={`${lineIndex}-${word.originalIndex}`}
+                                            className="mr-2 inline-block cursor-pointer"
+                                            onMouseEnter={() => setHighlightedIndex(word.originalIndex)}
+                                            onMouseLeave={() => setHighlightedIndex(null)}
+                                            onFocus={() => setHighlightedIndex(word.originalIndex)}
+                                            onBlur={() => setHighlightedIndex(null)}
+                                            tabIndex={0}
+                                        >
                                             {word.text}
                                             {wordIndex < line.length - 1 ? ' ' : ''}
                                         </span>
