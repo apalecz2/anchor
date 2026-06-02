@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import type { OcrWord, BoundingBox } from '../features/ocr/types';
 
 interface DocumentViewerProps {
@@ -7,9 +7,11 @@ interface DocumentViewerProps {
     onAddWord: (box: BoundingBox) => void;
     onEditRequest: (index: number, currentText: string) => void;
     onDeleteRequest: (index: number) => void;
-    // Sync states for bi-directional highlighting
     highlightedIndex: number | null;
     setHighlightedIndex: (index: number | null) => void;
+    activeTool: 'draw' | 'pan';
+    transform: { scale: number; x: number; y: number };
+    setTransform: React.Dispatch<React.SetStateAction<{ scale: number; x: number; y: number }>>;
 }
 
 const getConfidenceColor = (confidence: number) => {
@@ -25,10 +27,17 @@ export default function DocumentViewer({
     onEditRequest,
     onDeleteRequest,
     highlightedIndex,
-    setHighlightedIndex
+    setHighlightedIndex,
+    activeTool,
+    transform,
+    setTransform
 }: DocumentViewerProps) {
     const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
     const svgRef = useRef<SVGSVGElement>(null);
+    const containerRef = useRef<HTMLDivElement>(null);
+
+    // Track active panning drag
+    const [isDragging, setIsDragging] = useState(false);
 
     // Drawing State
     const [isDrawing, setIsDrawing] = useState(false);
@@ -38,6 +47,60 @@ export default function DocumentViewer({
     // Context Menu State
     const [contextMenu, setContextMenu] = useState<{ x: number, y: number, index: number, text: string } | null>(null);
 
+    // --- Pan & Zoom Logic ---
+    useEffect(() => {
+        const container = containerRef.current;
+        if (!container) return;
+
+        const handleWheel = (e: WheelEvent) => {
+            e.preventDefault();
+            const zoomSensitivity = 0.002;
+            const delta = -e.deltaY * zoomSensitivity;
+
+            setTransform(prev => ({
+                ...prev,
+                scale: Math.min(Math.max(0.1, prev.scale * (1 + delta)), 10)
+            }));
+        };
+
+        container.addEventListener('wheel', handleWheel, { passive: false });
+        return () => container.removeEventListener('wheel', handleWheel);
+    }, [setTransform]);
+
+    useEffect(() => {
+        const handleGlobalMouseMove = (e: MouseEvent) => {
+            if (!isDragging) return;
+            setTransform(prev => ({
+                ...prev,
+                x: prev.x + e.movementX,
+                y: prev.y + e.movementY
+            }));
+        };
+
+        const handleGlobalMouseUp = () => {
+            setIsDragging(false);
+        };
+
+        if (isDragging) {
+            window.addEventListener('mousemove', handleGlobalMouseMove);
+            window.addEventListener('mouseup', handleGlobalMouseUp);
+        }
+
+        return () => {
+            window.removeEventListener('mousemove', handleGlobalMouseMove);
+            window.removeEventListener('mouseup', handleGlobalMouseUp);
+        };
+    }, [isDragging, setTransform]);
+
+    const handleContainerMouseDown = (e: React.MouseEvent) => {
+        // Trigger pan on Middle-click OR Left-click if 'pan' tool is active
+        if (e.button === 1 || (e.button === 0 && activeTool === 'pan')) {
+            e.preventDefault();
+            setIsDragging(true);
+        }
+    };
+
+    // --- Drawing Logic ---
     const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
         const { naturalWidth, naturalHeight } = e.currentTarget;
         setNaturalSize({ width: naturalWidth, height: naturalHeight });
@@ -54,7 +117,8 @@ export default function DocumentViewer({
     };
 
     const handleMouseDown = (e: React.MouseEvent) => {
-        if ((e.target as SVGElement).tagName === 'rect' || e.button === 2) return;
+        // Prevent drawing if panning is active, target is a rect, right-click, or middle-click
+        if (activeTool === 'pan' || (e.target as SVGElement).tagName === 'rect' || e.button === 2 || e.button === 1) return;
         const pt = getSvgPoint(e);
         if (!pt) return;
 
@@ -91,8 +155,11 @@ export default function DocumentViewer({
     };
 
     return (
-        <div className="relative flex h-full w-full flex-col items-center justify-center overflow-auto bg-surface-container-low p-4">
-
+        <div 
+            ref={containerRef}
+            onMouseDown={handleContainerMouseDown}
+            className={`relative flex h-full w-full flex-col items-center justify-center overflow-hidden bg-surface-container-low p-4 ${isDragging ? 'cursor-grabbing' : activeTool === 'pan' ? 'cursor-grab' : ''}`}
+        >
             {contextMenu && (
                 <>
                     <div
@@ -120,7 +187,14 @@ export default function DocumentViewer({
                 </>
             )}
 
-            <div className="relative shadow-sm shadow-black/10">
+            <div 
+                className="relative shadow-sm shadow-black/10"
+                style={{
+                    transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
+                    transformOrigin: 'center',
+                    transition: isDragging ? 'none' : 'transform 0.05s ease-out' 
+                }}
+            >
                 <img
                     src={fileUrl}
                     alt="Document"
@@ -131,7 +205,7 @@ export default function DocumentViewer({
                 {naturalSize.width > 0 && (
                     <svg
                         ref={svgRef}
-                        className="absolute left-0 top-0 h-full w-full cursor-crosshair touch-none"
+                        className={`absolute left-0 top-0 h-full w-full touch-none ${activeTool === 'pan' || isDragging ? 'pointer-events-none' : 'cursor-crosshair'}`}
                         viewBox={`0 0 ${naturalSize.width} ${naturalSize.height}`}
                         preserveAspectRatio="xMidYMid meet"
                         onMouseDown={handleMouseDown}
@@ -151,7 +225,6 @@ export default function DocumentViewer({
                                     y={word.box_coords.top}
                                     width={word.box_coords.width}
                                     height={word.box_coords.height}
-                                    // Dynamically adjust styling based on the active index
                                     style={{
                                         fill: color,
                                         stroke: color,
@@ -160,7 +233,6 @@ export default function DocumentViewer({
                                             ? 'opacity-80 stroke-[4px]'
                                             : 'opacity-30 stroke-[2px] hover:opacity-60'
                                         }`}
-                                    // Trigger global highlight state on hover
                                     onMouseEnter={() => setHighlightedIndex(idx)}
                                     onMouseLeave={() => setHighlightedIndex(null)}
                                     onClick={(e) => e.stopPropagation()}

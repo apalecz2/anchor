@@ -34,6 +34,9 @@ export default function Session(): React.ReactElement {
     const [highlightedIndex, setHighlightedIndex] = useState<number | null>(null);
     const [editingState, setEditingState] = useState<{ box?: BoundingBox | null, index?: number, text?: string } | null>(null);
 
+    const [activeTool, setActiveTool] = useState<'draw' | 'pan'>('draw');
+    const [viewTransform, setViewTransform] = useState({ scale: 1, x: 0, y: 0 });
+
     const activePage = extractionResult?.pages[0];
 
     const handleFormatTable = async () => {
@@ -56,14 +59,80 @@ export default function Session(): React.ReactElement {
         <SplitLayout>
             {/* LEFT PANE */}
             <>
-                <div className="border-outline-variant p-4">
-                    <h2 className="font-headline-sm text-primary text-center">Source Document</h2>
+                <div className="mb-6 border-outline-variant flex items-center justify-between">
+                    <h2 className="font-headline-sm text-primary">Source Document</h2>
+                    
+                    {fileUrl && activePage && (
+                        <div className="flex items-center gap-3">
+                            {/* Draw/Pan Tool Toggle */}
+                            <div className="flex bg-surface-variant rounded-lg p-1">
+                                <button
+                                    onClick={() => setActiveTool('draw')}
+                                    className={`flex items-center gap-1 px-3 py-1 rounded-md text-sm transition-colors ${activeTool === 'draw' ? 'bg-surface text-primary shadow-sm' : 'text-on-surface-variant hover:text-on-surface'}`}
+                                >
+                                    <span className="material-symbols-outlined text-[16px]">draw</span>
+                                    Edit
+                                </button>
+                                <button
+                                    onClick={() => setActiveTool('pan')}
+                                    className={`flex items-center gap-1 px-3 py-1 rounded-md text-sm transition-colors ${activeTool === 'pan' ? 'bg-surface text-primary shadow-sm' : 'text-on-surface-variant hover:text-on-surface'}`}
+                                >
+                                    <span className="material-symbols-outlined text-[16px]">pan_tool</span>
+                                    Pan
+                                </button>
+                            </div>
+
+                            <div className="h-6 w-px bg-outline-variant mx-1"></div>
+
+                            {/* Zoom Controls */}
+                            <div className="flex items-center gap-2">
+                                <button
+                                    aria-label="Zoom out"
+                                    className="flex h-8 w-8 items-center justify-center rounded-lg bg-surface-variant text-on-surface transition-colors shadow-sm hover:bg-surface-container-high focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
+                                    onClick={() => setViewTransform(prev => ({ ...prev, scale: Math.max(0.1, prev.scale - 0.2) }))}
+                                    type="button"
+                                >
+                                    <span className="material-symbols-outlined text-[18px]" style={{ fontVariationSettings: "'FILL' 0" }}>zoom_out</span>
+                                </button>
+
+                                <input
+                                    type="range"
+                                    min="0.1"
+                                    max="5"
+                                    step="0.1"
+                                    value={viewTransform.scale}
+                                    onChange={(e) => setViewTransform(prev => ({ ...prev, scale: parseFloat(e.target.value) }))}
+                                    className="w-20 accent-primary cursor-pointer"
+                                    title={`Zoom: ${Math.round(viewTransform.scale * 100)}%`}
+                                />
+
+                                <button
+                                    aria-label="Zoom in"
+                                    className="flex h-8 w-8 items-center justify-center rounded-lg bg-surface-variant text-on-surface transition-colors shadow-sm hover:bg-surface-container-high focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
+                                    onClick={() => setViewTransform(prev => ({ ...prev, scale: Math.min(10, prev.scale + 0.2) }))}
+                                    type="button"
+                                >
+                                    <span className="material-symbols-outlined text-[18px]" style={{ fontVariationSettings: "'FILL' 0" }}>zoom_in</span>
+                                </button>
+
+                                <button
+                                    aria-label="Reset view"
+                                    className="flex h-8 w-8 items-center justify-center rounded-lg bg-surface-variant text-on-surface transition-colors shadow-sm hover:bg-surface-container-high focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 ml-1"
+                                    onClick={() => setViewTransform({ scale: 1, x: 0, y: 0 })}
+                                    type="button"
+                                    title="Reset View"
+                                >
+                                    <span className="material-symbols-outlined text-[18px]" style={{ fontVariationSettings: "'FILL' 0" }}>fit_screen</span>
+                                </button>
+                            </div>
+                        </div>
+                    )}
                 </div>
-                <div className="flex-1 overflow-auto rounded-2xl border border-outline-variant bg-surface-bright px-8 py-10 shadow-sm relative">
+                <div className="flex-1 overflow-hidden rounded-2xl border border-outline-variant bg-surface-bright shadow-sm relative">
                     {isDbLoading ? (
-                        <div className="flex w-full items-center justify-center">Processing...</div>
+                        <div className="flex w-full items-center justify-center h-full">Processing...</div>
                     ) : dbError ? (
-                        <div className="flex w-full items-center justify-center text-error">{dbError}</div>
+                        <div className="flex w-full items-center justify-center text-error h-full">{dbError}</div>
                     ) : fileUrl && activePage ? (
                         <DocumentViewer
                             fileUrl={fileUrl}
@@ -73,6 +142,10 @@ export default function Session(): React.ReactElement {
                             onDeleteRequest={deleteWord}
                             highlightedIndex={highlightedIndex}
                             setHighlightedIndex={setHighlightedIndex}
+                            // Pass down new props
+                            activeTool={activeTool}
+                            transform={viewTransform}
+                            setTransform={setViewTransform}
                         />
                     ) : null}
 
@@ -88,7 +161,7 @@ export default function Session(): React.ReactElement {
 
             {/* RIGHT PANE */}
             <>
-                <div className="m-2 mb-6 flex items-center justify-between">
+                <div className="mb-6 mr-12 h-[40px] flex items-center justify-between">
                     <h1 className="font-headline-sm text-primary">Output</h1>
                     {activePage && (
                         <div className="flex gap-2">
