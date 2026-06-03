@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router';
 import DocumentViewer from '../components/DocumentViewer';
 import ReactMarkdown from 'react-markdown';
@@ -14,7 +14,7 @@ import type { BoundingBox } from '../features/ocr/types';
 
 function SessionContent(): React.ReactElement {
     const { id } = useParams<{ id: string }>();
-    const activePageIndex = 0;
+    const [activePageIndex, setActivePageIndex] = useState(0);
 
     const {
         extractionResult,
@@ -39,8 +39,30 @@ function SessionContent(): React.ReactElement {
 
     const [activeTool, setActiveTool] = useState<'draw' | 'pan'>('draw');
     const [viewTransform, setViewTransform] = useState({ scale: 1, x: 0, y: 0 });
+    const [pageInputValue, setPageInputValue] = useState('1');
 
+    const totalPages = extractionResult?.pages.length ?? 1;
     const activePage = extractionResult?.pages[activePageIndex];
+
+    useEffect(() => {
+        setPageInputValue((activePageIndex + 1).toString());
+    }, [activePageIndex]);
+
+    const goToPage = (index: number) => {
+        setActivePageIndex(index);
+        setHighlightedWordId(null);
+        setEditingState(null);
+        setViewTransform({ scale: 1, x: 0, y: 0 });
+    };
+
+    const commitPageInput = () => {
+        const parsed = parseInt(pageInputValue, 10);
+        if (!isNaN(parsed)) {
+            goToPage(Math.min(Math.max(parsed - 1, 0), totalPages - 1));
+        } else {
+            setPageInputValue((activePageIndex + 1).toString());
+        }
+    };
 
     const handleFormatTable = async () => {
         if (!fileUrl || !activePage?.text) return;
@@ -84,6 +106,48 @@ function SessionContent(): React.ReactElement {
                                     Pan
                                 </button>
                             </div>
+
+                            {totalPages > 1 && (
+                                <>
+                                    <div className="h-6 w-px bg-outline-variant mx-1"></div>
+
+                                    {/* Page Navigation */}
+                                    <div className="flex items-center gap-1">
+                                        <button
+                                            aria-label="Previous page"
+                                            disabled={activePageIndex === 0}
+                                            onClick={() => goToPage(activePageIndex - 1)}
+                                            className="flex h-8 w-8 items-center justify-center rounded-lg bg-surface-variant text-on-surface transition-colors shadow-sm hover:bg-surface-container-high disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
+                                            type="button"
+                                        >
+                                            <span className="material-symbols-outlined text-[18px]">chevron_left</span>
+                                        </button>
+                                        <input
+                                            type="text"
+                                            inputMode="numeric"
+                                            value={pageInputValue}
+                                            onChange={(e) => setPageInputValue(e.target.value)}
+                                            onBlur={commitPageInput}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter') { e.currentTarget.blur(); }
+                                                else if (e.key === 'Escape') { setPageInputValue((activePageIndex + 1).toString()); e.currentTarget.blur(); }
+                                            }}
+                                            className="h-6 w-8 text-center text-sm bg-surface-variant text-on-surface tabular-nums rounded-lg shadow-sm transition-colors hover:bg-surface-container-high focus:outline-none focus:ring-2 focus:ring-primary/30 cursor-text"
+                                            aria-label="Page number"
+                                        />
+                                        <span className="text-sm text-on-surface-variant select-none">/ {totalPages}</span>
+                                        <button
+                                            aria-label="Next page"
+                                            disabled={activePageIndex === totalPages - 1}
+                                            onClick={() => goToPage(activePageIndex + 1)}
+                                            className="flex h-8 w-8 items-center justify-center rounded-lg bg-surface-variant text-on-surface transition-colors shadow-sm hover:bg-surface-container-high disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
+                                            type="button"
+                                        >
+                                            <span className="material-symbols-outlined text-[18px]">chevron_right</span>
+                                        </button>
+                                    </div>
+                                </>
+                            )}
 
                             <div className="h-6 w-px bg-outline-variant mx-1"></div>
 

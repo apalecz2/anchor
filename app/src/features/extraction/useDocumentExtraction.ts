@@ -7,7 +7,6 @@ import { sortWords, generateLinesFromWords } from '../../utils/ocrTransforms';
 
 export function useDocumentExtraction(sessionId: string | undefined, activePageIndex: number = 0) {
     const [extractionResult, setExtractionResult] = useState<ExtractionResult | null>(null);
-    const [fileUrl, setFileUrl] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const hasProcessed = useRef(false);
@@ -36,7 +35,6 @@ export function useDocumentExtraction(sessionId: string | undefined, activePageI
                         words: JSON.parse(page.words_json)
                     }));
                     setExtractionResult({ session_id: sessionId, pages: restoredPages });
-                    setFileUrl(convertFileSrc(restoredPages[activePageIndex].image_path));
                     return;
                 }
 
@@ -59,7 +57,6 @@ export function useDocumentExtraction(sessionId: string | undefined, activePageI
                 }
 
                 setExtractionResult(rustResult);
-                if (rustResult.pages.length > activePageIndex) setFileUrl(convertFileSrc(rustResult.pages[activePageIndex].image_path));
 
             } catch (err) {
                 setError(err instanceof Error ? err.message : 'Failed to process document.');
@@ -128,6 +125,10 @@ export function useDocumentExtraction(sessionId: string | undefined, activePageI
         updatedPage.words.splice(idx, 1);
         await updateDb(updatedPage);
     };
+
+    const fileUrl = extractionResult?.pages[activePageIndex]?.image_path
+        ? convertFileSrc(extractionResult.pages[activePageIndex].image_path)
+        : null;
 
     return { extractionResult, fileUrl, isLoading, error, addWord, editWord, deleteWord };
 }
