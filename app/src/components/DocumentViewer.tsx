@@ -5,10 +5,10 @@ interface DocumentViewerProps {
     fileUrl: string;
     words: OcrWord[];
     onAddWord: (box: BoundingBox) => void;
-    onEditRequest: (index: number, currentText: string) => void;
-    onDeleteRequest: (index: number) => void;
-    highlightedIndex: number | null;
-    setHighlightedIndex: (index: number | null) => void;
+    onEditRequest: (id: string, currentText: string) => void;
+    onDeleteRequest: (id: string) => void;
+    highlightedWordId: string | null;
+    setHighlightedWordId: (id: string | null) => void;
     activeTool: 'draw' | 'pan';
     transform: { scale: number; x: number; y: number };
     setTransform: React.Dispatch<React.SetStateAction<{ scale: number; x: number; y: number }>>;
@@ -26,8 +26,8 @@ export default function DocumentViewer({
     onAddWord,
     onEditRequest,
     onDeleteRequest,
-    highlightedIndex,
-    setHighlightedIndex,
+    highlightedWordId,
+    setHighlightedWordId,
     activeTool,
     transform,
     setTransform
@@ -45,7 +45,7 @@ export default function DocumentViewer({
     const [currentBox, setCurrentBox] = useState<BoundingBox | null>(null);
 
     // Context Menu State
-    const [contextMenu, setContextMenu] = useState<{ x: number, y: number, index: number, text: string } | null>(null);
+    const [contextMenu, setContextMenu] = useState<{ x: number, y: number, id: string, text: string } | null>(null);
 
     // --- Pan & Zoom Logic ---
     useEffect(() => {
@@ -173,13 +173,13 @@ export default function DocumentViewer({
                     >
                         <button
                             className="px-4 py-2 text-left hover:bg-surface-variant text-on-surface text-sm transition-colors"
-                            onClick={() => { onEditRequest(contextMenu.index, contextMenu.text); setContextMenu(null); }}
+                            onClick={() => { onEditRequest(contextMenu.id, contextMenu.text); setContextMenu(null); }}
                         >
                             Edit Text
                         </button>
                         <button
                             className="px-4 py-2 text-left hover:bg-error/10 text-error text-sm transition-colors"
-                            onClick={() => { onDeleteRequest(contextMenu.index); setContextMenu(null); }}
+                            onClick={() => { onDeleteRequest(contextMenu.id); setContextMenu(null); }}
                         >
                             Delete Word
                         </button>
@@ -214,13 +214,13 @@ export default function DocumentViewer({
                         onMouseLeave={handleMouseUp}
                         onContextMenu={(e) => e.preventDefault()}
                     >
-                        {words.map((word, idx) => {
+                        {words.map((word) => {
                             const color = getConfidenceColor(word.confidence);
-                            const isHighlighted = highlightedIndex === idx;
+                            const isHighlighted = highlightedWordId === word.id;
 
                             return (
                                 <rect
-                                    key={`word-${idx}`}
+                                    key={`word-${word.id}`}
                                     x={word.box_coords.left}
                                     y={word.box_coords.top}
                                     width={word.box_coords.width}
@@ -233,13 +233,13 @@ export default function DocumentViewer({
                                             ? 'opacity-80 stroke-[4px]'
                                             : 'opacity-30 stroke-[2px] hover:opacity-60'
                                         }`}
-                                    onMouseEnter={() => setHighlightedIndex(idx)}
-                                    onMouseLeave={() => setHighlightedIndex(null)}
+                                    onMouseEnter={() => setHighlightedWordId(word.id)}
+                                    onMouseLeave={() => setHighlightedWordId(null)}
                                     onClick={(e) => e.stopPropagation()}
                                     onContextMenu={(e) => {
                                         e.preventDefault();
                                         e.stopPropagation();
-                                        setContextMenu({ x: e.clientX, y: e.clientY, index: idx, text: word.text });
+                                        setContextMenu({ x: e.clientX, y: e.clientY, id: word.id, text: word.text });
                                     }}
                                 >
                                     <title>{`${word.text} (Confidence: ${word.confidence.toFixed(1)}%)`}</title>

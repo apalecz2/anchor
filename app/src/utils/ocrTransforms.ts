@@ -7,13 +7,13 @@ export const generateLinesFromWords = (words: OcrWord[]): LineWord[][] => {
     let currentLine: LineWord[] = [];
     let currentTop = words[0].box_coords.top;
 
-    words.forEach((word, index) => {
+    words.forEach((word) => {
         if (Math.abs(word.box_coords.top - currentTop) > 15) {
             lines.push(currentLine);
-            currentLine = [{ text: word.text, originalIndex: index }];
+            currentLine = [{ text: word.text, wordId: word.id }];
             currentTop = word.box_coords.top;
         } else {
-            currentLine.push({ text: word.text, originalIndex: index });
+            currentLine.push({ text: word.text, wordId: word.id });
         }
     });
 

@@ -31,8 +31,8 @@ export default function Session(): React.ReactElement {
     } = useLlamaChat();
 
     const [outputView, setOutputView] = useState<'raw' | 'table'>('raw');
-    const [highlightedIndex, setHighlightedIndex] = useState<number | null>(null);
-    const [editingState, setEditingState] = useState<{ box?: BoundingBox | null, index?: number, text?: string } | null>(null);
+    const [highlightedWordId, setHighlightedWordId] = useState<string | null>(null);
+    const [editingState, setEditingState] = useState<{ box?: BoundingBox | null, id?: string, text?: string } | null>(null);
 
     const [activeTool, setActiveTool] = useState<'draw' | 'pan'>('draw');
     const [viewTransform, setViewTransform] = useState({ scale: 1, x: 0, y: 0 });
@@ -46,8 +46,8 @@ export default function Session(): React.ReactElement {
     };
 
     const handleSaveWord = (text: string) => {
-        if (editingState?.index !== undefined) {
-            editWord(editingState.index, text);
+        if (editingState?.id !== undefined) {
+            editWord(editingState.id, text);
         } else if (editingState?.box) {
             addWord(text, editingState.box);
         }
@@ -138,10 +138,10 @@ export default function Session(): React.ReactElement {
                             fileUrl={fileUrl}
                             words={activePage.words}
                             onAddWord={(box) => setEditingState({ box })}
-                            onEditRequest={(index, currentText) => setEditingState({ index, text: currentText })}
+                            onEditRequest={(id, currentText) => setEditingState({ id, text: currentText })}
                             onDeleteRequest={deleteWord}
-                            highlightedIndex={highlightedIndex}
-                            setHighlightedIndex={setHighlightedIndex}
+                            highlightedWordId={highlightedWordId}
+                            setHighlightedWordId={setHighlightedWordId}
                             // Pass down new props
                             activeTool={activeTool}
                             transform={viewTransform}
@@ -203,12 +203,12 @@ export default function Session(): React.ReactElement {
                                 <p key={lineIndex} className="min-h-[1.5rem]">
                                     {line.map((word, wordIndex) => (
                                         <span
-                                            key={`${lineIndex}-${word.originalIndex}`}
+                                            key={`${lineIndex}-${word.wordId}`}
                                             className="mr-2 inline-block cursor-pointer"
-                                            onMouseEnter={() => setHighlightedIndex(word.originalIndex)}
-                                            onMouseLeave={() => setHighlightedIndex(null)}
-                                            onFocus={() => setHighlightedIndex(word.originalIndex)}
-                                            onBlur={() => setHighlightedIndex(null)}
+                                            onMouseEnter={() => setHighlightedWordId(word.wordId)}
+                                            onMouseLeave={() => setHighlightedWordId(null)}
+                                            onFocus={() => setHighlightedWordId(word.wordId)}
+                                            onBlur={() => setHighlightedWordId(null)}
                                             tabIndex={0}
                                         >
                                             {word.text}

@@ -50,10 +50,10 @@ export function useDocumentExtraction(sessionId: string | undefined) {
 
                 for (let i = 0; i < rustResult.pages.length; i++) {
                     const page = rustResult.pages[i];
-                    page.words = sortWords(page.words);
+                    page.words = sortWords(page.words.map(w => ({ ...w, id: crypto.randomUUID() })));
 
                     await db.execute(
-                        `INSERT INTO document_pages (id, session_id, page_index, image_path, natural_width, natural_height, full_text, words_json) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                        `INSERT OR IGNORE INTO document_pages (id, session_id, page_index, image_path, natural_width, natural_height, full_text, words_json) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
                         [crypto.randomUUID(), sessionId, i, page.image_path, page.natural_width, page.natural_height, page.text, JSON.stringify(page.words)]
                     );
                 }
@@ -97,35 +97,35 @@ export function useDocumentExtraction(sessionId: string | undefined) {
         updatedPage.words = sortWords([
             ...updatedPage.words,
             {
+                id: crypto.randomUUID(),
                 text,
                 confidence: 100,
                 box_coords: box,
-                pageNumber: 1,
-                blockNumber: 1,
-                paragraphNumber: 1,
-                lineNumber: updatedPage.words.length + 1,
-                wordNumber: updatedPage.words.length + 1,
             },
         ]);
         await updateDb(updatedPage);
     };
 
-    const editWord = async (index: number, text: string) => {
+    const editWord = async (id: string, text: string) => {
         if (!extractionResult) return;
         const updatedPage = structuredClone(extractionResult.pages[0]);
+        const idx = updatedPage.words.findIndex(w => w.id === id);
+        if (idx === -1) return;
         if (text.trim() === "") {
-            updatedPage.words.splice(index, 1);
+            updatedPage.words.splice(idx, 1);
         } else {
-            updatedPage.words[index].text = text.trim();
-            updatedPage.words[index].confidence = 100;
+            updatedPage.words[idx].text = text.trim();
+            updatedPage.words[idx].confidence = 100;
         }
         await updateDb(updatedPage);
     };
 
-    const deleteWord = async (index: number) => {
+    const deleteWord = async (id: string) => {
         if (!extractionResult) return;
         const updatedPage = structuredClone(extractionResult.pages[0]);
-        updatedPage.words.splice(index, 1);
+        const idx = updatedPage.words.findIndex(w => w.id === id);
+        if (idx === -1) return;
+        updatedPage.words.splice(idx, 1);
         await updateDb(updatedPage);
     };
 

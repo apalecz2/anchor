@@ -2,14 +2,14 @@ import React, { useState, useEffect } from 'react';
 import type { BoundingBox } from '../../features/ocr/types';
 
 interface WordEditModalProps {
-    initialData: { box?: BoundingBox | null; index?: number; text?: string };
+    initialData: { box?: BoundingBox | null; id?: string; text?: string };
     onSave: (text: string) => void;
     onClose: () => void;
 }
 
 export const WordEditModal: React.FC<WordEditModalProps> = ({ initialData, onSave, onClose }) => {
     const [text, setText] = useState(initialData.text || "");
-    const isEditing = initialData.index !== undefined;
+    const isEditing = initialData.id !== undefined;
 
     useEffect(() => {
         setText(initialData.text || "");

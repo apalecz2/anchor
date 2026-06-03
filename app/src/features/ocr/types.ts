@@ -6,14 +6,10 @@ export type BoundingBox = {
 };
 
 export type OcrWord = {
+    id: string;
     text: string;
     confidence: number;
     box_coords: BoundingBox;
-    pageNumber: number;
-    blockNumber: number;
-    paragraphNumber: number;
-    lineNumber: number;
-    wordNumber: number;
 };
 
 export type OcrProgress = {

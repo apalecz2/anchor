@@ -35,5 +35,5 @@ export interface ExtractionResult {
 
 export interface LineWord {
     text: string;
-    originalIndex: number;
+    wordId: string;
 }

@@ -1,17 +1,13 @@
 import Database from '@tauri-apps/plugin-sql';
 
-let dbInstance: Database | null = null;
+let dbPromise: Promise<Database> | null = null;
 
-export async function getDb(): Promise<Database> {
-    if (dbInstance) return dbInstance;
+async function initDb(): Promise<Database> {
+    const db = await Database.load('sqlite:workspace.db');
 
-    // This creates/loads a file named 'workspace.db' in the app's default data directory
-    dbInstance = await Database.load('sqlite:workspace.db');
+    await db.execute('PRAGMA foreign_keys = ON;');
 
-    await dbInstance.execute('PRAGMA foreign_keys = ON;');
-
-    // Initialize Schema
-    await dbInstance.execute(`
+    await db.execute(`
         CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
@@ -20,7 +16,7 @@ export async function getDb(): Promise<Database> {
         );
     `);
 
-    await dbInstance.execute(`
+    await db.execute(`
         CREATE TABLE IF NOT EXISTS files (
             id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
@@ -30,7 +26,7 @@ export async function getDb(): Promise<Database> {
         );
     `);
 
-    await dbInstance.execute(`
+    await db.execute(`
         CREATE TABLE IF NOT EXISTS outputs (
             id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
@@ -40,8 +36,7 @@ export async function getDb(): Promise<Database> {
         );
     `);
 
-    // Table to cache OCR results and prevent reprocessing
-    await dbInstance.execute(`
+    await db.execute(`
         CREATE TABLE IF NOT EXISTS document_pages (
             id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
@@ -51,9 +46,15 @@ export async function getDb(): Promise<Database> {
             natural_height INTEGER NOT NULL,
             full_text TEXT NOT NULL,
             words_json TEXT NOT NULL,
-            FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+            UNIQUE(session_id, page_index)
         );
     `);
 
-    return dbInstance;
+    return db;
+}
+
+export function getDb(): Promise<Database> {
+    if (!dbPromise) dbPromise = initDb();
+    return dbPromise;
 }
