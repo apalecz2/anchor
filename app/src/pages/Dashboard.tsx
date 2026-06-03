@@ -5,13 +5,30 @@ import { getDb } from '../lib/db';
 import { writeFile, mkdir, BaseDirectory } from '@tauri-apps/plugin-fs';
 import { join, appDataDir } from '@tauri-apps/api/path';
 
+const ALLOWED_MIME_TYPES = new Set(['application/pdf', 'image/png', 'image/jpeg']);
+const MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024; // 500 MB
+
 export default function Dashboard(): React.ReactElement {
     const [isDragging, setIsDragging] = useState(false);
+    const [fileError, setFileError] = useState<string | null>(null);
     const navigate = useNavigate();
 
     // Call after the user selects files to create a session and navigate to the page for it
     const processFilesAndNavigate = async (files: FileList | null) => {
         if (!files || files.length === 0) return;
+        setFileError(null);
+
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            if (!ALLOWED_MIME_TYPES.has(file.type)) {
+                setFileError(`"${file.name}" is not a supported file type. Please upload PDF, PNG, or JPEG files.`);
+                return;
+            }
+            if (file.size > MAX_FILE_SIZE_BYTES) {
+                setFileError(`"${file.name}" exceeds the 500 MB size limit.`);
+                return;
+            }
+        }
 
         let db;
         // Move ID generation up so we can access it in the catch block if we need to clean up
@@ -60,6 +77,7 @@ export default function Dashboard(): React.ReactElement {
 
         } catch (error) {
             console.error("Failed to process files:", error);
+            setFileError("An unexpected error occurred while processing your files. Please try again.");
 
             // 4. Manual "Rollback": If anything fails, delete the session to prevent orphaned data
             if (db) {
@@ -150,6 +168,11 @@ export default function Dashboard(): React.ReactElement {
                     <h3 className="font-headline-md text-headline-md text-primary mb-2">Select files to upload</h3>
                     <p className="font-body-md text-body-md text-on-surface-variant">or drag and drop them here</p>
                 </div>
+
+                {/* File validation error */}
+                {fileError && (
+                    <p className="text-error font-body-sm text-body-sm mb-4 text-center">{fileError}</p>
+                )}
 
                 {/* Supported File Types */}
                 <div className="flex items-center gap-6 text-on-surface-variant font-label-md text-label-md">

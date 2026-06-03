@@ -91,6 +91,17 @@ async fn process_document(
         return Err(format!("Input file does not exist: {file_path}"));
     }
 
+    let file_size = fs::metadata(source_path)
+        .map_err(|e| format!("Failed to read file metadata: {e}"))?
+        .len();
+
+    if file_size > MAX_FILE_SIZE_BYTES {
+        return Err(format!(
+            "File exceeds the 500 MB size limit ({} bytes)",
+            file_size
+        ));
+    }
+
     let extension = source_path
         .extension()
         .and_then(|e| e.to_str())
@@ -150,7 +161,7 @@ async fn process_document(
             pages.push(ocr_image_to_page(&generated_path, natural_width, natural_height)?);
         }
 
-    } else if ["png", "jpg", "jpeg", "webp"].contains(&extension.as_str()) {
+    } else if ["png", "jpg", "jpeg"].contains(&extension.as_str()) {
         let (natural_width, natural_height) = image::image_dimensions(source_path)
             .map(|(w, h)| (w as i32, h as i32))
             .unwrap_or((0, 0));
@@ -169,6 +180,8 @@ async fn process_document(
 
 
 // ------------------ Llama Server Management ------------------
+
+const MAX_FILE_SIZE_BYTES: u64 = 500 * 1024 * 1024; // 500 MB
 
 const DEFAULT_CTX_SIZE: &str = "8192";
 const DEFAULT_IMAGE_MIN_TOKENS: &str = "1024";
