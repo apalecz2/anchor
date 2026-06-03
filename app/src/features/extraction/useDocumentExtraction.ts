@@ -5,7 +5,7 @@ import { ExtractionResult, DocumentPageResult } from './types';
 import type { BoundingBox } from '../ocr/types';
 import { sortWords, generateLinesFromWords } from '../../utils/ocrTransforms';
 
-export function useDocumentExtraction(sessionId: string | undefined) {
+export function useDocumentExtraction(sessionId: string | undefined, activePageIndex: number = 0) {
     const [extractionResult, setExtractionResult] = useState<ExtractionResult | null>(null);
     const [fileUrl, setFileUrl] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(true);
@@ -36,7 +36,7 @@ export function useDocumentExtraction(sessionId: string | undefined) {
                         words: JSON.parse(page.words_json)
                     }));
                     setExtractionResult({ session_id: sessionId, pages: restoredPages });
-                    setFileUrl(convertFileSrc(restoredPages[0].image_path));
+                    setFileUrl(convertFileSrc(restoredPages[activePageIndex].image_path));
                     return;
                 }
 
@@ -50,7 +50,7 @@ export function useDocumentExtraction(sessionId: string | undefined) {
 
                 for (let i = 0; i < rustResult.pages.length; i++) {
                     const page = rustResult.pages[i];
-                    page.words = sortWords(page.words.map(w => ({ ...w, id: crypto.randomUUID() })));
+                    page.words = sortWords(page.words.map(w => ({ ...w, id: crypto.randomUUID() })), page.natural_height);
 
                     await db.execute(
                         `INSERT OR IGNORE INTO document_pages (id, session_id, page_index, image_path, natural_width, natural_height, full_text, words_json) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
@@ -59,7 +59,7 @@ export function useDocumentExtraction(sessionId: string | undefined) {
                 }
 
                 setExtractionResult(rustResult);
-                if (rustResult.pages.length > 0) setFileUrl(convertFileSrc(rustResult.pages[0].image_path));
+                if (rustResult.pages.length > activePageIndex) setFileUrl(convertFileSrc(rustResult.pages[activePageIndex].image_path));
 
             } catch (err) {
                 setError(err instanceof Error ? err.message : 'Failed to process document.');
@@ -73,18 +73,18 @@ export function useDocumentExtraction(sessionId: string | undefined) {
 
     const updateDb = async (updatedPage: DocumentPageResult) => {
         if (!sessionId || !extractionResult) return;
-        const lines = generateLinesFromWords(updatedPage.words);
+        const lines = generateLinesFromWords(updatedPage.words, updatedPage.natural_height);
         updatedPage.text = lines.map(line => line.map(w => w.text).join(' ')).join('\n');
 
         const newResult = { ...extractionResult };
-        newResult.pages[0] = updatedPage;
+        newResult.pages[activePageIndex] = updatedPage;
         setExtractionResult(newResult);
 
         try {
             const db = await getDb();
             await db.execute(
                 `UPDATE document_pages SET words_json = $1, full_text = $2 WHERE session_id = $3 AND page_index = $4`,
-                [JSON.stringify(updatedPage.words), updatedPage.text, sessionId, 0]
+                [JSON.stringify(updatedPage.words), updatedPage.text, sessionId, activePageIndex]
             );
         } catch (err) {
             console.error("Failed to update db:", err);
@@ -93,7 +93,7 @@ export function useDocumentExtraction(sessionId: string | undefined) {
 
     const addWord = async (text: string, box: BoundingBox) => {
         if (!extractionResult) return;
-        const updatedPage = structuredClone(extractionResult.pages[0]);
+        const updatedPage = structuredClone(extractionResult.pages[activePageIndex]);
         updatedPage.words = sortWords([
             ...updatedPage.words,
             {
@@ -102,13 +102,13 @@ export function useDocumentExtraction(sessionId: string | undefined) {
                 confidence: 100,
                 box_coords: box,
             },
-        ]);
+        ], updatedPage.natural_height);
         await updateDb(updatedPage);
     };
 
     const editWord = async (id: string, text: string) => {
         if (!extractionResult) return;
-        const updatedPage = structuredClone(extractionResult.pages[0]);
+        const updatedPage = structuredClone(extractionResult.pages[activePageIndex]);
         const idx = updatedPage.words.findIndex(w => w.id === id);
         if (idx === -1) return;
         if (text.trim() === "") {
@@ -122,7 +122,7 @@ export function useDocumentExtraction(sessionId: string | undefined) {
 
     const deleteWord = async (id: string) => {
         if (!extractionResult) return;
-        const updatedPage = structuredClone(extractionResult.pages[0]);
+        const updatedPage = structuredClone(extractionResult.pages[activePageIndex]);
         const idx = updatedPage.words.findIndex(w => w.id === id);
         if (idx === -1) return;
         updatedPage.words.splice(idx, 1);

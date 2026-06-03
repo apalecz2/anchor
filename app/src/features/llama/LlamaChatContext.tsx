@@ -8,6 +8,7 @@ type LlamaChatContextValue = {
     isServerReady: boolean;
     isServerStarting: boolean;
     isLoading: boolean;
+    serverError: string | null;
     messages: ChatMessage[];
     pendingAttachment: FileAttachment | null;
     attachImage: (file: File) => Promise<boolean>;
@@ -35,30 +36,46 @@ const readImageFile = (file: File) =>
 export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
     const [isServerReady, setIsServerReady] = useState(false);
     const [isServerStarting, setIsServerStarting] = useState(false);
+    const [serverError, setServerError] = useState<string | null>(null);
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [pendingAttachment, setPendingAttachment] = useState<FileAttachment | null>(null);
 
     const messageCounterRef = useRef(0);
     const activeRequestRef = useRef<AbortController | null>(null);
+    const watchdogRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const isMountedRef = useRef(true);
 
     const allocateMessageId = () => {
         messageCounterRef.current += 1;
         return messageCounterRef.current;
     };
 
-    useEffect(() => {
-        let isMounted = true;
-        const healthCheckInterval = setInterval(async () => {
-            const isHealthy = await checkLlamaServerHealth();
-            if (isMounted) {
-                setIsServerReady(isHealthy);
-            }
-        }, 2000);
+    const stopWatchdog = () => {
+        if (watchdogRef.current !== null) {
+            clearInterval(watchdogRef.current);
+            watchdogRef.current = null;
+        }
+    };
 
+    // Slow watchdog: only runs after server is confirmed up.
+    // Detects unexpected server death and clears ready state.
+    const startWatchdog = () => {
+        stopWatchdog();
+        watchdogRef.current = setInterval(async () => {
+            const isHealthy = await checkLlamaServerHealth();
+            if (!isHealthy && isMountedRef.current) {
+                setIsServerReady(false);
+                stopWatchdog();
+            }
+        }, 30_000);
+    };
+
+    useEffect(() => {
+        isMountedRef.current = true;
         return () => {
-            isMounted = false;
-            clearInterval(healthCheckInterval);
+            isMountedRef.current = false;
+            stopWatchdog();
             activeRequestRef.current?.abort();
             void stopLlamaServer();
         };
@@ -70,6 +87,7 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
         }
 
         setIsServerStarting(true);
+        setServerError(null);
 
         try {
             await startLlamaServer();
@@ -77,11 +95,16 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
             for (let attempt = 0; attempt < 60; attempt += 1) {
                 if (await checkLlamaServerHealth()) {
                     setIsServerReady(true);
+                    startWatchdog();
                     return;
                 }
 
                 await new Promise(resolve => setTimeout(resolve, 1000));
             }
+
+            setServerError('Server did not become ready within 60 seconds. Check that the model file exists and you have enough RAM.');
+        } catch (err) {
+            setServerError(err instanceof Error ? err.message : 'Failed to start server.');
         } finally {
             setIsServerStarting(false);
         }
@@ -92,6 +115,7 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
             return;
         }
 
+        stopWatchdog();
         await stopLlamaServer();
         setIsServerReady(false);
         setIsServerStarting(false);
@@ -232,6 +256,7 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
         isServerReady,
         isServerStarting,
         isLoading,
+        serverError,
         messages,
         pendingAttachment,
         attachImage,

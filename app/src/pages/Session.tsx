@@ -6,13 +6,15 @@ import remarkGfm from 'remark-gfm';
 
 import { useDocumentExtraction } from '../features/extraction/useDocumentExtraction';
 import { useLlamaChat } from '../features/llama/useLlamaChat';
+import { LlamaChatProvider } from '../features/llama/LlamaChatContext';
 import { SplitLayout } from '../layouts/SplitLayout';
 import { WordEditModal } from '../features/extraction/WordEditModal';
 import { generateLinesFromWords } from '../utils/ocrTransforms';
 import type { BoundingBox } from '../features/ocr/types';
 
-export default function Session(): React.ReactElement {
+function SessionContent(): React.ReactElement {
     const { id } = useParams<{ id: string }>();
+    const activePageIndex = 0;
 
     const {
         extractionResult,
@@ -22,12 +24,13 @@ export default function Session(): React.ReactElement {
         addWord,
         editWord,
         deleteWord
-    } = useDocumentExtraction(id);
+    } = useDocumentExtraction(id, activePageIndex);
 
     const {
         requestTableFormat,
         messages,
-        isLoading: isLlamaLoading
+        isLoading: isLlamaLoading,
+        serverError: llamaError,
     } = useLlamaChat();
 
     const [outputView, setOutputView] = useState<'raw' | 'table'>('raw');
@@ -37,7 +40,7 @@ export default function Session(): React.ReactElement {
     const [activeTool, setActiveTool] = useState<'draw' | 'pan'>('draw');
     const [viewTransform, setViewTransform] = useState({ scale: 1, x: 0, y: 0 });
 
-    const activePage = extractionResult?.pages[0];
+    const activePage = extractionResult?.pages[activePageIndex];
 
     const handleFormatTable = async () => {
         if (!fileUrl || !activePage?.text) return;
@@ -199,7 +202,7 @@ export default function Session(): React.ReactElement {
                         <div className="flex h-full items-center justify-center">No readable text found.</div>
                     ) : outputView === 'raw' ? (
                         <div className="space-y-2 font-body-md text-on-surface leading-relaxed select-none">
-                            {generateLinesFromWords(activePage.words).map((line, lineIndex) => (
+                            {generateLinesFromWords(activePage.words, activePage.natural_height).map((line, lineIndex) => (
                                 <p key={lineIndex} className="min-h-[1.5rem]">
                                     {line.map((word, wordIndex) => (
                                         <span
@@ -237,6 +240,16 @@ export default function Session(): React.ReactElement {
                                         </div>
                                     )}
                                 </>
+                            ) : llamaError ? (
+                                <div className="flex flex-col h-full items-center justify-center gap-3 not-prose">
+                                    <p className="text-error text-sm text-center max-w-sm">{llamaError}</p>
+                                    <button
+                                        onClick={handleFormatTable}
+                                        className="px-4 py-1 text-sm bg-primary text-on-primary rounded-lg hover:bg-primary/90"
+                                    >
+                                        Retry
+                                    </button>
+                                </div>
                             ) : (
                                 <div className="flex h-full items-center justify-center text-on-surface-variant">
                                     Click "Format as Table" to process the OCR text with the local LLM.
@@ -247,5 +260,13 @@ export default function Session(): React.ReactElement {
                 </div>
             </>
         </SplitLayout>
+    );
+}
+
+export default function Session(): React.ReactElement {
+    return (
+        <LlamaChatProvider>
+            <SessionContent />
+        </LlamaChatProvider>
     );
 }
