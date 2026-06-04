@@ -18,6 +18,38 @@ export const compactOcrText = (text: string) =>
         .filter(Boolean)
         .join('\n');
 
+const parseFields = (line: string): string[] => {
+    const fields: string[] = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') {
+            if (inQuotes && line[i + 1] === '"') { current += '"'; i++; }
+            else { inQuotes = !inQuotes; }
+        } else if (ch === ',' && !inQuotes) {
+            fields.push(current.trim()); current = '';
+        } else {
+            current += ch;
+        }
+    }
+    fields.push(current.trim());
+    return fields;
+};
+
+export const parseCSV = (raw: string): string[][] => {
+    const text = raw.replace(/^```[a-z]*\n?/i, '').replace(/\n?```\s*$/, '').trim();
+    if (!text) return [];
+
+    const rows: string[][] = [];
+    for (const rawLine of text.split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        rows.push(parseFields(line));
+    }
+    return rows;
+};
+
 export const buildOcrExcerpt = (text: string, maxLines: number, maxCharacters: number) => {
     const lines = compactOcrText(text).split('\n').filter(Boolean);
     const excerptLines: string[] = [];

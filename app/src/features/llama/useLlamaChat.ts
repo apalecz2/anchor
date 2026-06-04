@@ -28,8 +28,11 @@ export const useLlamaChat = () => {
 
         const normalizedText = buildOcrExcerpt(ocrText, 80, 5000);
         const prompt = [
-            'Return only a markdown table.',
-            'No reasoning, no explanation, no code fences, no bullet points.',
+            'Return only CSV (comma-separated values).',
+            'First row must be the column headers.',
+            'No reasoning, no explanation, no code fences, no markdown.',
+            'Quote any field that contains a comma.',
+            'If two adjacent values belong to the same visual column (e.g. a department code and a course number), output them as one field joined by a space.',
             'Use the attached image as the primary reference and the OCR excerpt below as a guide.',
             '',
             'OCR excerpt:',

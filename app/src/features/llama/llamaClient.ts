@@ -16,7 +16,7 @@ type ChatCompletionContentPart =
     };
 
 type ChatCompletionMessage = {
-    role: "user" | "assistant";
+    role: "user" | "assistant" | "system";
     content: string | ChatCompletionContentPart[];
 };
 
@@ -24,8 +24,13 @@ type ChatCompletionRequestBody = {
     messages: ChatCompletionMessage[];
     max_tokens: number;
     temperature: number;
+    top_p: number;
+    top_k: number;
+    presence_penalty: number;
     stream: true;
     stop: string[];
+    // Qwen3.5-specific: disable <think> block so the model outputs directly
+    chat_template_kwargs: { enable_thinking: boolean };
 };
 
 type StreamChatCompletionOptions = {
@@ -113,13 +118,28 @@ export const checkLlamaServerHealth = async () => {
     }
 };
 
+const SYSTEM_PROMPT =
+    'You are a structured data extractor. ' +
+    'Begin your response with the very first line of the requested format — no introduction, ' +
+    'no analysis, no reasoning, no explanation before the data. ' +
+    'Output only the data itself.';
+
 export const streamChatCompletion = async ({ messages, onThinkingDelta, onContentDelta, onThinkingEnd, signal }: StreamChatCompletionOptions) => {
+    const messagesWithSystem: ChatCompletionMessage[] = [
+        { role: 'system', content: SYSTEM_PROMPT },
+        ...messages,
+    ];
+
     const requestBody: ChatCompletionRequestBody = {
-        messages,
-        max_tokens: 4096,
+        messages: messagesWithSystem,
+        max_tokens: 3000,
         temperature: 0.7,
+        top_p: 0.8,
+        top_k: 20,
+        presence_penalty: 1.5,
         stream: true,
         stop: ["<|im_start|>", "<|im_end|>"],
+        chat_template_kwargs: { enable_thinking: false },
     };
 
     const response = await fetch("http://127.0.0.1:8080/v1/chat/completions", {

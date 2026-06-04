@@ -1,15 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router';
 import DocumentViewer from '../components/DocumentViewer';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { parseCSV } from '../features/llama/promptUtils';
 
 import { useDocumentExtraction } from '../features/extraction/useDocumentExtraction';
 import { useLlamaChat } from '../features/llama/useLlamaChat';
 import { LlamaChatProvider } from '../features/llama/LlamaChatContext';
 import { SplitLayout } from '../layouts/SplitLayout';
 import { WordEditModal } from '../features/extraction/WordEditModal';
-import { generateLinesFromWords } from '../utils/ocrTransforms';
+import { generateLinesFromWords, buildTableText } from '../utils/ocrTransforms';
 import type { BoundingBox } from '../features/ocr/types';
 
 function SessionContent(): React.ReactElement {
@@ -65,9 +64,9 @@ function SessionContent(): React.ReactElement {
     };
 
     const handleFormatTable = async () => {
-        if (!fileUrl || !activePage?.text) return;
+        if (!fileUrl || !activePage?.words.length) return;
         setOutputView('table');
-        await requestTableFormat(fileUrl, activePage.text);
+        await requestTableFormat(fileUrl, buildTableText(activePage.words, activePage.natural_height));
     };
 
     const handleSaveWord = (text: string) => {
@@ -239,7 +238,7 @@ function SessionContent(): React.ReactElement {
                                 >
                                     Raw OCR
                                 </button>
-                                <button
+<button
                                     onClick={() => setOutputView('table')}
                                     className={`px-3 py-1 rounded-md text-sm transition-colors ${outputView === 'table' ? 'bg-surface text-primary shadow-sm' : 'text-on-surface-variant hover:text-on-surface'}`}
                                 >
@@ -286,26 +285,90 @@ function SessionContent(): React.ReactElement {
                             ))}
                         </div>
                     ) : (
-                        <div className="prose prose-sm md:prose-base dark:prose-invert max-w-none">
+                        <div className="w-full">
                             {messages.length > 0 ? (
-                                <>
-                                    {messages.filter(m => m.role === 'assistant').map((msg) => (
-                                        <div key={msg.id} className="mb-8">
-                                            {msg.content && (
-                                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                                    {msg.content}
-                                                </ReactMarkdown>
+                                messages.filter(m => m.role === 'assistant').map((msg) => {
+                                    if (msg.isStreaming) {
+                                        const phase = msg.content
+                                            ? 'generating'
+                                            : msg.thinking
+                                            ? 'thinking'
+                                            : 'starting';
+                                        return (
+                                            <div key={msg.id} className="mb-8 space-y-3">
+                                                <div className="flex items-center gap-2 text-sm text-on-surface-variant">
+                                                    <span className="inline-block h-2 w-2 rounded-full bg-primary animate-pulse" />
+                                                    <span>
+                                                        {phase === 'thinking' && 'Model is thinking...'}
+                                                        {phase === 'generating' && 'Generating CSV...'}
+                                                        {phase === 'starting' && 'Starting...'}
+                                                    </span>
+                                                </div>
+                                                {msg.thinking && (
+                                                    <details open className="text-xs">
+                                                        <summary className="cursor-pointer select-none text-on-surface-variant mb-1">Reasoning (live)</summary>
+                                                        <pre className="max-h-48 overflow-y-auto bg-surface-variant rounded p-2 text-on-surface-variant whitespace-pre-wrap wrap-break-word leading-relaxed">
+                                                            {msg.thinking}
+                                                        </pre>
+                                                    </details>
+                                                )}
+                                                {msg.content && (
+                                                    <pre className="text-sm text-on-surface font-mono bg-surface-variant rounded p-3 whitespace-pre-wrap wrap-break-word">
+                                                        {msg.content}
+                                                    </pre>
+                                                )}
+                                            </div>
+                                        );
+                                    }
+
+                                    const rows = msg.content ? parseCSV(msg.content) : [];
+                                    const headers = rows[0] ?? [];
+                                    const dataRows = rows.slice(1);
+                                    return (
+                                        <div key={msg.id} className="mb-8 space-y-3">
+                                            {msg.thinking && (
+                                                <details className="text-xs">
+                                                    <summary className="cursor-pointer select-none text-on-surface-variant mb-1">
+                                                        Reasoning ({msg.thinking.trim().split(/\s+/).length} words)
+                                                    </summary>
+                                                    <pre className="max-h-48 overflow-y-auto bg-surface-variant rounded p-2 text-on-surface-variant whitespace-pre-wrap wrap-break-word leading-relaxed">
+                                                        {msg.thinking}
+                                                    </pre>
+                                                </details>
+                                            )}
+                                            {rows.length > 1 ? (
+                                                <div className="overflow-x-auto">
+                                                    <table className="w-full border-collapse text-sm">
+                                                        <thead>
+                                                            <tr>
+                                                                {headers.map((h, i) => (
+                                                                    <th key={i} className="border border-outline-variant bg-surface-variant px-3 py-2 text-left font-medium text-on-surface">
+                                                                        {h}
+                                                                    </th>
+                                                                ))}
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {dataRows.map((row, ri) => (
+                                                                <tr key={ri} className="even:bg-surface-variant/30">
+                                                                    {row.map((cell, ci) => (
+                                                                        <td key={ci} className="border border-outline-variant px-3 py-2 text-on-surface">
+                                                                            {cell}
+                                                                        </td>
+                                                                    ))}
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            ) : (
+                                                <pre className="text-sm text-on-surface-variant whitespace-pre-wrap wrap-break-word">{msg.content}</pre>
                                             )}
                                         </div>
-                                    ))}
-                                    {isLlamaLoading && messages[messages.length - 1]?.role === 'user' && (
-                                        <div className="animate-pulse flex space-x-4 items-center text-on-surface-variant">
-                                            <span>Llama is structuring your data...</span>
-                                        </div>
-                                    )}
-                                </>
+                                    );
+                                })
                             ) : llamaError ? (
-                                <div className="flex flex-col h-full items-center justify-center gap-3 not-prose">
+                                <div className="flex flex-col h-full items-center justify-center gap-3">
                                     <p className="text-error text-sm text-center max-w-sm">{llamaError}</p>
                                     <button
                                         onClick={handleFormatTable}
