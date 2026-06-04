@@ -20,13 +20,6 @@ const MIGRATIONS: string[][] = [
             file_path TEXT NOT NULL,
             FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
         )`,
-        `CREATE TABLE outputs (
-            id TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL,
-            content TEXT NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
-        )`,
         `CREATE TABLE document_pages (
             id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
@@ -36,6 +29,15 @@ const MIGRATIONS: string[][] = [
             natural_height INTEGER NOT NULL,
             full_text TEXT NOT NULL,
             words_json TEXT NOT NULL,
+            FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+            UNIQUE(session_id, page_index)
+        )`,
+        `CREATE TABLE csv_outputs (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            page_index INTEGER NOT NULL,
+            csv_content TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
             UNIQUE(session_id, page_index)
         )`,

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router';
 import DocumentViewer from '../components/DocumentViewer';
 import { parseCSV } from '../features/llama/promptUtils';
+import { getDb } from '../lib/db';
 
 import { useDocumentExtraction } from '../features/extraction/useDocumentExtraction';
 import { useLlamaChat } from '../features/llama/useLlamaChat';
@@ -33,6 +34,7 @@ function SessionContent(): React.ReactElement {
     } = useLlamaChat();
 
     const [outputView, setOutputView] = useState<'raw' | 'table'>('raw');
+    const [savedCsv, setSavedCsv] = useState<string | null>(null);
     const [highlightedWordId, setHighlightedWordId] = useState<string | null>(null);
     const [editingState, setEditingState] = useState<{ box?: BoundingBox | null, id?: string, text?: string } | null>(null);
 
@@ -46,6 +48,24 @@ function SessionContent(): React.ReactElement {
     useEffect(() => {
         setPageInputValue((activePageIndex + 1).toString());
     }, [activePageIndex]);
+
+    useEffect(() => {
+        if (!id) return;
+        let cancelled = false;
+        async function load() {
+            const db = await getDb();
+            const rows = await db.select<{ csv_content: string }[]>(
+                'SELECT csv_content FROM csv_outputs WHERE session_id = $1 AND page_index = $2',
+                [id, activePageIndex]
+            );
+            if (cancelled) return;
+            const csv = rows[0]?.csv_content ?? null;
+            setSavedCsv(csv);
+            if (csv) setOutputView('table');
+        }
+        load();
+        return () => { cancelled = true; };
+    }, [id, activePageIndex]);
 
     const goToPage = (index: number) => {
         setActivePageIndex(index);
@@ -64,9 +84,15 @@ function SessionContent(): React.ReactElement {
     };
 
     const handleFormatTable = async () => {
-        if (!fileUrl || !activePage?.words.length) return;
+        if (!fileUrl || !activePage?.words.length || !id) return;
         setOutputView('table');
-        await requestTableFormat(fileUrl, buildTableText(activePage.words, activePage.natural_height));
+        await requestTableFormat(fileUrl, buildTableText(activePage.words, activePage.natural_height), id, activePageIndex);
+        const db = await getDb();
+        const rows = await db.select<{ csv_content: string }[]>(
+            'SELECT csv_content FROM csv_outputs WHERE session_id = $1 AND page_index = $2',
+            [id, activePageIndex]
+        );
+        setSavedCsv(rows[0]?.csv_content ?? null);
     };
 
     const handleSaveWord = (text: string) => {
@@ -288,6 +314,7 @@ function SessionContent(): React.ReactElement {
                         <div className="w-full">
                             {messages.length > 0 ? (
                                 messages.filter(m => m.role === 'assistant').map((msg) => {
+
                                     if (msg.isStreaming) {
                                         const phase = msg.content
                                             ? 'generating'
@@ -367,7 +394,39 @@ function SessionContent(): React.ReactElement {
                                         </div>
                                     );
                                 })
-                            ) : llamaError ? (
+                            ) : savedCsv ? (() => {
+                                const rows = parseCSV(savedCsv);
+                                const headers = rows[0] ?? [];
+                                const dataRows = rows.slice(1);
+                                return rows.length > 1 ? (
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full border-collapse text-sm">
+                                            <thead>
+                                                <tr>
+                                                    {headers.map((h, i) => (
+                                                        <th key={i} className="border border-outline-variant bg-surface-variant px-3 py-2 text-left font-medium text-on-surface">
+                                                            {h}
+                                                        </th>
+                                                    ))}
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {dataRows.map((row, ri) => (
+                                                    <tr key={ri} className="even:bg-surface-variant/30">
+                                                        {row.map((cell, ci) => (
+                                                            <td key={ci} className="border border-outline-variant px-3 py-2 text-on-surface">
+                                                                {cell}
+                                                            </td>
+                                                        ))}
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                ) : (
+                                    <pre className="text-sm text-on-surface-variant whitespace-pre-wrap wrap-break-word">{savedCsv}</pre>
+                                );
+                            })() : llamaError ? (
                                 <div className="flex flex-col h-full items-center justify-center gap-3">
                                     <p className="text-error text-sm text-center max-w-sm">{llamaError}</p>
                                     <button

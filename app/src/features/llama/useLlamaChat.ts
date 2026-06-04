@@ -1,6 +1,7 @@
 import { useContext } from "react";
 import { LlamaChatContext } from "./LlamaChatContext";
 import { readFileAsBase64, buildOcrExcerpt } from './promptUtils';
+import { getDb } from '../../lib/db';
 import type { FileAttachment } from '../extraction/types';
 
 export const useLlamaChat = () => {
@@ -11,7 +12,7 @@ export const useLlamaChat = () => {
     }
 
     // Build the specialized table formatter using the context's primitives
-    const requestTableFormat = async (fileUrl: string, ocrText: string) => {
+    const requestTableFormat = async (fileUrl: string, ocrText: string, sessionId: string, pageIndex: number) => {
         if (!context.isServerReady) {
             await context.startServer();
         }
@@ -39,7 +40,22 @@ export const useLlamaChat = () => {
             normalizedText,
         ].join('\n');
 
-        await context.sendMessage(prompt, attachment);
+        const csvContent = await context.sendMessage(prompt, attachment);
+        await context.stopServer();
+
+        if (csvContent) {
+            try {
+                const db = await getDb();
+                await db.execute(
+                    `INSERT INTO csv_outputs (id, session_id, page_index, csv_content)
+                     VALUES ($1, $2, $3, $4)
+                     ON CONFLICT(session_id, page_index) DO UPDATE SET csv_content = excluded.csv_content, created_at = CURRENT_TIMESTAMP`,
+                    [crypto.randomUUID(), sessionId, pageIndex, csvContent]
+                );
+            } catch (err) {
+                console.error("Failed to save CSV output:", err);
+            }
+        }
     };
 
     // Expose the new helper alongside the existing global context

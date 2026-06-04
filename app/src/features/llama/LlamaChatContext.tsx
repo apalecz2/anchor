@@ -15,7 +15,7 @@ type LlamaChatContextValue = {
     removePendingAttachment: () => void;
     startServer: () => Promise<void>;
     stopServer: () => Promise<void>;
-    sendMessage: (text: string, attachmentOverride?: FileAttachment | null) => Promise<boolean>;
+    sendMessage: (text: string, attachmentOverride?: FileAttachment | null) => Promise<string | null>;
 };
 
 export const LlamaChatContext = createContext<LlamaChatContextValue | null>(null);
@@ -111,10 +111,6 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
     };
 
     const stopServer = async () => {
-        if (!isServerReady && !isServerStarting) {
-            return;
-        }
-
         stopWatchdog();
         await stopLlamaServer();
         setIsServerReady(false);
@@ -150,7 +146,7 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
         }
 
         if ((!userMessage && !pendingAttachment) || !serverReady || isLoading) {
-            return false;
+            return null;
         }
 
         const currentAttachment = attachmentOverride ?? pendingAttachment;
@@ -231,7 +227,7 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
                 isStreaming: false,
             } : message));
 
-            return true;
+            return finalAssistantMessage.content;
         } catch (error) {
             console.error("Request failed:", error);
 
@@ -243,7 +239,7 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
                 isStreaming: false,
             } : message));
 
-            return false;
+            return null;
         } finally {
             setIsLoading(false);
             if (activeRequestRef.current?.signal.aborted) {
