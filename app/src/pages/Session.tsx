@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useParams } from 'react-router';
 import DocumentViewer from '../components/DocumentViewer';
 import { parseCSV } from '../features/llama/promptUtils';
@@ -9,8 +9,11 @@ import { useLlamaChat } from '../features/llama/useLlamaChat';
 import { LlamaChatProvider } from '../features/llama/LlamaChatContext';
 import { SplitLayout } from '../layouts/SplitLayout';
 import { WordEditModal } from '../features/extraction/WordEditModal';
-import { generateLinesFromWords, buildTableText } from '../utils/ocrTransforms';
+import { generateLinesFromWords } from '../utils/ocrTransforms';
+import { getCellSourceBox } from '../features/extraction/pipeFormat';
+import { ProvenanceRect, CellProvenanceBadge } from '../features/extraction/CellProvenance';
 import type { BoundingBox } from '../features/ocr/types';
+import type { TrustLevel } from '../features/extraction/pipeFormat';
 
 function SessionContent(): React.ReactElement {
     const { id } = useParams<{ id: string }>();
@@ -28,8 +31,10 @@ function SessionContent(): React.ReactElement {
 
     const {
         requestTableFormat,
-        messages,
-        isLoading: isLlamaLoading,
+        extractionData,
+        isExtracting,
+        streamingContent,
+        clearExtraction,
         serverError: llamaError,
     } = useLlamaChat();
 
@@ -37,6 +42,7 @@ function SessionContent(): React.ReactElement {
     const [savedCsv, setSavedCsv] = useState<string | null>(null);
     const [highlightedWordId, setHighlightedWordId] = useState<string | null>(null);
     const [editingState, setEditingState] = useState<{ box?: BoundingBox | null, id?: string, text?: string } | null>(null);
+    const [selectedCell, setSelectedCell] = useState<{ row: number; col: number } | null>(null);
 
     const [activeTool, setActiveTool] = useState<'draw' | 'pan'>('draw');
     const [viewTransform, setViewTransform] = useState({ scale: 1, x: 0, y: 0 });
@@ -67,11 +73,18 @@ function SessionContent(): React.ReactElement {
         return () => { cancelled = true; };
     }, [id, activePageIndex]);
 
+    // Keep savedCsv in sync when a fresh extraction completes
+    useEffect(() => {
+        if (extractionData) setSavedCsv(extractionData.csvString);
+    }, [extractionData]);
+
     const goToPage = (index: number) => {
         setActivePageIndex(index);
         setHighlightedWordId(null);
         setEditingState(null);
         setViewTransform({ scale: 1, x: 0, y: 0 });
+        setSelectedCell(null);
+        clearExtraction();
     };
 
     const commitPageInput = () => {
@@ -86,14 +99,25 @@ function SessionContent(): React.ReactElement {
     const handleFormatTable = async () => {
         if (!fileUrl || !activePage?.words.length || !id) return;
         setOutputView('table');
-        await requestTableFormat(fileUrl, buildTableText(activePage.words, activePage.natural_height), id, activePageIndex);
-        const db = await getDb();
-        const rows = await db.select<{ csv_content: string }[]>(
-            'SELECT csv_content FROM csv_outputs WHERE session_id = $1 AND page_index = $2',
-            [id, activePageIndex]
-        );
-        setSavedCsv(rows[0]?.csv_content ?? null);
+        setSelectedCell(null);
+        await requestTableFormat(fileUrl, activePage.words, activePage.natural_height, id, activePageIndex);
     };
+
+    const trustBg: Record<TrustLevel, string> = {
+        high: 'bg-green-50',
+        medium: 'bg-yellow-50',
+        low: 'bg-red-50',
+    };
+
+    const provenanceOverlay = useMemo(() => {
+        if (!selectedCell || !extractionData) return undefined;
+        const { row, col } = selectedCell;
+        const cell = extractionData.validatedRows[row]?.[col];
+        if (!cell || cell.wordId === null) return undefined;
+        const box = getCellSourceBox(cell, extractionData.sortedWords);
+        if (!box) return undefined;
+        return <ProvenanceRect box={box} refStatus={cell.refStatus} />;
+    }, [selectedCell, extractionData]);
 
     const handleSaveWord = (text: string) => {
         if (editingState?.id !== undefined) {
@@ -234,10 +258,10 @@ function SessionContent(): React.ReactElement {
                             onDeleteRequest={deleteWord}
                             highlightedWordId={highlightedWordId}
                             setHighlightedWordId={setHighlightedWordId}
-                            // Pass down new props
                             activeTool={activeTool}
                             transform={viewTransform}
                             setTransform={setViewTransform}
+                            provenanceOverlay={provenanceOverlay}
                         />
                     ) : null}
 
@@ -274,10 +298,10 @@ function SessionContent(): React.ReactElement {
                             {outputView === 'raw' && (
                                 <button
                                     onClick={handleFormatTable}
-                                    disabled={isLlamaLoading}
+                                    disabled={isExtracting}
                                     className="px-4 py-1 text-sm bg-primary text-on-primary rounded-lg hover:bg-primary/90 disabled:opacity-50"
                                 >
-                                    {isLlamaLoading ? 'Formatting...' : 'Format as Table'}
+                                    {isExtracting ? 'Extracting...' : 'Format as Table'}
                                 </button>
                             )}
                         </div>
@@ -310,137 +334,113 @@ function SessionContent(): React.ReactElement {
                                 </p>
                             ))}
                         </div>
-                    ) : (
-                        <div className="w-full">
-                            {messages.length > 0 ? (
-                                messages.filter(m => m.role === 'assistant').map((msg) => {
-
-                                    if (msg.isStreaming) {
-                                        const phase = msg.content
-                                            ? 'generating'
-                                            : msg.thinking
-                                            ? 'thinking'
-                                            : 'starting';
-                                        return (
-                                            <div key={msg.id} className="mb-8 space-y-3">
-                                                <div className="flex items-center gap-2 text-sm text-on-surface-variant">
-                                                    <span className="inline-block h-2 w-2 rounded-full bg-primary animate-pulse" />
-                                                    <span>
-                                                        {phase === 'thinking' && 'Model is thinking...'}
-                                                        {phase === 'generating' && 'Generating CSV...'}
-                                                        {phase === 'starting' && 'Starting...'}
-                                                    </span>
-                                                </div>
-                                                {msg.thinking && (
-                                                    <details open className="text-xs">
-                                                        <summary className="cursor-pointer select-none text-on-surface-variant mb-1">Reasoning (live)</summary>
-                                                        <pre className="max-h-48 overflow-y-auto bg-surface-variant rounded p-2 text-on-surface-variant whitespace-pre-wrap wrap-break-word leading-relaxed">
-                                                            {msg.thinking}
-                                                        </pre>
-                                                    </details>
-                                                )}
-                                                {msg.content && (
-                                                    <pre className="text-sm text-on-surface font-mono bg-surface-variant rounded p-3 whitespace-pre-wrap wrap-break-word">
-                                                        {msg.content}
-                                                    </pre>
-                                                )}
-                                            </div>
-                                        );
-                                    }
-
-                                    const rows = msg.content ? parseCSV(msg.content) : [];
-                                    const headers = rows[0] ?? [];
-                                    const dataRows = rows.slice(1);
-                                    return (
-                                        <div key={msg.id} className="mb-8 space-y-3">
-                                            {msg.thinking && (
-                                                <details className="text-xs">
-                                                    <summary className="cursor-pointer select-none text-on-surface-variant mb-1">
-                                                        Reasoning ({msg.thinking.trim().split(/\s+/).length} words)
-                                                    </summary>
-                                                    <pre className="max-h-48 overflow-y-auto bg-surface-variant rounded p-2 text-on-surface-variant whitespace-pre-wrap wrap-break-word leading-relaxed">
-                                                        {msg.thinking}
-                                                    </pre>
-                                                </details>
-                                            )}
-                                            {rows.length > 1 ? (
-                                                <div className="overflow-x-auto">
-                                                    <table className="w-full border-collapse text-sm">
-                                                        <thead>
-                                                            <tr>
-                                                                {headers.map((h, i) => (
-                                                                    <th key={i} className="border border-outline-variant bg-surface-variant px-3 py-2 text-left font-medium text-on-surface">
-                                                                        {h}
-                                                                    </th>
-                                                                ))}
-                                                            </tr>
-                                                        </thead>
-                                                        <tbody>
-                                                            {dataRows.map((row, ri) => (
-                                                                <tr key={ri} className="even:bg-surface-variant/30">
-                                                                    {row.map((cell, ci) => (
-                                                                        <td key={ci} className="border border-outline-variant px-3 py-2 text-on-surface">
-                                                                            {cell}
-                                                                        </td>
-                                                                    ))}
-                                                                </tr>
-                                                            ))}
-                                                        </tbody>
-                                                    </table>
-                                                </div>
-                                            ) : (
-                                                <pre className="text-sm text-on-surface-variant whitespace-pre-wrap wrap-break-word">{msg.content}</pre>
-                                            )}
-                                        </div>
-                                    );
-                                })
-                            ) : savedCsv ? (() => {
-                                const rows = parseCSV(savedCsv);
-                                const headers = rows[0] ?? [];
-                                const dataRows = rows.slice(1);
-                                return rows.length > 1 ? (
-                                    <div className="overflow-x-auto">
-                                        <table className="w-full border-collapse text-sm">
-                                            <thead>
-                                                <tr>
-                                                    {headers.map((h, i) => (
-                                                        <th key={i} className="border border-outline-variant bg-surface-variant px-3 py-2 text-left font-medium text-on-surface">
-                                                            {h}
-                                                        </th>
+                    ) : isExtracting ? (
+                        <div className="space-y-3">
+                            <div className="flex items-center gap-2 text-sm text-on-surface-variant">
+                                <span className="inline-block h-2 w-2 rounded-full bg-primary animate-pulse" />
+                                <span>Extracting table...</span>
+                            </div>
+                            {streamingContent && (
+                                <pre className="text-xs text-on-surface-variant font-mono bg-surface-variant rounded p-3 whitespace-pre-wrap max-h-64 overflow-y-auto">
+                                    {streamingContent}
+                                </pre>
+                            )}
+                        </div>
+                    ) : extractionData ? (
+                        // Fresh extraction — show validated table with trust colours and provenance
+                        (() => {
+                            const headerRow = extractionData.validatedRows[0] ?? [];
+                            const dataRows = extractionData.validatedRows.slice(1);
+                            return (
+                                <div className="overflow-x-auto">
+                                    <table className="w-full border-collapse text-sm">
+                                        <thead>
+                                            <tr>
+                                                {headerRow.map((cell, ci) => (
+                                                    <th
+                                                        key={ci}
+                                                        className="border border-outline-variant bg-surface-variant px-3 py-2 text-left font-medium text-on-surface"
+                                                    >
+                                                        {cell.value}
+                                                    </th>
+                                                ))}
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {dataRows.map((row, ri) => {
+                                                const dataRowIndex = ri + 1; // offset for header
+                                                return (
+                                                    <tr key={ri} className="even:bg-surface-variant/30">
+                                                        {row.map((cell, ci) => {
+                                                            const trust = extractionData.trustLevels[dataRowIndex]?.[ci];
+                                                            const isSelected = selectedCell?.row === dataRowIndex && selectedCell?.col === ci;
+                                                            return (
+                                                                <td
+                                                                    key={ci}
+                                                                    onClick={() => setSelectedCell(isSelected ? null : { row: dataRowIndex, col: ci })}
+                                                                    className={`border border-outline-variant px-3 py-2 text-on-surface cursor-pointer transition-colors ${trust ? trustBg[trust] : ''} ${isSelected ? 'ring-2 ring-inset ring-primary' : 'hover:bg-surface-variant/50'}`}
+                                                                >
+                                                                    {cell.value}
+                                                                    <CellProvenanceBadge refStatus={cell.refStatus} />
+                                                                </td>
+                                                            );
+                                                        })}
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            );
+                        })()
+                    ) : savedCsv ? (
+                        // Reloaded from DB — plain table, no provenance data available
+                        (() => {
+                            const rows = parseCSV(savedCsv);
+                            const headers = rows[0] ?? [];
+                            const dataRows = rows.slice(1);
+                            return rows.length > 1 ? (
+                                <div className="overflow-x-auto">
+                                    <table className="w-full border-collapse text-sm">
+                                        <thead>
+                                            <tr>
+                                                {headers.map((h, i) => (
+                                                    <th key={i} className="border border-outline-variant bg-surface-variant px-3 py-2 text-left font-medium text-on-surface">
+                                                        {h}
+                                                    </th>
+                                                ))}
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {dataRows.map((row, ri) => (
+                                                <tr key={ri} className="even:bg-surface-variant/30">
+                                                    {row.map((cell, ci) => (
+                                                        <td key={ci} className="border border-outline-variant px-3 py-2 text-on-surface">
+                                                            {cell}
+                                                        </td>
                                                     ))}
                                                 </tr>
-                                            </thead>
-                                            <tbody>
-                                                {dataRows.map((row, ri) => (
-                                                    <tr key={ri} className="even:bg-surface-variant/30">
-                                                        {row.map((cell, ci) => (
-                                                            <td key={ci} className="border border-outline-variant px-3 py-2 text-on-surface">
-                                                                {cell}
-                                                            </td>
-                                                        ))}
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                ) : (
-                                    <pre className="text-sm text-on-surface-variant whitespace-pre-wrap wrap-break-word">{savedCsv}</pre>
-                                );
-                            })() : llamaError ? (
-                                <div className="flex flex-col h-full items-center justify-center gap-3">
-                                    <p className="text-error text-sm text-center max-w-sm">{llamaError}</p>
-                                    <button
-                                        onClick={handleFormatTable}
-                                        className="px-4 py-1 text-sm bg-primary text-on-primary rounded-lg hover:bg-primary/90"
-                                    >
-                                        Retry
-                                    </button>
+                                            ))}
+                                        </tbody>
+                                    </table>
                                 </div>
                             ) : (
-                                <div className="flex h-full items-center justify-center text-on-surface-variant">
-                                    Click "Format as Table" to process the OCR text with the local LLM.
-                                </div>
-                            )}
+                                <pre className="text-sm text-on-surface-variant whitespace-pre-wrap wrap-break-word">{savedCsv}</pre>
+                            );
+                        })()
+                    ) : llamaError ? (
+                        <div className="flex flex-col h-full items-center justify-center gap-3">
+                            <p className="text-error text-sm text-center max-w-sm">{llamaError}</p>
+                            <button
+                                onClick={handleFormatTable}
+                                className="px-4 py-1 text-sm bg-primary text-on-primary rounded-lg hover:bg-primary/90"
+                            >
+                                Retry
+                            </button>
+                        </div>
+                    ) : (
+                        <div className="flex h-full items-center justify-center text-on-surface-variant">
+                            Click "Format as Table" to extract the table with the local LLM.
                         </div>
                     )}
                 </div>

@@ -12,6 +12,8 @@ interface DocumentViewerProps {
     activeTool: 'draw' | 'pan';
     transform: { scale: number; x: number; y: number };
     setTransform: React.Dispatch<React.SetStateAction<{ scale: number; x: number; y: number }>>;
+    // Optional SVG element(s) rendered on top of OCR rects — used for provenance highlights (§7).
+    provenanceOverlay?: React.ReactNode;
 }
 
 const getConfidenceColor = (confidence: number) => {
@@ -30,7 +32,8 @@ export default function DocumentViewer({
     setHighlightedWordId,
     activeTool,
     transform,
-    setTransform
+    setTransform,
+    provenanceOverlay,
 }: DocumentViewerProps) {
     const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
     const svgRef = useRef<SVGSVGElement>(null);
@@ -246,6 +249,8 @@ export default function DocumentViewer({
                                 </rect>
                             );
                         })}
+
+                        {provenanceOverlay}
 
                         {isDrawing && currentBox && (
                             <rect
