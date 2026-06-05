@@ -107,12 +107,12 @@ export default function About(): React.ReactElement {
                         <FeatureCard
                             icon="visibility"
                             title="Human-in-the-loop verification"
-                            body="A split-screen interface shows the source document alongside extracted data. Every field is linked back to its origin — click a value to see exactly where it came from in the original file."
+                            body="A split-screen interface shows the source document alongside the extracted table. Click any cell to highlight the exact region of the document it was read from. Cells with no matching OCR source are flagged so you know what to check."
                         />
                         <FeatureCard
                             icon="thermostat"
-                            title="Confidence heatmap"
-                            body="Low-confidence regions are highlighted directly on the document. Artifact combines Tesseract OCR confidence scores with AI token probabilities to tell you exactly what to double-check."
+                            title="Per-cell confidence scoring"
+                            body="Every extracted cell is color-coded green, yellow, or red based on a blend of AI token log-probability and Tesseract OCR word confidence. The minimum token probability is tracked separately to catch a single shaky digit hiding inside an otherwise confident number."
                         />
                         <FeatureCard
                             icon="auto_awesome"
@@ -136,7 +136,7 @@ export default function About(): React.ReactElement {
                 <section className="flex flex-col gap-8">
                     <div>
                         <h2 className="font-headline-lg text-headline-lg text-on-surface mb-2">How it works</h2>
-                        <p className="font-body-md text-body-md text-on-surface-variant">Seven steps from raw file to verified structured data.</p>
+                        <p className="font-body-md text-body-md text-on-surface-variant">Eight steps from raw file to verified structured data.</p>
                     </div>
                     <div className="flex flex-col gap-5">
                         <StepRow
@@ -147,32 +147,37 @@ export default function About(): React.ReactElement {
                         <StepRow
                             number="2"
                             title="Smart OCR"
-                            body="Non-machine-readable files are rendered to high-resolution images and passed through Tesseract to produce baseline text with word-level bounding boxes. Machine-readable PDFs skip this step."
+                            body="Non-machine-readable files are rendered to high-resolution images and passed through Tesseract to produce word-level text with bounding boxes and per-word confidence scores. Machine-readable PDFs skip this step."
                         />
                         <StepRow
                             number="3"
                             title="Context assembly"
-                            body="The AI model is loaded into RAM. A prompt is constructed from the document image (vision input), Tesseract output, and any user-supplied guidelines such as expected column names or formats."
+                            body="OCR words are sanitized and sorted into reading order. Two views are built from the same word array: spatially-aligned text that preserves column layout for the AI, and an indexed word list with bounding boxes for provenance matching."
                         />
                         <StepRow
                             number="4"
-                            title="Stateful extraction"
-                            body="The local vision-language model processes the document and emits structured output. Multi-page files carry forward context so column headers discovered on page 1 apply to data on page 10."
+                            title="Stage 1 — AI extraction"
+                            body="The local vision-language model reads the document image alongside the spatially-arranged OCR text and emits a clean CSV table. It runs with greedy decoding and no constraints — the settings that produce reliably correct output. Token log-probabilities are captured during streaming."
                         />
                         <StepRow
                             number="5"
-                            title="Confidence mapping"
-                            body="Fuzzy sequence matching aligns AI output tokens back to OCR bounding boxes. Token log-probabilities and Tesseract confidence scores are combined into a per-word confidence signal."
+                            title="Stage 2 — Provenance matching"
+                            body="A deterministic algorithm walks the CSV cells and OCR words in parallel, in the same reading order. Each cell is linked to the OCR word it came from — even when dozens of cells share identical values, sequence position disambiguates them. No model tokens, no latency."
                         />
                         <StepRow
                             number="6"
-                            title="Human verification"
-                            body="The split-screen UI renders the heatmap over the original document. Review flagged regions, edit values inline, and accept or reject each extraction."
+                            title="Confidence scoring"
+                            body="Each cell receives three signals: AI token log-probability (mean and minimum), Tesseract OCR word confidence, and source agreement. These are blended into a trust level — high, medium, or low — that drives the color heatmap in the output table."
                         />
                         <StepRow
                             number="7"
+                            title="Human verification"
+                            body="The output table color-codes every cell by trust level. Click any cell to highlight its exact source region on the document. Cells the model read from the image with no matching OCR word are marked with an unverified-source badge."
+                        />
+                        <StepRow
+                            number="8"
                             title="Export"
-                            body="Save verified data as CSV, Excel (XLSX), Markdown, or plain text. The model is unloaded from RAM after the job completes to free resources."
+                            body="Save verified data as CSV. The model is unloaded from RAM after the job completes to free resources."
                         />
                     </div>
                 </section>

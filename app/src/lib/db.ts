@@ -37,6 +37,7 @@ const MIGRATIONS: string[][] = [
             session_id TEXT NOT NULL,
             page_index INTEGER NOT NULL,
             csv_content TEXT NOT NULL,
+            cell_mappings_json TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
             UNIQUE(session_id, page_index)

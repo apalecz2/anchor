@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router';
 import DocumentViewer from '../components/DocumentViewer';
+import ProvenanceTable from '../components/ProvenanceTable';
+import type { SelectedCell } from '../components/ProvenanceTable';
 import { parseCSV } from '../features/llama/promptUtils';
 import { getDb } from '../lib/db';
 
@@ -9,8 +11,11 @@ import { useLlamaChat } from '../features/llama/useLlamaChat';
 import { LlamaChatProvider } from '../features/llama/LlamaChatContext';
 import { SplitLayout } from '../layouts/SplitLayout';
 import { WordEditModal } from '../features/extraction/WordEditModal';
-import { generateLinesFromWords, buildTableText } from '../utils/ocrTransforms';
+import { generateLinesFromWords } from '../utils/ocrTransforms';
+import { sanitizeWordsForProvenance } from '../features/extraction/provenance';
+import { getCellSourceBox } from '../features/extraction/provenance';
 import type { BoundingBox } from '../features/ocr/types';
+import type { ProvenanceCell } from '../features/extraction/types';
 
 function SessionContent(): React.ReactElement {
     const { id } = useParams<{ id: string }>();
@@ -28,13 +33,16 @@ function SessionContent(): React.ReactElement {
 
     const {
         requestTableFormat,
-        messages,
-        isLoading: isLlamaLoading,
+        streamingContent,
+        isExtracting,
         serverError: llamaError,
     } = useLlamaChat();
 
     const [outputView, setOutputView] = useState<'raw' | 'table'>('raw');
     const [savedCsv, setSavedCsv] = useState<string | null>(null);
+    const [provenanceCells, setProvenanceCells] = useState<ProvenanceCell[][] | null>(null);
+    const [selectedCell, setSelectedCell] = useState<SelectedCell>(null);
+    const [provenanceHighlightBox, setProvenanceHighlightBox] = useState<BoundingBox | null>(null);
     const [highlightedWordId, setHighlightedWordId] = useState<string | null>(null);
     const [editingState, setEditingState] = useState<{ box?: BoundingBox | null, id?: string, text?: string } | null>(null);
 
@@ -49,18 +57,23 @@ function SessionContent(): React.ReactElement {
         setPageInputValue((activePageIndex + 1).toString());
     }, [activePageIndex]);
 
+    // Load saved CSV + provenance from DB when session/page changes
     useEffect(() => {
         if (!id) return;
         let cancelled = false;
         async function load() {
             const db = await getDb();
-            const rows = await db.select<{ csv_content: string }[]>(
-                'SELECT csv_content FROM csv_outputs WHERE session_id = $1 AND page_index = $2',
+            const rows = await db.select<{ csv_content: string; cell_mappings_json: string | null }[]>(
+                'SELECT csv_content, cell_mappings_json FROM csv_outputs WHERE session_id = $1 AND page_index = $2',
                 [id, activePageIndex]
             );
             if (cancelled) return;
             const csv = rows[0]?.csv_content ?? null;
+            const mappingsJson = rows[0]?.cell_mappings_json ?? null;
             setSavedCsv(csv);
+            setProvenanceCells(mappingsJson ? JSON.parse(mappingsJson) as ProvenanceCell[][] : null);
+            setSelectedCell(null);
+            setProvenanceHighlightBox(null);
             if (csv) setOutputView('table');
         }
         load();
@@ -71,6 +84,8 @@ function SessionContent(): React.ReactElement {
         setActivePageIndex(index);
         setHighlightedWordId(null);
         setEditingState(null);
+        setSelectedCell(null);
+        setProvenanceHighlightBox(null);
         setViewTransform({ scale: 1, x: 0, y: 0 });
     };
 
@@ -86,13 +101,30 @@ function SessionContent(): React.ReactElement {
     const handleFormatTable = async () => {
         if (!fileUrl || !activePage?.words.length || !id) return;
         setOutputView('table');
-        await requestTableFormat(fileUrl, buildTableText(activePage.words, activePage.natural_height), id, activePageIndex);
-        const db = await getDb();
-        const rows = await db.select<{ csv_content: string }[]>(
-            'SELECT csv_content FROM csv_outputs WHERE session_id = $1 AND page_index = $2',
-            [id, activePageIndex]
+        setSelectedCell(null);
+        setProvenanceHighlightBox(null);
+
+        const result = await requestTableFormat(
+            fileUrl,
+            activePage.words,
+            activePage.natural_height,
+            id,
+            activePageIndex,
         );
-        setSavedCsv(rows[0]?.csv_content ?? null);
+
+        if (result) {
+            setSavedCsv(result.csvContent);
+            setProvenanceCells(result.provenanceCells);
+        }
+    };
+
+    const handleCellClick = (cell: ProvenanceCell) => {
+        if (!activePage) return;
+        setSelectedCell({ rowIndex: cell.rowIndex, colIndex: cell.colIndex });
+        // Compute source bbox on the fly — sanitization is deterministic and cheap
+        const sanitized = sanitizeWordsForProvenance(activePage.words, activePage.natural_height);
+        const box = getCellSourceBox(cell, sanitized);
+        setProvenanceHighlightBox(box);
     };
 
     const handleSaveWord = (text: string) => {
@@ -104,14 +136,13 @@ function SessionContent(): React.ReactElement {
         setEditingState(null);
     };
 
-
     return (
         <SplitLayout>
             {/* LEFT PANE */}
             <>
                 <div className="mb-6 border-outline-variant flex items-center justify-between">
                     <h2 className="font-headline-sm text-primary">Source Document</h2>
-                    
+
                     {fileUrl && activePage && (
                         <div className="flex items-center gap-3">
                             {/* Draw/Pan Tool Toggle */}
@@ -234,10 +265,10 @@ function SessionContent(): React.ReactElement {
                             onDeleteRequest={deleteWord}
                             highlightedWordId={highlightedWordId}
                             setHighlightedWordId={setHighlightedWordId}
-                            // Pass down new props
                             activeTool={activeTool}
                             transform={viewTransform}
                             setTransform={setViewTransform}
+                            provenanceHighlightBox={provenanceHighlightBox}
                         />
                     ) : null}
 
@@ -264,7 +295,7 @@ function SessionContent(): React.ReactElement {
                                 >
                                     Raw OCR
                                 </button>
-<button
+                                <button
                                     onClick={() => setOutputView('table')}
                                     className={`px-3 py-1 rounded-md text-sm transition-colors ${outputView === 'table' ? 'bg-surface text-primary shadow-sm' : 'text-on-surface-variant hover:text-on-surface'}`}
                                 >
@@ -274,10 +305,19 @@ function SessionContent(): React.ReactElement {
                             {outputView === 'raw' && (
                                 <button
                                     onClick={handleFormatTable}
-                                    disabled={isLlamaLoading}
+                                    disabled={isExtracting}
                                     className="px-4 py-1 text-sm bg-primary text-on-primary rounded-lg hover:bg-primary/90 disabled:opacity-50"
                                 >
-                                    {isLlamaLoading ? 'Formatting...' : 'Format as Table'}
+                                    {isExtracting ? 'Formatting...' : 'Format as Table'}
+                                </button>
+                            )}
+                            {outputView === 'table' && !isExtracting && (
+                                <button
+                                    onClick={handleFormatTable}
+                                    disabled={isExtracting}
+                                    className="px-4 py-1 text-sm bg-surface-variant text-on-surface-variant rounded-lg hover:bg-surface-container-high disabled:opacity-50"
+                                >
+                                    Re-extract
                                 </button>
                             )}
                         </div>
@@ -312,121 +352,83 @@ function SessionContent(): React.ReactElement {
                         </div>
                     ) : (
                         <div className="w-full">
-                            {messages.length > 0 ? (
-                                messages.filter(m => m.role === 'assistant').map((msg) => {
-
-                                    if (msg.isStreaming) {
-                                        const phase = msg.content
-                                            ? 'generating'
-                                            : msg.thinking
-                                            ? 'thinking'
-                                            : 'starting';
-                                        return (
-                                            <div key={msg.id} className="mb-8 space-y-3">
-                                                <div className="flex items-center gap-2 text-sm text-on-surface-variant">
-                                                    <span className="inline-block h-2 w-2 rounded-full bg-primary animate-pulse" />
-                                                    <span>
-                                                        {phase === 'thinking' && 'Model is thinking...'}
-                                                        {phase === 'generating' && 'Generating CSV...'}
-                                                        {phase === 'starting' && 'Starting...'}
-                                                    </span>
-                                                </div>
-                                                {msg.thinking && (
-                                                    <details open className="text-xs">
-                                                        <summary className="cursor-pointer select-none text-on-surface-variant mb-1">Reasoning (live)</summary>
-                                                        <pre className="max-h-48 overflow-y-auto bg-surface-variant rounded p-2 text-on-surface-variant whitespace-pre-wrap wrap-break-word leading-relaxed">
-                                                            {msg.thinking}
-                                                        </pre>
-                                                    </details>
-                                                )}
-                                                {msg.content && (
-                                                    <pre className="text-sm text-on-surface font-mono bg-surface-variant rounded p-3 whitespace-pre-wrap wrap-break-word">
-                                                        {msg.content}
-                                                    </pre>
-                                                )}
-                                            </div>
-                                        );
-                                    }
-
-                                    const rows = msg.content ? parseCSV(msg.content) : [];
+                            {isExtracting ? (
+                                /* Streaming progress */
+                                <div className="space-y-3">
+                                    <div className="flex items-center gap-2 text-sm text-on-surface-variant">
+                                        <span className="inline-block h-2 w-2 rounded-full bg-primary animate-pulse" />
+                                        <span>Generating CSV...</span>
+                                    </div>
+                                    {streamingContent && (
+                                        <pre className="text-sm text-on-surface font-mono bg-surface-variant rounded p-3 whitespace-pre-wrap wrap-break-word max-h-96 overflow-y-auto">
+                                            {streamingContent}
+                                        </pre>
+                                    )}
+                                </div>
+                            ) : provenanceCells && provenanceCells.length > 0 ? (
+                                /* Provenance-annotated table */
+                                <>
+                                    <div className="mb-3 flex items-center gap-3 text-xs text-on-surface-variant">
+                                        <span className="flex items-center gap-1">
+                                            <span className="inline-block h-3 w-3 rounded-sm bg-green-200 border border-green-400"></span>
+                                            High confidence
+                                        </span>
+                                        <span className="flex items-center gap-1">
+                                            <span className="inline-block h-3 w-3 rounded-sm bg-amber-200 border border-amber-400"></span>
+                                            Medium
+                                        </span>
+                                        <span className="flex items-center gap-1">
+                                            <span className="inline-block h-3 w-3 rounded-sm bg-red-200 border border-red-400"></span>
+                                            Low
+                                        </span>
+                                        <span className="flex items-center gap-1">
+                                            <span className="inline-block h-3 w-3 rounded-sm bg-surface-variant border border-outline-variant"></span>
+                                            Unverified source
+                                        </span>
+                                        <span className="ml-auto text-on-surface-variant/60">Click a cell to highlight its source</span>
+                                    </div>
+                                    <ProvenanceTable
+                                        rows={provenanceCells}
+                                        onCellClick={handleCellClick}
+                                        selectedCell={selectedCell}
+                                    />
+                                </>
+                            ) : savedCsv ? (
+                                /* Fallback: plain table for extractions without provenance data */
+                                (() => {
+                                    const rows = parseCSV(savedCsv);
                                     const headers = rows[0] ?? [];
                                     const dataRows = rows.slice(1);
-                                    return (
-                                        <div key={msg.id} className="mb-8 space-y-3">
-                                            {msg.thinking && (
-                                                <details className="text-xs">
-                                                    <summary className="cursor-pointer select-none text-on-surface-variant mb-1">
-                                                        Reasoning ({msg.thinking.trim().split(/\s+/).length} words)
-                                                    </summary>
-                                                    <pre className="max-h-48 overflow-y-auto bg-surface-variant rounded p-2 text-on-surface-variant whitespace-pre-wrap wrap-break-word leading-relaxed">
-                                                        {msg.thinking}
-                                                    </pre>
-                                                </details>
-                                            )}
-                                            {rows.length > 1 ? (
-                                                <div className="overflow-x-auto">
-                                                    <table className="w-full border-collapse text-sm">
-                                                        <thead>
-                                                            <tr>
-                                                                {headers.map((h, i) => (
-                                                                    <th key={i} className="border border-outline-variant bg-surface-variant px-3 py-2 text-left font-medium text-on-surface">
-                                                                        {h}
-                                                                    </th>
-                                                                ))}
-                                                            </tr>
-                                                        </thead>
-                                                        <tbody>
-                                                            {dataRows.map((row, ri) => (
-                                                                <tr key={ri} className="even:bg-surface-variant/30">
-                                                                    {row.map((cell, ci) => (
-                                                                        <td key={ci} className="border border-outline-variant px-3 py-2 text-on-surface">
-                                                                            {cell}
-                                                                        </td>
-                                                                    ))}
-                                                                </tr>
-                                                            ))}
-                                                        </tbody>
-                                                    </table>
-                                                </div>
-                                            ) : (
-                                                <pre className="text-sm text-on-surface-variant whitespace-pre-wrap wrap-break-word">{msg.content}</pre>
-                                            )}
-                                        </div>
-                                    );
-                                })
-                            ) : savedCsv ? (() => {
-                                const rows = parseCSV(savedCsv);
-                                const headers = rows[0] ?? [];
-                                const dataRows = rows.slice(1);
-                                return rows.length > 1 ? (
-                                    <div className="overflow-x-auto">
-                                        <table className="w-full border-collapse text-sm">
-                                            <thead>
-                                                <tr>
-                                                    {headers.map((h, i) => (
-                                                        <th key={i} className="border border-outline-variant bg-surface-variant px-3 py-2 text-left font-medium text-on-surface">
-                                                            {h}
-                                                        </th>
-                                                    ))}
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {dataRows.map((row, ri) => (
-                                                    <tr key={ri} className="even:bg-surface-variant/30">
-                                                        {row.map((cell, ci) => (
-                                                            <td key={ci} className="border border-outline-variant px-3 py-2 text-on-surface">
-                                                                {cell}
-                                                            </td>
+                                    return rows.length > 1 ? (
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full border-collapse text-sm">
+                                                <thead>
+                                                    <tr>
+                                                        {headers.map((h, i) => (
+                                                            <th key={i} className="border border-outline-variant bg-surface-variant px-3 py-2 text-left font-medium text-on-surface">
+                                                                {h}
+                                                            </th>
                                                         ))}
                                                     </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                ) : (
-                                    <pre className="text-sm text-on-surface-variant whitespace-pre-wrap wrap-break-word">{savedCsv}</pre>
-                                );
-                            })() : llamaError ? (
+                                                </thead>
+                                                <tbody>
+                                                    {dataRows.map((row, ri) => (
+                                                        <tr key={ri} className="even:bg-surface-variant/30">
+                                                            {row.map((cell, ci) => (
+                                                                <td key={ci} className="border border-outline-variant px-3 py-2 text-on-surface">
+                                                                    {cell}
+                                                                </td>
+                                                            ))}
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    ) : (
+                                        <pre className="text-sm text-on-surface-variant whitespace-pre-wrap wrap-break-word">{savedCsv}</pre>
+                                    );
+                                })()
+                            ) : llamaError ? (
                                 <div className="flex flex-col h-full items-center justify-center gap-3">
                                     <p className="text-error text-sm text-center max-w-sm">{llamaError}</p>
                                     <button

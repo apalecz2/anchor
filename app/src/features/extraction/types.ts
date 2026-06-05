@@ -37,3 +37,30 @@ export interface LineWord {
     text: string;
     wordId: string;
 }
+
+export type CellProvenance = {
+    rowIndex: number;
+    colIndex: number;
+    value: string;
+    wordIds: number[];      // indices into the sanitized OcrWord array from sanitizeWordsForProvenance
+    matchStatus: "matched" | "multi_word" | "unmatched";
+};
+
+export type TokenLogprob = {
+    token: string;
+    logprob: number;
+    charOffset: number;     // cumulative char offset in the raw streamed content
+};
+
+export type AgreementStatus = "agree" | "disagree" | "image_only";
+export type TrustLevel = "high" | "medium" | "low";
+
+export type CellConfidence = {
+    llmMean: number;        // 0–1, geometric mean of per-token probs
+    llmMin: number;         // 0–1, minimum per-token prob
+    ocr: number | null;     // 0–100, mean OCR confidence of matched words; null if unmatched
+    agreement: AgreementStatus;
+    trust: TrustLevel;
+};
+
+export type ProvenanceCell = CellProvenance & { confidence: CellConfidence };

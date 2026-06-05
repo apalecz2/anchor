@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { resolveResource } from "@tauri-apps/api/path";
 
-import type { ChatMessage } from "../extraction/types";
+import type { ChatMessage, TokenLogprob } from "../extraction/types";
 
 type ChatCompletionContentPart =
     | {
@@ -123,6 +123,98 @@ const SYSTEM_PROMPT =
     'Begin your response with the very first line of the requested format — no introduction, ' +
     'no analysis, no reasoning, no explanation before the data. ' +
     'Output only the data itself.';
+
+type ExtractionStreamOptions = {
+    messages: ChatCompletionMessage[];
+    maxTokens: number;
+    onContentDelta: (content: string) => void;
+    signal?: AbortSignal;
+};
+
+// Dedicated extraction path: greedy sampler, no presence_penalty, logprobs on.
+// Do not use streamChatCompletion for table extraction — it has different defaults.
+export const extractTableFromImage = async ({
+    messages,
+    maxTokens,
+    onContentDelta,
+    signal,
+}: ExtractionStreamOptions): Promise<{ content: string; logprobs: TokenLogprob[] }> => {
+    const messagesWithSystem: ChatCompletionMessage[] = [
+        { role: 'system', content: SYSTEM_PROMPT },
+        ...messages,
+    ];
+
+    const requestBody = {
+        messages: messagesWithSystem,
+        max_tokens: maxTokens,
+        temperature: 0,
+        top_p: 1,
+        top_k: 1,
+        presence_penalty: 0,
+        stream: true,
+        stop: ["<|im_start|>", "<|im_end|>"],
+        chat_template_kwargs: { enable_thinking: false },
+        logprobs: true,
+        top_logprobs: 0,
+    };
+
+    const response = await fetch("http://127.0.0.1:8080/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+        signal,
+    });
+
+    if (!response.ok) {
+        throw new Error(`HTTP ${response.status} ${response.statusText}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("Streaming response body is unavailable.");
+
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+    let content = "";
+    let charOffset = 0;
+    const logprobs: TokenLogprob[] = [];
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const data = line.slice(6).trim();
+            if (!data || data === "[DONE]") continue;
+
+            try {
+                const parsed = JSON.parse(data);
+                const choice = parsed.choices?.[0];
+                const token: string = choice?.delta?.content ?? "";
+                const logprobEntry = choice?.logprobs?.content?.[0];
+
+                if (token) {
+                    logprobs.push({
+                        token,
+                        logprob: logprobEntry?.logprob ?? 0,
+                        charOffset,
+                    });
+                    charOffset += token.length;
+                    content += token;
+                    onContentDelta(content);
+                }
+            } catch (err) {
+                console.error("Stream parse error:", err, data);
+            }
+        }
+    }
+
+    return { content, logprobs };
+};
 
 export const streamChatCompletion = async ({ messages, onThinkingDelta, onContentDelta, onThinkingEnd, signal }: StreamChatCompletionOptions) => {
     const messagesWithSystem: ChatCompletionMessage[] = [

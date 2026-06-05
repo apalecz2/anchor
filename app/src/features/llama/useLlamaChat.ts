@@ -1,8 +1,20 @@
-import { useContext } from "react";
+import { useContext, useState } from "react";
 import { LlamaChatContext } from "./LlamaChatContext";
-import { readFileAsBase64, buildOcrExcerpt } from './promptUtils';
+import { readFileAsBase64 } from './promptUtils';
+import { extractTableFromImage } from './llamaClient';
 import { getDb } from '../../lib/db';
-import type { FileAttachment } from '../extraction/types';
+import { buildTableText } from '../../utils/ocrTransforms';
+import { sanitizeWordsForProvenance } from '../extraction/provenance';
+import { matchCellsToOcr } from '../extraction/provenance';
+import { parseCSVWithOffsets, computeProvenanceCells } from '../extraction/confidence';
+import type { OcrWord } from '../ocr/types';
+import type { ProvenanceCell } from '../extraction/types';
+
+type TableFormatResult = {
+    csvContent: string;
+    provenanceCells: ProvenanceCell[][];
+    sanitizedWords: OcrWord[];
+};
 
 export const useLlamaChat = () => {
     const context = useContext(LlamaChatContext);
@@ -11,56 +23,108 @@ export const useLlamaChat = () => {
         throw new Error("useLlamaChat must be used within a LlamaChatProvider.");
     }
 
-    // Build the specialized table formatter using the context's primitives
-    const requestTableFormat = async (fileUrl: string, ocrText: string, sessionId: string, pageIndex: number) => {
+    const [streamingContent, setStreamingContent] = useState<string>('');
+    const [isExtracting, setIsExtracting] = useState(false);
+
+    const requestTableFormat = async (
+        fileUrl: string,
+        ocrWords: OcrWord[],
+        naturalHeight: number,
+        sessionId: string,
+        pageIndex: number,
+    ): Promise<TableFormatResult | null> => {
         if (!context.isServerReady) {
             await context.startServer();
         }
 
-        const response = await fetch(fileUrl);
-        const blob = await response.blob();
-        const file = new File([blob], "source_document.png", { type: blob.type });
+        setIsExtracting(true);
+        setStreamingContent('');
 
-        const attachment: FileAttachment = {
-            name: file.name,
-            type: file.type || 'image/png',
-            data: await readFileAsBase64(file),
-        };
+        try {
+            // Stage 1 setup — sanitize words, build spatial layout text for the prompt
+            const sanitizedWords = sanitizeWordsForProvenance(ocrWords, naturalHeight);
+            const spatialText = buildTableText(sanitizedWords, naturalHeight);
 
-        const normalizedText = buildOcrExcerpt(ocrText, 80, 5000);
-        const prompt = [
-            'Return only CSV (comma-separated values).',
-            'First row must be the column headers.',
-            'No reasoning, no explanation, no code fences, no markdown.',
-            'Quote any field that contains a comma.',
-            'If two adjacent values belong to the same visual column (e.g. a department code and a course number), output them as one field joined by a space.',
-            'Use the attached image as the primary reference and the OCR excerpt below as a guide.',
-            '',
-            'OCR excerpt:',
-            normalizedText,
-        ].join('\n');
+            // Budget ~4 tokens per cell; word count is a proxy for table density
+            const TOKENS_PER_CELL = 4;
+            const maxTokens = Math.max(256, sanitizedWords.length * TOKENS_PER_CELL);
 
-        const csvContent = await context.sendMessage(prompt, attachment);
-        await context.stopServer();
+            // Load image as base64
+            const response = await fetch(fileUrl);
+            const blob = await response.blob();
+            const imageData = await readFileAsBase64(
+                new File([blob], "page.png", { type: blob.type || 'image/png' })
+            );
 
-        if (csvContent) {
-            try {
-                const db = await getDb();
-                await db.execute(
-                    `INSERT INTO csv_outputs (id, session_id, page_index, csv_content)
-                     VALUES ($1, $2, $3, $4)
-                     ON CONFLICT(session_id, page_index) DO UPDATE SET csv_content = excluded.csv_content, created_at = CURRENT_TIMESTAMP`,
-                    [crypto.randomUUID(), sessionId, pageIndex, csvContent]
-                );
-            } catch (err) {
-                console.error("Failed to save CSV output:", err);
-            }
+            const prompt = [
+                'Return only CSV (comma-separated values).',
+                'First row must be the column headers.',
+                'No reasoning, no explanation, no code fences, no markdown.',
+                'Quote any field that contains a comma.',
+                'If two adjacent values belong to the same visual column (e.g. a department code and a course number), output them as one field joined by a space.',
+                'Use the attached image as the primary reference and the OCR text below as a guide.',
+                '',
+                'OCR text:',
+                spatialText,
+            ].join('\n');
+
+            const messages = [{
+                role: 'user' as const,
+                content: [
+                    { type: 'image_url' as const, image_url: { url: `data:${blob.type || 'image/png'};base64,${imageData}` } },
+                    { type: 'text' as const, text: prompt },
+                ],
+            }];
+
+            // Stage 1 — LLM extracts CSV from image + spatial OCR text
+            const { content: rawContent, logprobs } = await extractTableFromImage({
+                messages,
+                maxTokens,
+                onContentDelta: setStreamingContent,
+            });
+
+            // Parse the raw output while preserving char offsets for logprob mapping
+            const { rows: csvRows } = parseCSVWithOffsets(rawContent);
+            if (csvRows.length === 0) return null;
+
+            // Stage 2a — deterministic reading-order walk to match cells to OCR words
+            const cellProvenance = matchCellsToOcr(csvRows, sanitizedWords);
+
+            // Attach logprob-based + OCR-based confidence to each cell
+            const provenanceCells = computeProvenanceCells(cellProvenance, logprobs, rawContent, sanitizedWords);
+
+            // Re-serialize a clean CSV from the parsed rows
+            const csvContent = csvRows
+                .map(row =>
+                    row.map(cell => cell.includes(',') ? `"${cell.replace(/"/g, '""')}"` : cell).join(',')
+                )
+                .join('\n');
+
+            const db = await getDb();
+            await db.execute(
+                `INSERT INTO csv_outputs (id, session_id, page_index, csv_content, cell_mappings_json)
+                 VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT(session_id, page_index) DO UPDATE SET
+                   csv_content = excluded.csv_content,
+                   cell_mappings_json = excluded.cell_mappings_json,
+                   created_at = CURRENT_TIMESTAMP`,
+                [crypto.randomUUID(), sessionId, pageIndex, csvContent, JSON.stringify(provenanceCells)]
+            );
+
+            return { csvContent, provenanceCells, sanitizedWords };
+        } catch (err) {
+            console.error("requestTableFormat failed:", err);
+            return null;
+        } finally {
+            setIsExtracting(false);
+            await context.stopServer();
         }
     };
 
-    // Expose the new helper alongside the existing global context
     return {
         ...context,
-        requestTableFormat
+        requestTableFormat,
+        streamingContent,
+        isExtracting,
     };
 };

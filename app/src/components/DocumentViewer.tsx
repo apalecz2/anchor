@@ -12,6 +12,7 @@ interface DocumentViewerProps {
     activeTool: 'draw' | 'pan';
     transform: { scale: number; x: number; y: number };
     setTransform: React.Dispatch<React.SetStateAction<{ scale: number; x: number; y: number }>>;
+    provenanceHighlightBox?: BoundingBox | null;
 }
 
 const getConfidenceColor = (confidence: number) => {
@@ -30,7 +31,8 @@ export default function DocumentViewer({
     setHighlightedWordId,
     activeTool,
     transform,
-    setTransform
+    setTransform,
+    provenanceHighlightBox,
 }: DocumentViewerProps) {
     const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
     const svgRef = useRef<SVGSVGElement>(null);
@@ -246,6 +248,17 @@ export default function DocumentViewer({
                                 </rect>
                             );
                         })}
+
+                        {provenanceHighlightBox && (
+                            <rect
+                                x={provenanceHighlightBox.left - 2}
+                                y={provenanceHighlightBox.top - 2}
+                                width={provenanceHighlightBox.width + 4}
+                                height={provenanceHighlightBox.height + 4}
+                                className="fill-primary/25 stroke-primary stroke-[4px]"
+                                style={{ pointerEvents: 'none' }}
+                            />
+                        )}
 
                         {isDrawing && currentBox && (
                             <rect
