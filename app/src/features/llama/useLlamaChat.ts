@@ -6,7 +6,7 @@ import { getDb } from '../../lib/db';
 import { buildTableText } from '../../utils/ocrTransforms';
 import { sanitizeWordsForProvenance } from '../extraction/provenance';
 import { matchCellsToOcr } from '../extraction/provenance';
-import { parseCSVWithOffsets, computeProvenanceCells } from '../extraction/confidence';
+import { parseTSVWithOffsets, computeProvenanceCells } from '../extraction/confidence';
 import type { OcrWord } from '../ocr/types';
 import type { ProvenanceCell } from '../extraction/types';
 
@@ -57,10 +57,10 @@ export const useLlamaChat = () => {
             );
 
             const prompt = [
-                'Return only CSV (comma-separated values).',
+                'Return only TSV (tab-separated values).',
                 'First row must be the column headers.',
                 'No reasoning, no explanation, no code fences, no markdown.',
-                'Quote any field that contains a comma.',
+                'Separate each column with a tab character. Do not use commas as delimiters.',
                 'If two adjacent values belong to the same visual column (e.g. a department code and a course number), output them as one field joined by a space.',
                 'Use the attached image as the primary reference and the OCR text below as a guide.',
                 '',
@@ -84,7 +84,7 @@ export const useLlamaChat = () => {
             });
 
             // Parse the raw output while preserving char offsets for logprob mapping
-            const { rows: csvRows } = parseCSVWithOffsets(rawContent);
+            const { rows: csvRows } = parseTSVWithOffsets(rawContent);
             if (csvRows.length === 0) return null;
 
             // Stage 2a — deterministic reading-order walk to match cells to OCR words

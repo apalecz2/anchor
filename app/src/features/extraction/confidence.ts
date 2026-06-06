@@ -13,11 +13,13 @@ type CellRange = { start: number; end: number };
 // coordinate system as TokenLogprob.charOffset (both relative to the start of
 // the raw streamed string).  Code fences are skipped but their characters are
 // included in the offset space so logprob offsets stay aligned.
-export function parseCSVWithOffsets(raw: string): {
+// Expects TSV (tab-separated) output from the LLM — tabs cannot appear inside
+// academic data values, so no quoting/escaping is needed.
+export function parseTSVWithOffsets(raw: string): {
     rows: string[][];
     cellRanges: CellRange[][];
 } {
-    // Find CSV data bounds — skip opening fence, stop before trailing fence
+    // Find TSV data bounds — skip opening fence, stop before trailing fence
     const fenceStartMatch = raw.match(/^```[a-z]*\r?\n?/i);
     const contentStart = fenceStartMatch ? fenceStartMatch[0].length : 0;
 
@@ -35,42 +37,28 @@ export function parseCSVWithOffsets(raw: string): {
 
         const rowValues: string[] = [];
         const rowRanges: CellRange[] = [];
-        let inQuotes = false;
         let cellStart = pos;
 
         while (pos <= contentEnd) {
-            if (pos === contentEnd) {
-                const cellRaw = raw.slice(cellStart, pos);
-                if (cellRaw.trim()) {
-                    rowRanges.push({ start: cellStart, end: pos });
-                    rowValues.push(unquoteField(cellRaw));
+            const atEnd = pos === contentEnd;
+            const ch = atEnd ? '' : raw[pos];
+
+            if (atEnd || ch === '\n' || ch === '\r') {
+                rowRanges.push({ start: cellStart, end: pos });
+                rowValues.push(raw.slice(cellStart, pos).trim());
+                if (!atEnd) {
+                    if (ch === '\r' && pos + 1 < contentEnd && raw[pos + 1] === '\n') pos++;
+                    pos++;
                 }
                 break;
             }
 
-            const ch = raw[pos];
-
-            if (ch === '"') {
-                if (inQuotes && raw[pos + 1] === '"') { pos += 2; continue; }
-                inQuotes = !inQuotes;
-                pos++;
-                continue;
-            }
-
-            if (!inQuotes && ch === ',') {
+            if (ch === '\t') {
                 rowRanges.push({ start: cellStart, end: pos });
-                rowValues.push(unquoteField(raw.slice(cellStart, pos)));
+                rowValues.push(raw.slice(cellStart, pos).trim());
                 pos++;
                 cellStart = pos;
                 continue;
-            }
-
-            if (!inQuotes && (ch === '\n' || ch === '\r')) {
-                rowRanges.push({ start: cellStart, end: pos });
-                rowValues.push(unquoteField(raw.slice(cellStart, pos)));
-                if (ch === '\r' && raw[pos + 1] === '\n') pos++;
-                pos++;
-                break;
             }
 
             pos++;
@@ -83,14 +71,6 @@ export function parseCSVWithOffsets(raw: string): {
     }
 
     return { rows, cellRanges };
-}
-
-function unquoteField(raw: string): string {
-    const t = raw.trim();
-    if (t.startsWith('"') && t.endsWith('"') && t.length >= 2) {
-        return t.slice(1, -1).replace(/""/g, '"');
-    }
-    return t;
 }
 
 // Assign each logprob token to the cell whose char range contains its offset.
@@ -142,7 +122,7 @@ export const computeProvenanceCells = (
     rawContent: string,
     ocrWords: OcrWord[],
 ): ProvenanceCell[][] => {
-    const { cellRanges } = parseCSVWithOffsets(rawContent);
+    const { cellRanges } = parseTSVWithOffsets(rawContent);
     const tokenIndicesMap = mapLogprobsToCells(logprobs, cellRanges);
 
     return cellProvenance.map((row, r) =>

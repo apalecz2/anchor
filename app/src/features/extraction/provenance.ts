@@ -8,9 +8,15 @@ export const normalize = (s: string): string =>
 // Sort words into reading order, strip column-rule pipe glyphs, drop empties.
 // The integer index in the returned array IS the word ID used by CellProvenance.wordIds.
 // Must be called before anything else — all downstream indexes are relative to this array.
+// Words whose entire text is pipe glyphs (e.g. OCR misread of "I" as "|") are kept with
+// their original text so the LLM can cross-reference the image; they will be unmatched by
+// provenance and surface as "image_only" / ? badge rather than silently dropped.
 export const sanitizeWordsForProvenance = (words: OcrWord[], naturalHeight: number): OcrWord[] =>
     sortWords(words, naturalHeight)
-        .map(w => ({ ...w, text: w.text.replace(/^\|+|\|+$/g, "").trim() }))
+        .map(w => {
+            const stripped = w.text.replace(/^\|+|\|+$/g, "").trim();
+            return stripped.length > 0 ? { ...w, text: stripped } : w;
+        })
         .filter(w => w.text.length > 0);
 
 const unionBoxes = (boxes: BoundingBox[]): BoundingBox => {
