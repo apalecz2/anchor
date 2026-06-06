@@ -12,9 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use pdfium_render::prelude::*;
 
-use image::{DynamicImage, GenericImageView, GrayImage, Luma};
-use imageproc::contrast::adaptive_threshold;
-use imageproc::filter::median_filter;
+use image::{DynamicImage, GenericImageView, GrayImage};
 
 #[derive(Serialize, Deserialize)]
 pub struct BoundingBox {
@@ -49,66 +47,14 @@ pub struct ExtractionResult {
 
 
 const UPSCALE_NARROW_SIDE_THRESHOLD: u32 = 1500;
-const ADAPTIVE_BLOCK_RADIUS: u32 = 12;
-const DENOISE_RADIUS: u32 = 1;
-const LINE_LENGTH_FRACTION: f32 = 0.5;
-const MIN_RUN_TO_CONSIDER: u32 = 20;
 
-fn remove_rule_lines(img: &mut GrayImage) {
-    let (w, h) = (img.width(), img.height());
-    let min_h_len = ((w as f32) * LINE_LENGTH_FRACTION) as u32;
-    let min_v_len = ((h as f32) * LINE_LENGTH_FRACTION) as u32;
-
-    let mut to_clear: Vec<(u32, u32)> = Vec::new();
-
-    let is_black = |img: &GrayImage, x: u32, y: u32| img.get_pixel(x, y).0[0] < 128;
-
-    for y in 0..h {
-        let mut run_start = 0u32;
-        let mut run_len = 0u32;
-        for x in 0..w {
-            if is_black(img, x, y) {
-                if run_len == 0 { run_start = x; }
-                run_len += 1;
-            } else {
-                if run_len >= min_h_len && run_len >= MIN_RUN_TO_CONSIDER {
-                    for rx in run_start..(run_start + run_len) { to_clear.push((rx, y)); }
-                }
-                run_len = 0;
-            }
-        }
-        if run_len >= min_h_len && run_len >= MIN_RUN_TO_CONSIDER {
-            for rx in run_start..(run_start + run_len) { to_clear.push((rx, y)); }
-        }
-    }
-
-    for x in 0..w {
-        let mut run_start = 0u32;
-        let mut run_len = 0u32;
-        for y in 0..h {
-            if is_black(img, x, y) {
-                if run_len == 0 { run_start = y; }
-                run_len += 1;
-            } else {
-                if run_len >= min_v_len && run_len >= MIN_RUN_TO_CONSIDER {
-                    for ry in run_start..(run_start + run_len) { to_clear.push((x, ry)); }
-                }
-                run_len = 0;
-            }
-        }
-        if run_len >= min_v_len && run_len >= MIN_RUN_TO_CONSIDER {
-            for ry in run_start..(run_start + run_len) { to_clear.push((x, ry)); }
-        }
-    }
-
-    for (x, y) in to_clear {
-        img.put_pixel(x, y, Luma([255]));
-    }
-}
-
-/// Produce a binarized, denoised, line-removed copy of `source` for Tesseract.
-/// Returns (preprocessed_path, scale_factor). The scale factor is 1.0 unless
-/// the image was upscaled; callers must divide OCR boxes by it to get original-space coords.
+/// Produce a preprocessed copy of `source` for Tesseract.
+/// Returns (preprocessed_path, scale_factor). Callers divide OCR bounding boxes by
+/// scale_factor to map back to original-image coordinates.
+///
+/// Pipeline: grayscale → Lanczos upscale (if narrow side < threshold) → save.
+/// Tesseract binarizes internally, which handles thin antialiased screen fonts
+/// better than a hard global threshold on native-resolution pixels.
 fn preprocess_for_ocr(
     source: &Path,
     out_dir: &Path,
@@ -118,29 +64,25 @@ fn preprocess_for_ocr(
         .map_err(|e| format!("failed to open image for preprocessing: {e}"))?;
 
     let (w, h) = img.dimensions();
-    let scale: f32 = if allow_upscale && w.min(h) < UPSCALE_NARROW_SIDE_THRESHOLD {
-        2.0
-    } else {
-        1.0
-    };
-    let img = if scale != 1.0 {
-        img.resize(
-            (w as f32 * scale) as u32,
-            (h as f32 * scale) as u32,
-            image::imageops::FilterType::Lanczos3,
-        )
-    } else {
-        img
-    };
+    let stem = source.file_stem().and_then(|s| s.to_str()).unwrap_or("page");
+    let scale: f32 = if allow_upscale && w.min(h) < UPSCALE_NARROW_SIDE_THRESHOLD { 2.0 } else { 1.0 };
 
     let gray: GrayImage = img.grayscale().to_luma8();
-    let denoised = median_filter(&gray, DENOISE_RADIUS, DENOISE_RADIUS);
-    let mut binary = adaptive_threshold(&denoised, ADAPTIVE_BLOCK_RADIUS);
-    remove_rule_lines(&mut binary);
 
-    let stem = source.file_stem().and_then(|s| s.to_str()).unwrap_or("page");
+    let upscaled = if scale != 1.0 {
+        DynamicImage::ImageLuma8(gray)
+            .resize_exact(
+                (w as f32 * scale) as u32,
+                (h as f32 * scale) as u32,
+                image::imageops::FilterType::Lanczos3,
+            )
+            .to_luma8()
+    } else {
+        gray
+    };
+
     let out_path = out_dir.join(format!("{stem}_ocr.png"));
-    DynamicImage::ImageLuma8(binary)
+    DynamicImage::ImageLuma8(upscaled)
         .save(&out_path)
         .map_err(|e| format!("failed to save preprocessed image: {e}"))?;
 
@@ -158,6 +100,8 @@ fn ocr_image_to_page(
 
     let mut args = rusty_tesseract::Args::default();
     args.lang = "eng".to_string();
+    args.psm = Some(6);  // single uniform block — better for tabular layouts
+    args.dpi = None;     // let Tesseract estimate from image; the default 150 misrepresents upscaled content
 
     let tesseract_image = rusty_tesseract::tesseract::input::Image::from_path(&ocr_path)
         .map_err(|error| format!("failed to load image for ocr: {error}"))?;
