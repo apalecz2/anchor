@@ -82,11 +82,12 @@ Adaptive hardware modes:
    - Two formatters from the same array: (a) **spatial text** — words placed at character columns proportional to pixel X position, preserving column alignment for the vision model; (b) **indexed word list** — each word with ID, text, bounding box, and confidence — used by Stage 2a matching.
 
 4. Stage 1 — Structured extraction (LLM, vision)
-   - The vision-language model receives the document image and spatially-arranged OCR text. Settings: temperature 0, top‑k 1, no presence penalty, no grammar constraint. Output: clean CSV with the first row as the header.
+   - The vision-language model receives the document image and spatially-arranged OCR text. Settings: temperature 0, top‑k 1, no presence penalty, no grammar constraint. Output: clean TSV with the first row as the header.
+   - TSV is used instead of CSV because tab characters cannot appear in OCR output and are not found in table cell content, so no escaping or quoting is needed. This avoids ambiguity when cell values contain commas (e.g. course descriptions, numeric formatting).
    - Token log‑probabilities are collected with cumulative character offsets during streaming for downstream confidence scoring.
 
 4a. Stage 2a — Provenance by code (deterministic)
-   - Parallel reading-order walk: iterate CSV cells and OCR words simultaneously in the same left-to-right, top-to-bottom order.
+   - Parallel reading-order walk: iterate TSV cells and OCR words simultaneously in the same left-to-right, top-to-bottom order.
    - `matchFromCursor`: bounded lookahead of 12 words from the current cursor position. Handles single-word and multi-word cell values. Cursor advances only on a match — one unmatched cell cannot desync the rest of the table.
    - Produces `CellProvenance` per cell: `matched` | `multi_word` | `unmatched`.
 
