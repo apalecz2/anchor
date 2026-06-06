@@ -8,12 +8,13 @@ By prioritizing a local‑first architecture, the application guarantees strict 
 
 ## 2. Technical Stack
 
-| Component   | Technology                             | Rationale                                                                 |
-|-------------|----------------------------------------|---------------------------------------------------------------------------|
-| Front-End   | React with TypeScript                  | Robust, type‑safe, highly interactive UI (essential for split‑screen/heatmap features).
-| Framework   | Tauri                                  | Lightweight cross‑platform desktop framework with lower overhead than Electron.
-| AI Model(s) | Qwen3.5‑4b (w/ Vision), Gemma4:e4b     | Run via llama.cpp; handles vision tasks and OCR validation/cleanup locally.
-| OCR Engine  | Tesseract                              | Fallback/baseline text extraction, useful for low‑end systems and verification.
+| Component            | Technology                             | Rationale                                                                 |
+|----------------------|----------------------------------------|---------------------------------------------------------------------------|
+| Front-End            | React with TypeScript                  | Robust, type‑safe, highly interactive UI (essential for split‑screen/heatmap features).
+| Framework            | Tauri                                  | Lightweight cross‑platform desktop framework with lower overhead than Electron.
+| AI Model(s)          | Qwen3.5‑4b (w/ Vision), Gemma4:e4b     | Run via llama.cpp; handles vision tasks and OCR validation/cleanup locally.
+| OCR Engine           | Tesseract                              | Fallback/baseline text extraction, useful for low‑end systems and verification.
+| Image Preprocessing  | imageproc (Rust, pure)                 | Pre‑OCR binarization, denoising, and rule‑line removal; no system OpenCV dependency.
 
 ## 3. Core Features & Capabilities
 
@@ -30,10 +31,11 @@ By prioritizing a local‑first architecture, the application guarantees strict 
 
 ### 3.3 Advanced Verification & UI
 
-- Split‑screen interface: source document on the left, extracted data on the right; interactive highlighting links the two views.
-- Confidence heatmap: visually flag low‑confidence regions; support an accept/reject review loop.
-- Mathematical confidence mapping: combine LLM token log‑probabilities (llama.cpp) with Tesseract OCR confidences.
-- Coordinate transfer: fuzzy sequence matching aligns LLM output to OCR blocks, preserving spatial coordinates for UI highlighting.
+- Split‑screen interface: source document on the left, extracted data on the right; click any cell to highlight its exact source region in the document.
+- Confidence heatmap: per‑cell trust level (high / medium / low) color‑codes the output table. Each cell's score is derived from three independent signals: LLM token log‑probabilities, Tesseract OCR word confidence, and source agreement.
+- Mathematical confidence mapping: LLM geometric mean and minimum token log‑probability (from llama.cpp logprobs) are blended with Tesseract word confidence into a `cellTrust` state machine.
+- Provenance by code (Stage 2a): deterministic parallel reading‑order walk links each CSV cell to its source OCR word(s). A bounded lookahead window (12 words) disambiguates duplicate values by sequence position — information the model would have to infer but code has directly. Cursor only advances on a match, so one unmatched cell cannot desync the rest of the row.
+- Unmatched cell badge: cells the model read from the image with no corresponding OCR word are marked with an "unverified source" indicator rather than silently dropped.
 
 ## 4. User Stories
 
@@ -65,22 +67,42 @@ Adaptive hardware modes:
    - User uploads a file; the system validates format and checks for extractable content (filters out irrelevant photos).
 
 2. Smart OCR
-   - If non‑machine‑readable: run Tesseract to obtain baseline text and bounding boxes.
+   - If non‑machine‑readable: render to a high‑resolution image (PDF path: pdfium at 2000 px wide; image upload: as-is).
    - If machine‑readable: skip OCR and proceed to AI formatting.
 
+2a. Image preprocessing (OCR path only)
+   - A binarized, denoised, line-removed copy of the image is produced in a separate file for Tesseract only. The original image is unchanged and is what the vision model and UI see.
+   - Pipeline (order is strict): optional 2× upscale (image-upload path only, when the narrow side < 1500 px) → grayscale → mild median denoise → adaptive local binarization → table rule-line removal.
+   - **Coordinate alignment:** upscaling is the only geometric transform. When applied, every Tesseract bounding box returned after OCR is divided by the scale factor before being stored, so all box coordinates remain in the original image's coordinate space. PDF inputs are already high-res (2000 px); they are never upscaled, so their scale factor is always 1.0.
+   - **Rule-line removal:** long horizontal and vertical runs of black pixels (≥ 50% of the image dimension) are set to white after binarization. This is a tonal (pixel-value) transform — it does not move pixels and has no effect on coordinate alignment. It eliminates the `|` and `-` glyphs that Tesseract reads from table grid lines.
+   - Binarization uses adaptive local thresholding (block radius 12 px), which handles uneven lighting better than a global threshold.
+
 3. Context assembly
-   - Load the AI model into RAM and construct prompts using the document (vision when available), Tesseract output, and user guidelines.
+   - Sanitize OCR words once: strip column-rule pipe glyphs, filter empties, assign stable integer IDs. This single array feeds both downstream formatters.
+   - Two formatters from the same array: (a) **spatial text** — words placed at character columns proportional to pixel X position, preserving column alignment for the vision model; (b) **indexed word list** — each word with ID, text, bounding box, and confidence — used by Stage 2a matching.
 
-4. Stateful extraction
-   - Process the document; for multi‑page files carry forward context (e.g., column names).
+4. Stage 1 — Structured extraction (LLM, vision)
+   - The vision-language model receives the document image and spatially-arranged OCR text. Settings: temperature 0, top‑k 1, no presence penalty, no grammar constraint. Output: clean CSV with the first row as the header.
+   - Token log‑probabilities are collected with cumulative character offsets during streaming for downstream confidence scoring.
 
-5. Memory unloading
-   - Unload the AI model from RAM after processing to free resources (unless queued jobs remain).
+4a. Stage 2a — Provenance by code (deterministic)
+   - Parallel reading-order walk: iterate CSV cells and OCR words simultaneously in the same left-to-right, top-to-bottom order.
+   - `matchFromCursor`: bounded lookahead of 12 words from the current cursor position. Handles single-word and multi-word cell values. Cursor advances only on a match — one unmatched cell cannot desync the rest of the table.
+   - Produces `CellProvenance` per cell: `matched` | `multi_word` | `unmatched`.
 
-6. Human verification
-   - Show dual‑pane UI, map fuzzy matches and confidences to render the heatmap, and allow edits.
+5. Confidence scoring
+   - LLM confidence: geometric mean and minimum of per-token probabilities for each cell, mapped from Stage 1 logprob offsets to cell character ranges.
+   - OCR confidence: mean Tesseract word confidence of matched words; `null` for unmatched cells.
+   - Agreement: `agree` (code-matched), `image_only` (no OCR source), `disagree` (Stage 2b mismatch, future).
+   - `cellTrust` state machine: `high` → green / `medium` → yellow / `low` → red. Drives the per-cell UI heatmap.
 
-7. Export
+6. Memory unloading
+   - Unload the AI model from RAM after Stage 1 completes to free resources (unless queued jobs remain). The vision projector is not needed for Stage 2.
+
+7. Human verification
+   - Provenance table with per-cell trust coloring. Click any cell to highlight its bounding box on the source document. Unmatched cells show an "unverified source" badge.
+
+8. Export
    - Save the verified output in the user’s chosen format.
 
 ## 7. Future Roadmap & Optional Features

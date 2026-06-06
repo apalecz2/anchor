@@ -136,7 +136,7 @@ export default function About(): React.ReactElement {
                 <section className="flex flex-col gap-8">
                     <div>
                         <h2 className="font-headline-lg text-headline-lg text-on-surface mb-2">How it works</h2>
-                        <p className="font-body-md text-body-md text-on-surface-variant">Eight steps from raw file to verified structured data.</p>
+                        <p className="font-body-md text-body-md text-on-surface-variant">Nine steps from raw file to verified structured data.</p>
                     </div>
                     <div className="flex flex-col gap-5">
                         <StepRow
@@ -147,35 +147,40 @@ export default function About(): React.ReactElement {
                         <StepRow
                             number="2"
                             title="Smart OCR"
-                            body="Non-machine-readable files are rendered to high-resolution images and passed through Tesseract to produce word-level text with bounding boxes and per-word confidence scores. Machine-readable PDFs skip this step."
+                            body="Non-machine-readable files are rendered to high-resolution images (PDFs at 2000 px wide via PDFium; direct image uploads as-is) and then passed through Tesseract. Machine-readable PDFs skip both this step and preprocessing."
                         />
                         <StepRow
                             number="3"
+                            title="OCR image preprocessing"
+                            body="Before Tesseract runs, the image is processed through a dedicated pipeline — upscale if low-res, grayscale, mild denoise, adaptive binarization, then rule-line removal. The binarized copy is Tesseract's input only; the original image is what the AI and the UI see. If the image was upscaled, every returned bounding box is divided back by the scale factor so click-to-highlight boxes always land on the right spot in the original image."
+                        />
+                        <StepRow
+                            number="4"
                             title="Context assembly"
                             body="OCR words are sanitized and sorted into reading order. Two views are built from the same word array: spatially-aligned text that preserves column layout for the AI, and an indexed word list with bounding boxes for provenance matching."
                         />
                         <StepRow
-                            number="4"
+                            number="5"
                             title="Stage 1 — AI extraction"
                             body="The local vision-language model reads the document image alongside the spatially-arranged OCR text and emits a clean CSV table. It runs with greedy decoding and no constraints — the settings that produce reliably correct output. Token log-probabilities are captured during streaming."
                         />
                         <StepRow
-                            number="5"
+                            number="6"
                             title="Stage 2 — Provenance matching"
                             body="A deterministic algorithm walks the CSV cells and OCR words in parallel, in the same reading order. Each cell is linked to the OCR word it came from — even when dozens of cells share identical values, sequence position disambiguates them. No model tokens, no latency."
                         />
                         <StepRow
-                            number="6"
+                            number="7"
                             title="Confidence scoring"
                             body="Each cell receives three signals: AI token log-probability (mean and minimum), Tesseract OCR word confidence, and source agreement. These are blended into a trust level — high, medium, or low — that drives the color heatmap in the output table."
                         />
                         <StepRow
-                            number="7"
+                            number="8"
                             title="Human verification"
                             body="The output table color-codes every cell by trust level. Click any cell to highlight its exact source region on the document. Cells the model read from the image with no matching OCR word are marked with an unverified-source badge."
                         />
                         <StepRow
-                            number="8"
+                            number="9"
                             title="Export"
                             body="Save verified data as CSV. The model is unloaded from RAM after the job completes to free resources."
                         />
@@ -192,6 +197,7 @@ export default function About(): React.ReactElement {
                             { label: 'AI runtime', value: 'llama.cpp server', note: 'Model-agnostic inference; swap models without rebuilding' },
                             { label: 'Vision model', value: 'Qwen3.5-4b (multimodal)', note: 'Handles vision tasks and OCR validation locally' },
                             { label: 'OCR engine', value: 'Tesseract', note: 'Word-level bounding boxes and per-character confidence' },
+                            { label: 'Image preprocessing', value: 'imageproc (Rust)', note: 'Binarization, denoising, and rule-line removal before OCR — no system OpenCV dependency' },
                             { label: 'PDF rendering', value: 'PDFium', note: 'High-fidelity 2000px renders from native PDF pages' },
                             { label: 'Storage', value: 'SQLite (local)', note: 'Session and file metadata stored entirely on-device' },
                         ].map(({ label, value, note }) => (
