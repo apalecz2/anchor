@@ -32,11 +32,12 @@
 
 ## Export
 
-- [ ] Export button and format selector in the Session page output panel
-- [ ] CSV export (minimum viable — serialize the extracted table)
-- [ ] XLSX export (requires adding a library dependency)
-- [ ] Markdown export
-- [ ] Plain text export
+- [x] Export button and format selector in the Session page output panel
+- [x] CSV export (minimum viable — serialize the extracted table)
+- [x] HTML export
+- [x] Markdown export
+- [x] Plain text export
+- [x] Copy table option
 
 ## Settings
 
@@ -64,3 +65,9 @@
 - [ ] PDF text overlay: inject a machine-readable text layer over scanned PDFs to make them searchable
 - [ ] Mobile companion app: scan on the go and sync to the desktop queue
 - [ ] Extensible model interface: allow users to supply their own GGUF models
+
+
+---
+
+## Out of Scope / Later Additions:
+- [ ] XLSX export (requires adding a library dependency)

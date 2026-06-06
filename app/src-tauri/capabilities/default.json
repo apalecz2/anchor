@@ -59,6 +59,7 @@
                 }
             ]
         },
+        "dialog:allow-save",
         "fs:default",
         "fs:allow-appdata-read-recursive",
         "fs:allow-appdata-write-recursive",

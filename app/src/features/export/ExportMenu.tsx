@@ -1,0 +1,113 @@
+import { useState, useRef, useEffect } from 'react';
+import type { ProvenanceCell } from '../extraction/types';
+import { parseCSV } from '../llama/promptUtils';
+import { toCsv, toHtml, toMarkdown, toPlainText, saveWithDialog } from './exportUtils';
+import type { SaveFormat } from './exportUtils';
+
+interface ExportMenuProps {
+    provenanceCells: ProvenanceCell[][] | null;
+    savedCsv: string | null;
+    /** Filename stem (no extension) for the save dialog, e.g. "invoice_page1" */
+    fileStem: string;
+    disabled?: boolean;
+}
+
+function normalizeRows(
+    provenanceCells: ProvenanceCell[][] | null,
+    savedCsv: string | null
+): string[][] {
+    if (provenanceCells && provenanceCells.length > 0) {
+        return provenanceCells.map(row => row.map(c => c.value));
+    }
+    if (savedCsv) return parseCSV(savedCsv);
+    return [];
+}
+
+type ExportFormatKey = 'csv' | 'html' | 'md' | 'txt';
+
+const FORMAT_CONFIG: Record<ExportFormatKey, {
+    label: string;
+    icon: string;
+    serialize: (r: string[][]) => string;
+    saveFormat: SaveFormat;
+}> = {
+    csv:  { label: 'CSV',        icon: 'table_view',  serialize: toCsv,       saveFormat: { ext: 'csv',  label: 'CSV files',      filters: [{ name: 'CSV',      extensions: ['csv']  }] } },
+    html: { label: 'HTML',       icon: 'code',        serialize: toHtml,      saveFormat: { ext: 'html', label: 'HTML files',     filters: [{ name: 'HTML',     extensions: ['html'] }] } },
+    md:   { label: 'Markdown',   icon: 'article',     serialize: toMarkdown,  saveFormat: { ext: 'md',   label: 'Markdown files', filters: [{ name: 'Markdown', extensions: ['md']   }] } },
+    txt:  { label: 'Plain text', icon: 'text_fields', serialize: toPlainText, saveFormat: { ext: 'txt',  label: 'Text files',     filters: [{ name: 'Text',     extensions: ['txt']  }] } },
+};
+
+export function ExportMenu({ provenanceCells, savedCsv, fileStem, disabled }: ExportMenuProps) {
+    const [open, setOpen] = useState(false);
+    const [copied, setCopied] = useState(false);
+    const menuRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        if (!open) return;
+        const handler = (e: MouseEvent) => {
+            if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false);
+        };
+        document.addEventListener('mousedown', handler);
+        return () => document.removeEventListener('mousedown', handler);
+    }, [open]);
+
+    const rows = normalizeRows(provenanceCells, savedCsv);
+    const hasData = rows.length > 0;
+
+    const handleExport = async (key: ExportFormatKey) => {
+        setOpen(false);
+        if (!hasData) return;
+        const { serialize, saveFormat } = FORMAT_CONFIG[key];
+        await saveWithDialog(fileStem, serialize(rows), saveFormat);
+    };
+
+    const handleCopy = () => {
+        setOpen(false);
+        if (!hasData) return;
+        void navigator.clipboard.writeText(toMarkdown(rows)).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        });
+    };
+
+    return (
+        <div className="relative" ref={menuRef}>
+            <button
+                onClick={() => setOpen(o => !o)}
+                disabled={disabled || !hasData}
+                className="flex items-center gap-1 px-3 py-1 text-sm bg-surface-variant text-on-surface-variant rounded-lg hover:bg-surface-container-high disabled:opacity-50 transition-colors"
+                aria-haspopup="true"
+                aria-expanded={open}
+            >
+                <span className="material-symbols-outlined text-[16px]">
+                    {copied ? 'check' : 'download'}
+                </span>
+                {copied ? 'Copied!' : 'Export'}
+                <span className="material-symbols-outlined text-[14px] leading-none">expand_more</span>
+            </button>
+
+            {open && (
+                <div className="absolute right-0 top-full mt-1 z-50 min-w-40 rounded-xl border border-outline-variant bg-surface shadow-lg py-1">
+                    {(Object.entries(FORMAT_CONFIG) as [ExportFormatKey, typeof FORMAT_CONFIG[ExportFormatKey]][]).map(([key, { label, icon }]) => (
+                        <button
+                            key={key}
+                            onClick={() => { void handleExport(key); }}
+                            className="w-full text-left px-4 py-2 text-sm text-on-surface hover:bg-surface-variant transition-colors flex items-center gap-2"
+                        >
+                            <span className="material-symbols-outlined text-[16px]">{icon}</span>
+                            {label}
+                        </button>
+                    ))}
+                    <div className="border-t border-outline-variant my-1" />
+                    <button
+                        onClick={handleCopy}
+                        className="w-full text-left px-4 py-2 text-sm text-on-surface hover:bg-surface-variant transition-colors flex items-center gap-2"
+                    >
+                        <span className="material-symbols-outlined text-[16px]">content_copy</span>
+                        Copy table
+                    </button>
+                </div>
+            )}
+        </div>
+    );
+}

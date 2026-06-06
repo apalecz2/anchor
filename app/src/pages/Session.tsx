@@ -16,10 +16,13 @@ import { sanitizeWordsForProvenance } from '../features/extraction/provenance';
 import { getCellSourceBox } from '../features/extraction/provenance';
 import type { BoundingBox } from '../features/ocr/types';
 import type { ProvenanceCell } from '../features/extraction/types';
+import { ExportMenu } from '../features/export/ExportMenu';
+import { buildFileStem } from '../features/export/exportUtils';
 
 function SessionContent(): React.ReactElement {
     const { id } = useParams<{ id: string }>();
     const [activePageIndex, setActivePageIndex] = useState(0);
+    const [sourceFileName, setSourceFileName] = useState<string | null>(null);
 
     const {
         extractionResult,
@@ -56,6 +59,19 @@ function SessionContent(): React.ReactElement {
     useEffect(() => {
         setPageInputValue((activePageIndex + 1).toString());
     }, [activePageIndex]);
+
+    // Load source filename once per session for descriptive export names
+    useEffect(() => {
+        if (!id) return;
+        getDb().then(db =>
+            db.select<{ file_name: string }[]>(
+                'SELECT file_name FROM files WHERE session_id = $1 LIMIT 1',
+                [id]
+            )
+        ).then(rows => {
+            setSourceFileName(rows[0]?.file_name ?? null);
+        }).catch(() => { /* non-critical */ });
+    }, [id]);
 
     // Load saved CSV + provenance from DB when session/page changes
     useEffect(() => {
@@ -312,13 +328,20 @@ function SessionContent(): React.ReactElement {
                                 </button>
                             )}
                             {outputView === 'table' && !isExtracting && (
-                                <button
-                                    onClick={handleFormatTable}
-                                    disabled={isExtracting}
-                                    className="px-4 py-1 text-sm bg-surface-variant text-on-surface-variant rounded-lg hover:bg-surface-container-high disabled:opacity-50"
-                                >
-                                    Re-extract
-                                </button>
+                                <>
+                                    <ExportMenu
+                                        provenanceCells={provenanceCells}
+                                        savedCsv={savedCsv}
+                                        fileStem={buildFileStem(sourceFileName, activePageIndex, totalPages)}
+                                    />
+                                    <button
+                                        onClick={handleFormatTable}
+                                        disabled={isExtracting}
+                                        className="px-4 py-1 text-sm bg-surface-variant text-on-surface-variant rounded-lg hover:bg-surface-container-high disabled:opacity-50"
+                                    >
+                                        Re-extract
+                                    </button>
+                                </>
                             )}
                         </div>
                     )}

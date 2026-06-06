@@ -5,6 +5,8 @@
 
 1. Editing the OCR messes up the boxes that are highlighted over the image on the left when you click a cell in the final table on the right
 
+2. Column names are always shown as gray which implies unverified source. Should be green to match their confidence etc. but also show some indication that they are the column names
+
 ## Provenance / Matching
 
 1. The columns got messed up. The course column items got split into course and description columns since each has 2 words that seems distinct semantically and positionally. First bit is capitalized name, then numerical course code. Course code is right justified within the course column area (all course code items end before the starting x of the desciption column)
@@ -15,6 +17,8 @@
 
 3. Empty columns ruin matching
 
+4. If the OCR doesn't provide an exact match to the LLM it will say completely unverified. e.g "Calc for eng I" vs "Calc for eng |" leads to the result being unverified even though it was only off by one char. Use XOR distance??? / some sort of fuzzy matching??
+    - If it's above some threshold, allow it to be matched but just degrade confidence?
 
 ## Possible Solutions
 
