@@ -1,48 +1,41 @@
-# Local Data Extraction App
+# app/
 
-This folder contains the main application for the Local Data Extraction AI project. Built using React, TypeScript, and Tauri, it is designed for private, offline data extraction from documents and images.
+React + Tauri source for Artifact. See the [root README](../README.md) for a project overview and the [design doc](../docs/design.md) for architecture details.
 
-## Structure
+## AppData layout (after first-run setup)
 
-*   `src/`: React frontend UI.
-*   `src-tauri/`: Rust backend, handling system threads, OCR integrations, and local LLM execution.
-*   `src-tauri/binaries/`: Platform-organized llama.cpp binaries for packaging.
+```
+{AppData}/com.aidenpaleczny.app/
+├── binaries/
+│   └── llama-server[.exe]
+├── tesseract/
+│   ├── tesseract[.exe]
+│   └── tessdata/
+│       └── eng.traineddata
+└── models/
+    ├── Qwen3.5-4B-Q4_K_M.gguf
+    └── mmproj-F16.gguf
+```
 
-## Binary Layout
+Nothing is bundled in the installer. The in-app wizard downloads everything here on first launch.
 
-Keep platform-specific executables under a matching folder, for example:
+## Project structure
 
-*   `src-tauri/binaries/windows/`
-*   `src-tauri/binaries/macos/`
-*   `src-tauri/binaries/linux/`
+- `src/` -- React frontend
+- `src-tauri/` -- Rust backend (Tauri commands, OCR, llama sidecar, setup wizard)
 
-The build script prefers the platform folder when present and falls back to the legacy top-level `binaries/` files so the repo can migrate gradually.
+## Dev setup
 
-## Getting Started
+1. Install prerequisites: https://v2.tauri.app/start/prerequisites/
+2. `npm install`
+3. `npm run tauri dev`
 
-1.  Make sure you have Node.js and Rust installed globally.
-2.  Install frontend dependencies:
-    ```bash
-    npm install
-    ```
-3.  Run the application in development mode:
-    ```bash
-    npm run tauri dev
-    ```
-4. Other dependencies (follow steps based on platform):
-    https://v2.tauri.app/start/prerequisites/
+The setup wizard runs on first dev launch (same as production) and places files in the same AppData location. This only needs to happen once.
 
-## Multi-platform Builds
+## Build
 
-Use one release build per operating system. For example:
+```bash
+npm run tauri build
+```
 
-*   Windows package built on Windows with Windows llama.cpp binaries.
-*   macOS package built on macOS with macOS llama.cpp binaries.
-
-The app code selects the correct llama server resource path at runtime, while Tauri bundles the corresponding platform folder during packaging.
-
-## Development Commands
-
-*   `npm run build`: Build the React frontend.
-*   `npm run tauri build`: Compile the full release application (frontend + Rust backend) into native installers.
- 
+Build on the target OS -- the Rust backend is native and the correct platform binaries must be present in AppData.

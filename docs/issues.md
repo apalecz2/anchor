@@ -30,7 +30,9 @@
     - This would allow the links to only be place close to where they're supposed to be based on index in grid?
 
 
-
+## Llama
+1. Exiting the app (via ctrl c at least) during image processing does not end the llama server process
+2. Llama server sidecar doesn't start in built version 
 
 
 

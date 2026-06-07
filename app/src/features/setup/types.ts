@@ -1,0 +1,38 @@
+export type SetupStep = 'welcome' | 'hardware' | 'config' | 'download' | 'verify' | 'complete';
+export type Backend = 'cpu' | 'cuda' | 'rocm' | 'metal';
+
+export interface HardwareInfo {
+    gpu_name: string | null;
+    gpu_vendor: string | null;
+    vram_mb: number | null;
+    ram_mb: number;
+    recommended_backend: Backend;
+}
+
+export interface SetupConfig {
+    backend: Backend;
+}
+
+export interface AssetManifestEntry {
+    asset_id: string;
+    label: string;
+    size_bytes: number;
+    dest_path: string;
+    sha256: string;
+    url_primary: string;
+    url_fallback: string | null;
+    extract_to_dir: string | null;
+}
+
+export interface AssetProgress {
+    status: 'pending' | 'downloading' | 'extracting' | 'done' | 'error';
+    bytes_received: number;
+    total_bytes: number | null;
+    error?: string;
+}
+
+export interface SetupPaths {
+    llama_server: string;
+    model_path: string;
+    mmproj_path: string;
+}

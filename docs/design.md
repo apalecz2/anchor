@@ -106,8 +106,87 @@ Adaptive hardware modes:
 8. Export
    - Save the verified output in the user’s chosen format.
 
-## 7. Future Roadmap & Optional Features
+## 7. Post‑Install Dependency Setup
+
+The app installer is intentionally small (< 20 MB). Platform‑specific binaries and large AI models are downloaded inside the app on first launch and stored in the user's AppData directory. Subsequent launches skip the wizard if all assets are detected.
+
+### 7.1 Asset Inventory
+
+| Asset | Platforms | Primary Source | Fallback | Size |
+|---|---|---|---|---|
+| Tesseract binary + DLLs | Windows | Cloudflare R2 | — | ~86 MB |
+| Tesseract binary | macOS | Cloudflare R2 | — | ~15 MB |
+| `eng.traineddata` | All | Cloudflare R2 | — | ~4 MB (fast tier) |
+| `llama-server` CPU build | All | Cloudflare R2 | llama.cpp GitHub releases | ~46 MB |
+| `llama-server` CUDA build | Windows / Linux | Cloudflare R2 | llama.cpp GitHub releases | ~80 MB |
+| `llama-server` Metal build | macOS (Apple Silicon) | Cloudflare R2 | llama.cpp GitHub releases | ~46 MB |
+| `Qwen3.5‑4B‑Q4_K_M.gguf` | All | Cloudflare R2 | HuggingFace (Qwen/Qwen3‑4B‑GGUF) | ~2.7 GB |
+| `mmproj‑F16.gguf` | All | Cloudflare R2 | HuggingFace (compatible clip projector) | ~656 MB |
+
+Cloudflare R2 is the primary source for all assets because it offers zero egress fees and consistent global latency. For the two GGUF model files, HuggingFace is available as a fallback if the R2 bucket is unreachable. All downloaded files are SHA‑256 verified before use; a failed hash triggers a re‑download from the fallback URL.
+
+All asset URLs, expected SHA‑256 digests, and destination paths are hardcoded as constants in the Rust backend so they can be audited and updated as a unit when new model or binary versions are pinned.
+
+### 7.2 Storage Layout
+
+Everything is stored under the Tauri AppData directory (`%APPDATA%\DataExtractionAI` on Windows, `~/Library/Application Support/DataExtractionAI` on macOS):
+
+```
+{AppData}/DataExtractionAI/
+  binaries/
+    llama-server[.exe]
+  tesseract/
+    tesseract[.exe]
+    *.dll                    (Windows only)
+    tessdata/
+      eng.traineddata
+  models/
+    Qwen3.5-4B-Q4_K_M.gguf
+    mmproj-F16.gguf
+```
+
+The Rust startup hook that injects Tesseract into `PATH` and `TESSDATA_PREFIX` reads from this AppData directory rather than the bundle's resource folder. The llama‑server path stored in settings points here too.
+
+### 7.3 Hardware Detection
+
+Before presenting download options the app queries the host GPU to select the correct llama‑server build:
+
+- **Windows / Linux** — WMI (`Win32_VideoController`) or `/sys/class/drm` sysfs vendor IDs.
+- **macOS** — `system_profiler SPDisplaysDataType`.
+
+Detection output drives a `recommended_backend` value: `cuda` (NVIDIA, ≥ 4 GB VRAM), `rocm` (AMD on Linux), `metal` (Apple Silicon), or `cpu` (fallback). The user can override the recommendation before downloading.
+
+### 7.4 First‑Run Wizard Flow
+
+The wizard runs inside the existing app window; no separate Tauri window is created. It renders in place of the normal app routes until setup completes, then reloads.
+
+```
+Welcome → Hardware Detection → Configuration → Download → Verify → Complete
+```
+
+- **Welcome** — lists what will be downloaded and the estimated total size.
+- **Hardware Detection** — displays the detected GPU/RAM and the recommended backend. Skipped if detection is unambiguous and the user has not previously customised the setting.
+- **Configuration** — backend selector (CPU / CUDA / ROCm / Metal) and Tesseract language‑data tier (fast / standard / best). Defaults to the recommended values.
+- **Download** — sequential download for the large model files, parallel for smaller assets. Each asset shows its own progress bar. Downloads write to a `.part` temp file and rename to the final path only after hash verification passes.
+- **Verify** — SHA‑256 check per file. Failed files are re‑downloaded once from the fallback URL before the wizard reports an error.
+- **Complete** — writes all resolved paths (`modelPath`, `mmprojPath`, `llamaServerPath`) and the chosen `hardwareBackend` to persistent settings, then restarts the main view.
+
+### 7.5 Settings Schema Additions
+
+Two new keys are added alongside the existing settings:
+
+| Key | Type | Purpose |
+|---|---|---|
+| `llamaServerPath` | `string` | Absolute path to the downloaded llama‑server binary |
+| `hardwareBackend` | `'cpu' \| 'cuda' \| 'rocm' \| 'metal'` | Chosen acceleration backend; controls which llama‑server build is used |
+
+The existing `modelPath` and `mmprojPath` keys, previously empty strings by default, are populated by the wizard with their AppData locations.
+
+---
+
+## 8. Future Roadmap & Optional Features
 
 - Generative edits: prompt‑to‑edit workflow (e.g., "Change all dates to MM/DD/YYYY") with accept/decline diffs.
 - Mobile companion app: scan on the go and sync to the desktop queue.
 - PDF text overlay: inject an invisible machine‑readable text layer over scanned PDFs to make them searchable.
+

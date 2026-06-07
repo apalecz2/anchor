@@ -1,5 +1,6 @@
 export type HardwareMode = 'low-end' | 'high-end';
 export type Theme = 'light' | 'dark';
+export type HardwareBackend = 'cpu' | 'cuda' | 'rocm' | 'metal';
 
 interface SettingsSchema {
     theme: Theme;
@@ -7,6 +8,8 @@ interface SettingsSchema {
     modelPath: string;
     mmprojPath: string;
     ocrLanguage: string;
+    llamaServerPath: string;
+    hardwareBackend: HardwareBackend;
 }
 
 // 'theme' key is shared with AppLayout.tsx's dark-mode toggle
@@ -16,6 +19,8 @@ const STORAGE_KEYS: Record<keyof SettingsSchema, string> = {
     modelPath: 'model_path',
     mmprojPath: 'mmproj_path',
     ocrLanguage: 'ocr_language',
+    llamaServerPath: 'llama_server_path',
+    hardwareBackend: 'hardware_backend',
 };
 
 const DEFAULTS: SettingsSchema = {
@@ -24,6 +29,8 @@ const DEFAULTS: SettingsSchema = {
     modelPath: '',
     mmprojPath: '',
     ocrLanguage: 'eng',
+    llamaServerPath: '',
+    hardwareBackend: 'cpu',
 };
 
 export function readSetting<K extends keyof SettingsSchema>(key: K): SettingsSchema[K] {

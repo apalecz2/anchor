@@ -39,36 +39,13 @@ See [app/README.md](app/README.md) for build instructions and [docs/design.md](d
 
 ## Setup
 
-Three sets of large files are not included in the repository and must be downloaded before the app will run.
+Large dependencies (Tesseract, llama-server, GGUF models) are not bundled in the installer. On first launch an in-app wizard detects your hardware and downloads everything automatically to the OS app-data directory.
 
-### 1. Tesseract runtime
-
-Install Tesseract from the [UB Mannheim Windows installer](https://github.com/UB-Mannheim/tesseract/wiki), then copy the entire contents of `C:\Program Files\Tesseract-OCR\` into:
-
-```
-app/src-tauri/resources/tesseract/
-```
-
-See [docs/Tesseract.md](docs/Tesseract.md) for more detail.
-
-### 2. LLM and vision model files
-
-Download the following GGUF files from HuggingFace and place them in `app/src-tauri/models/`:
-
-| File | Purpose |
-|---|---|
-| `Qwen3.5-4B-Q4_K_M.gguf` | Main language / vision model |
-| `mmproj-F16.gguf` | Multimodal vision projector |
-
-### 3. llama.cpp server binary
-
-Download the llama.cpp release for your platform from the [llama.cpp GitHub releases](https://github.com/ggerganov/llama.cpp/releases) and place `llama-server` (and any accompanying DLLs) in `app/src-tauri/binaries/`. See [app/README.md](app/README.md) for the expected binary layout per platform.
-
----
+See [app/README.md](app/README.md) for the expected AppData layout and dev setup instructions.
 
 ## Quick Start
 
-Prerequisites: [Node.js](https://nodejs.org) and [Rust](https://rustup.rs) -- see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for platform-specific steps. Complete the setup steps above first.
+Prerequisites: [Node.js](https://nodejs.org) and [Rust](https://rustup.rs) -- see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for platform-specific steps.
 
 ```bash
 cd app

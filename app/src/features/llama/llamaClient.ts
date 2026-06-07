@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { resolveResource } from "@tauri-apps/api/path";
+import { readSetting } from "../../lib/settings";
 
 import type { ChatMessage, TokenLogprob } from "../extraction/types";
 
@@ -78,9 +78,13 @@ export const startLlamaServer = async () => {
     }
 
     llamaServerStartPromise = (async () => {
-        const llamaServerPath = await invoke<string>("resolve_llama_server_path");
-        const modelPath = await resolveResource("models/Qwen3.5-4B-Q4_K_M.gguf");
-        const mmprojPath = await resolveResource("models/mmproj-F16.gguf");
+        const llamaServerPath = readSetting('llamaServerPath') || await invoke<string>("resolve_llama_server_path");
+        const modelPath = readSetting('modelPath');
+        const mmprojPath = readSetting('mmprojPath');
+
+        if (!modelPath || !mmprojPath) {
+            throw new Error("Model paths not configured — run the setup wizard.");
+        }
 
         const pid = await invoke<number>("start_llama_server", {
             modelPath,

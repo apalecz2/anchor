@@ -1,5 +1,6 @@
 use std::{
     fs,
+    io::{Read as _, Write as _},
     path::{Path, PathBuf},
     process::{Child, Command},
     sync::Mutex,
@@ -275,44 +276,13 @@ fn stop_llama_server_process(state: &AppState) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn resolve_llama_server_path() -> Result<String, String> {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let debug_binaries_dir = manifest_dir.join("target").join("debug").join("binaries");
-    let source_binaries_dir = manifest_dir.join("binaries");
-
-    let candidate_names: &[&str] = if cfg!(target_os = "windows") {
-        &[
-            "windows/llama-server.exe",
-            "llama-server.exe",
-        ]
-    } else if cfg!(target_os = "macos") {
-        &[
-            "macos/llama-server-aarch64-apple-darwin",
-            "llama-server-aarch64-apple-darwin",
-        ]
+fn resolve_llama_server_path(app_handle: tauri::AppHandle) -> Result<String, String> {
+    let binary = resolve_data_dir(&app_handle).join("binaries").join(llama_exe_name());
+    if binary.exists() {
+        Ok(binary.to_string_lossy().into_owned())
     } else {
-        &[
-            "linux/llama-server",
-            "llama-server",
-        ]
-    };
-
-    let search_roots = [debug_binaries_dir, source_binaries_dir];
-
-    for root in search_roots {
-        for candidate_name in candidate_names {
-            let candidate_path = root.join(candidate_name);
-
-            if candidate_path.exists() {
-                return Ok(candidate_path.to_string_lossy().into_owned());
-            }
-        }
+        Err("llama-server not found — run the setup wizard to download it.".into())
     }
-
-    Err(format!(
-        "Unable to locate llama server binary. Searched: {}",
-        candidate_names.join(", ")
-    ))
 }
 
 #[tauri::command]
@@ -369,25 +339,471 @@ fn stop_llama_server(state: tauri::State<'_, AppState>) -> Result<(), String> {
 
 
 
-// ------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// Setup / first-run dependency management
+// ─────────────────────────────────────────────────────────────────────────────
 
+// R2 bucket base URL — update this once the bucket is provisioned.
+const R2_BASE: &str = "https://r2.artifact-app.com";
+
+// HuggingFace fallback URLs — update with the exact repo/file paths.
+const HF_MODEL_URL: &str =
+    "https://huggingface.co/PLACEHOLDER/resolve/main/Qwen3.5-4B-Q4_K_M.gguf";
+const HF_MMPROJ_URL: &str =
+    "https://huggingface.co/PLACEHOLDER/resolve/main/mmproj-F16.gguf";
+
+fn resolve_data_dir(app: &tauri::AppHandle) -> PathBuf {
+    app.path()
+        .app_data_dir()
+        .expect("failed to resolve AppData directory")
+}
+
+fn llama_exe_name() -> &'static str {
+    if cfg!(target_os = "windows") { "llama-server.exe" } else { "llama-server" }
+}
+
+fn tesseract_exe_name() -> &'static str {
+    if cfg!(target_os = "windows") { "tesseract.exe" } else { "tesseract" }
+}
+
+// ---------------------------------------------------------------------------
+// check_setup_complete
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn check_setup_complete(app_handle: tauri::AppHandle) -> bool {
+    let data_dir = resolve_data_dir(&app_handle);
+    let required = [
+        data_dir.join("binaries").join(llama_exe_name()),
+        data_dir.join("tesseract").join(tesseract_exe_name()),
+        data_dir.join("tesseract").join("tessdata").join("eng.traineddata"),
+        data_dir.join("models").join("Qwen3.5-4B-Q4_K_M.gguf"),
+        data_dir.join("models").join("mmproj-F16.gguf"),
+    ];
+    required.iter().all(|p| p.exists())
+}
+
+// ---------------------------------------------------------------------------
+// detect_hardware
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+pub struct HardwareInfo {
+    pub gpu_name: Option<String>,
+    pub gpu_vendor: Option<String>,
+    pub vram_mb: Option<u64>,
+    pub ram_mb: u64,
+    pub recommended_backend: String,
+}
+
+#[tauri::command]
+fn detect_hardware() -> HardwareInfo {
+    let (gpu_name, gpu_vendor, vram_mb, ram_mb) = query_hardware();
+    let recommended_backend = recommend_backend(gpu_vendor.as_deref(), vram_mb);
+    HardwareInfo { gpu_name, gpu_vendor, vram_mb, ram_mb, recommended_backend }
+}
+
+fn recommend_backend(vendor: Option<&str>, vram_mb: Option<u64>) -> String {
+    let v = match vendor { Some(s) => s, None => return "cpu".into() };
+    if v.contains("NVIDIA") && vram_mb.unwrap_or(0) >= 4096 {
+        return "cuda".into();
+    }
+    if v.contains("AMD") {
+        #[cfg(target_os = "linux")]
+        return "rocm".into();
+    }
+    if v.contains("Apple") {
+        return "metal".into();
+    }
+    "cpu".into()
+}
+
+fn extract_gpu_vendor(name: &str) -> &'static str {
+    let u = name.to_uppercase();
+    if u.contains("NVIDIA") { "NVIDIA" }
+    else if u.contains("AMD") || u.contains("RADEON") { "AMD" }
+    else if u.contains("APPLE") { "Apple" }
+    else if u.contains("INTEL") { "Intel" }
+    else { "Unknown" }
+}
+
+fn query_hardware() -> (Option<String>, Option<String>, Option<u64>, u64) {
+    #[cfg(target_os = "windows")]
+    return query_hardware_windows();
+
+    #[cfg(target_os = "macos")]
+    return query_hardware_macos();
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    return query_hardware_linux();
+
+    #[allow(unreachable_code)]
+    (None, None, None, 0)
+}
+
+#[cfg(target_os = "windows")]
+fn query_hardware_windows() -> (Option<String>, Option<String>, Option<u64>, u64) {
+    let ps_gpu = r#"try { $g = Get-CimInstance Win32_VideoController | Where-Object { $_.AdapterRAM -gt 0 } | Sort-Object AdapterRAM -Descending | Select-Object -First 1; if ($g) { [pscustomobject]@{ Name=$g.Name; VRAM=$g.AdapterRAM } | ConvertTo-Json -Compress } else { '{}' } } catch { '{}' }"#;
+    let ps_ram = r#"try { [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB) } catch { 0 }"#;
+
+    let gpu_json = run_powershell(ps_gpu).unwrap_or_default();
+    let gpu_val: serde_json::Value = serde_json::from_str(gpu_json.trim()).unwrap_or_default();
+    let gpu_name = gpu_val["Name"].as_str().map(String::from);
+    let vram_mb = gpu_val["VRAM"].as_u64().map(|b| b / (1024 * 1024));
+    let gpu_vendor = gpu_name.as_deref().map(extract_gpu_vendor).map(String::from);
+
+    let ram_mb = run_powershell(ps_ram)
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+
+    (gpu_name, gpu_vendor, vram_mb, ram_mb)
+}
+
+#[cfg(target_os = "windows")]
+fn run_powershell(script: &str) -> Option<String> {
+    let out = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .output()
+        .ok()?;
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+#[cfg(target_os = "macos")]
+fn query_hardware_macos() -> (Option<String>, Option<String>, Option<u64>, u64) {
+    let sp = Command::new("system_profiler")
+        .args(["SPDisplaysDataType", "-json"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+
+    let val: serde_json::Value = serde_json::from_str(&sp).unwrap_or_default();
+    let gpu_name = val["SPDisplaysDataType"]
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|g| g["_name"].as_str())
+        .map(String::from);
+    let vram_mb = val["SPDisplaysDataType"]
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|g| g["spdisplays_vram"].as_str())
+        .and_then(|s| s.split_whitespace().next())
+        .and_then(|n| n.parse::<u64>().ok());
+
+    let ram_bytes = Command::new("sysctl")
+        .args(["-n", "hw.memsize"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u64>().ok())
+        .unwrap_or(0);
+
+    let gpu_vendor = gpu_name.as_deref().map(extract_gpu_vendor).map(String::from);
+    (gpu_name, gpu_vendor, vram_mb, ram_bytes / (1024 * 1024))
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn query_hardware_linux() -> (Option<String>, Option<String>, Option<u64>, u64) {
+    let lspci = Command::new("lspci")
+        .args(["-mm", "-d", "::0300"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+
+    let gpu_line = lspci.lines().next().map(String::from);
+    let gpu_vendor = gpu_line.as_deref().map(|l| {
+        if l.contains("NVIDIA") { "NVIDIA" }
+        else if l.contains("AMD") || l.contains("Advanced Micro Devices") { "AMD" }
+        else if l.contains("Intel") { "Intel" }
+        else { "Unknown" }
+    }).map(String::from);
+
+    let meminfo = fs::read_to_string("/proc/meminfo").unwrap_or_default();
+    let ram_mb = meminfo.lines()
+        .find(|l| l.starts_with("MemTotal:"))
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|n| n.parse::<u64>().ok())
+        .map(|kb| kb / 1024)
+        .unwrap_or(0);
+
+    (gpu_line, gpu_vendor, None, ram_mb)
+}
+
+// ---------------------------------------------------------------------------
+// download_file  (streams to a .part file; renames on completion)
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Clone)]
+struct DownloadProgress {
+    asset_id: String,
+    bytes_received: u64,
+    total_bytes: Option<u64>,
+}
+
+#[tauri::command]
+async fn download_file(
+    app_handle: tauri::AppHandle,
+    url: String,
+    dest_path: String,
+    asset_id: String,
+) -> Result<(), String> {
+    use tauri::Emitter;
+
+    let dest = PathBuf::from(&dest_path);
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("mkdir failed: {e}"))?;
+    }
+
+    let part_path = PathBuf::from(format!("{dest_path}.part"));
+
+    let client = reqwest::Client::builder()
+        .user_agent("artifact-setup/1.0")
+        .build()
+        .map_err(|e| format!("client build failed: {e}"))?;
+
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!("HTTP {} for {url}", response.status()));
+    }
+
+    let total_bytes = response.content_length();
+    let mut file = std::fs::File::create(&part_path)
+        .map_err(|e| format!("create .part file failed: {e}"))?;
+
+    let mut bytes_received: u64 = 0;
+    let mut stream = response;
+
+    while let Some(chunk) = stream.chunk().await.map_err(|e| format!("stream error: {e}"))? {
+        file.write_all(&chunk).map_err(|e| format!("write error: {e}"))?;
+        bytes_received += chunk.len() as u64;
+        let _ = app_handle.emit("setup:progress", DownloadProgress {
+            asset_id: asset_id.clone(),
+            bytes_received,
+            total_bytes,
+        });
+    }
+
+    drop(file);
+    fs::rename(&part_path, &dest).map_err(|e| format!("rename failed: {e}"))?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// verify_file_hash
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn verify_file_hash(path: String, expected_sha256: String) -> Result<bool, String> {
+    use sha2::{Digest, Sha256};
+
+    // Empty hash = not yet pinned, skip verification.
+    if expected_sha256.is_empty() {
+        return Ok(true);
+    }
+
+    let mut file = std::fs::File::open(&path)
+        .map_err(|e| format!("open failed: {e}"))?;
+
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 65536];
+    loop {
+        let n = file.read(&mut buf).map_err(|e| format!("read error: {e}"))?;
+        if n == 0 { break; }
+        hasher.update(&buf[..n]);
+    }
+
+    let actual = format!("{:x}", hasher.finalize());
+    Ok(actual.eq_ignore_ascii_case(&expected_sha256))
+}
+
+// ---------------------------------------------------------------------------
+// extract_zip
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn extract_zip(archive_path: String, dest_dir: String) -> Result<(), String> {
+    use zip::ZipArchive;
+
+    let dest = Path::new(&dest_dir);
+    fs::create_dir_all(dest).map_err(|e| format!("mkdir failed: {e}"))?;
+
+    let file = fs::File::open(&archive_path)
+        .map_err(|e| format!("open archive failed: {e}"))?;
+    let mut archive = ZipArchive::new(file)
+        .map_err(|e| format!("zip open failed: {e}"))?;
+
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)
+            .map_err(|e| format!("zip entry error at index {i}: {e}"))?;
+
+        // enclosed_name() returns None for entries with path traversal — skip them.
+        let Some(out_path) = entry.enclosed_name().map(|n| dest.join(n)) else {
+            continue;
+        };
+
+        if entry.is_dir() {
+            fs::create_dir_all(&out_path).map_err(|e| format!("mkdir failed: {e}"))?;
+        } else {
+            if let Some(parent) = out_path.parent() {
+                fs::create_dir_all(parent).map_err(|e| format!("mkdir failed: {e}"))?;
+            }
+            let mut out_file = fs::File::create(&out_path)
+                .map_err(|e| format!("create file failed: {e}"))?;
+            std::io::copy(&mut entry, &mut out_file)
+                .map_err(|e| format!("extract failed: {e}"))?;
+        }
+    }
+
+    fs::remove_file(&archive_path).ok();
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// get_setup_paths
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+pub struct SetupPaths {
+    pub llama_server: String,
+    pub model_path: String,
+    pub mmproj_path: String,
+}
+
+#[tauri::command]
+fn get_setup_paths(app_handle: tauri::AppHandle) -> SetupPaths {
+    let d = resolve_data_dir(&app_handle);
+    SetupPaths {
+        llama_server: d.join("binaries").join(llama_exe_name()).to_string_lossy().into_owned(),
+        model_path:   d.join("models").join("Qwen3.5-4B-Q4_K_M.gguf").to_string_lossy().into_owned(),
+        mmproj_path:  d.join("models").join("mmproj-F16.gguf").to_string_lossy().into_owned(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// get_asset_manifest
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Clone)]
+pub struct AssetManifestEntry {
+    pub asset_id: String,
+    pub label: String,
+    pub size_bytes: u64,
+    pub dest_path: String,
+    pub sha256: String,
+    pub url_primary: String,
+    pub url_fallback: Option<String>,
+    /// If set, the downloaded file is a zip that should be extracted to this directory.
+    pub extract_to_dir: Option<String>,
+}
+
+fn get_llama_server_spec(backend: &str) -> (&'static str, &'static str, u64, &'static str) {
+    // (filename, label, size_bytes, url_suffix)
+    if cfg!(target_os = "macos") {
+        return ("llama-server", "llama-server (Metal / Apple Silicon)", 46_000_000, "macos/llama-server");
+    }
+    if cfg!(target_os = "windows") {
+        return if backend == "cuda" {
+            ("llama-server.exe", "llama-server (CUDA / GPU)", 80_000_000, "windows/llama-server-cuda.exe")
+        } else {
+            ("llama-server.exe", "llama-server (CPU)", 46_000_000, "windows/llama-server-cpu.exe")
+        };
+    }
+    // Linux
+    match backend {
+        "cuda" => ("llama-server", "llama-server (CUDA / GPU)", 80_000_000, "linux/llama-server-cuda"),
+        "rocm" => ("llama-server", "llama-server (ROCm / AMD GPU)", 80_000_000, "linux/llama-server-rocm"),
+        _      => ("llama-server", "llama-server (CPU)", 46_000_000, "linux/llama-server-cpu"),
+    }
+}
+
+fn get_tesseract_spec(data_dir: &Path) -> AssetManifestEntry {
+    let (label, size_bytes, url_suffix) = if cfg!(target_os = "windows") {
+        ("Tesseract OCR engine (90 MB)", 90_000_000u64, "windows/tesseract.zip")
+    } else if cfg!(target_os = "macos") {
+        ("Tesseract OCR engine (15 MB)", 15_000_000u64, "macos/tesseract.zip")
+    } else {
+        ("Tesseract OCR engine (15 MB)", 15_000_000u64, "linux/tesseract.zip")
+    };
+
+    AssetManifestEntry {
+        asset_id:       "tesseract".into(),
+        label:          label.into(),
+        size_bytes,
+        dest_path:      data_dir.join("tesseract.zip").to_string_lossy().into_owned(),
+        sha256:         String::new(),
+        url_primary:    format!("{R2_BASE}/{url_suffix}"),
+        url_fallback:   None,
+        extract_to_dir: Some(data_dir.join("tesseract").to_string_lossy().into_owned()),
+    }
+}
+
+#[tauri::command]
+fn get_asset_manifest(app_handle: tauri::AppHandle, backend: String) -> Vec<AssetManifestEntry> {
+    let data_dir = resolve_data_dir(&app_handle);
+    let (filename, label, size_bytes, url_suffix) = get_llama_server_spec(&backend);
+
+    let llama = AssetManifestEntry {
+        asset_id:       "llama_server".into(),
+        label:          label.into(),
+        size_bytes,
+        dest_path:      data_dir.join("binaries").join(filename).to_string_lossy().into_owned(),
+        sha256:         String::new(),
+        url_primary:    format!("{R2_BASE}/binaries/{url_suffix}"),
+        url_fallback:   None,
+        extract_to_dir: None,
+    };
+
+    let tesseract = get_tesseract_spec(&data_dir);
+
+    let mmproj = AssetManifestEntry {
+        asset_id:       "mmproj_gguf".into(),
+        label:          "Vision projector (656 MB)".into(),
+        size_bytes:     656_000_000,
+        dest_path:      data_dir.join("models").join("mmproj-F16.gguf").to_string_lossy().into_owned(),
+        sha256:         String::new(),
+        url_primary:    format!("{R2_BASE}/models/mmproj-F16.gguf"),
+        url_fallback:   Some(HF_MMPROJ_URL.into()),
+        extract_to_dir: None,
+    };
+
+    let model = AssetManifestEntry {
+        asset_id:       "model_gguf".into(),
+        label:          "Qwen language model (2.7 GB)".into(),
+        size_bytes:     2_700_000_000,
+        dest_path:      data_dir.join("models").join("Qwen3.5-4B-Q4_K_M.gguf").to_string_lossy().into_owned(),
+        sha256:         String::new(),
+        url_primary:    format!("{R2_BASE}/models/Qwen3.5-4B-Q4_K_M.gguf"),
+        url_fallback:   Some(HF_MODEL_URL.into()),
+        extract_to_dir: None,
+    };
+
+    // Ordered smallest → largest so early progress is fast.
+    vec![llama, tesseract, mmproj, model]
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            // 1. Resolve the path to our bundled Tesseract folder
-            if let Ok(tesseract_dir) = app.path().resolve("resources/tesseract", tauri::path::BaseDirectory::Resource) {
-                
-                // 2. Add the bundled folder to the process PATH so rusty-tesseract can find tesseract.exe
-                let current_path = std::env::var("PATH").unwrap_or_default();
-                std::env::set_var("PATH", format!("{};{}", tesseract_dir.display(), current_path));
+            let tesseract_dir = app
+                .path()
+                .app_data_dir()
+                .map(|d| d.join("tesseract"))
+                .ok()
+                .filter(|p| p.exists());
 
-                // 3. Set TESSDATA_PREFIX so the engine knows exactly where the language models are
-                let tessdata_dir = tesseract_dir.join("tessdata");
-                std::env::set_var("TESSDATA_PREFIX", tessdata_dir.display().to_string());
-                
-                println!("Successfully injected bundled Tesseract into environment!");
+            if let Some(dir) = tesseract_dir {
+                let current_path = std::env::var("PATH").unwrap_or_default();
+                let sep = if cfg!(target_os = "windows") { ";" } else { ":" };
+                std::env::set_var("PATH", format!("{}{}{}", dir.display(), sep, current_path));
+                std::env::set_var("TESSDATA_PREFIX", dir.join("tessdata").display().to_string());
             }
             Ok(())
         })
@@ -406,7 +822,16 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_sql::Builder::default().build())
-        .invoke_handler(tauri::generate_handler![resolve_llama_server_path, start_llama_server, stop_llama_server, process_document])
+        .invoke_handler(tauri::generate_handler![
+            // Document processing
+            process_document,
+            // Llama server
+            resolve_llama_server_path, start_llama_server, stop_llama_server,
+            // Setup wizard
+            check_setup_complete, detect_hardware,
+            download_file, verify_file_hash,
+            get_setup_paths, get_asset_manifest, extract_zip,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
