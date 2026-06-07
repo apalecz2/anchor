@@ -41,7 +41,7 @@
 
 ## Settings
 
-- [ ] Implement the Settings page (currently a placeholder heading only)
+- [x] Implement the Settings page (currently a placeholder heading only)
 - [ ] OCR language selection (currently hardcoded to `"eng"`)
 - [ ] Model path configuration (currently resolved at fixed paths)
 - [ ] Hardware mode toggle: Low-End (Tesseract + lightweight LLM, no vision) vs. High-End (full vision model)
