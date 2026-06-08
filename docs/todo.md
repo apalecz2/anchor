@@ -69,6 +69,7 @@
 - [ ] Upload GGUF model files to R2
 - [ ] Compute and pin SHA-256 hashes for all assets in `get_asset_manifest` / `get_tesseract_spec`
 - [ ] Resume interrupted downloads -- wizard currently restarts from scratch if closed mid-download
+- [ ] Update about page
 
 ## Infrastructure / Architecture
 

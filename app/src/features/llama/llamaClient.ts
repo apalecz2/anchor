@@ -81,6 +81,7 @@ export const startLlamaServer = async () => {
         const llamaServerPath = readSetting('llamaServerPath') || await invoke<string>("resolve_llama_server_path");
         const modelPath = readSetting('modelPath');
         const mmprojPath = readSetting('mmprojPath');
+        const backend = readSetting('hardwareBackend');
 
         if (!modelPath || !mmprojPath) {
             throw new Error("Model paths not configured — run the setup wizard.");
@@ -90,6 +91,7 @@ export const startLlamaServer = async () => {
             modelPath,
             mmprojPath,
             llamaServerPath,
+            backend,
         });
 
         return pid;

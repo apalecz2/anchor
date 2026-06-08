@@ -253,6 +253,7 @@ const MAX_FILE_SIZE_BYTES: u64 = 500 * 1024 * 1024; // 500 MB
 
 const DEFAULT_CTX_SIZE: &str = "8192";
 const DEFAULT_IMAGE_MIN_TOKENS: &str = "1024";
+const DEFAULT_N_PARALLEL: &str = "1";
 
 struct AppState {
     llama_server: Mutex<Option<Child>>,
@@ -291,6 +292,7 @@ fn start_llama_server(
     model_path: String,
     mmproj_path: String,
     llama_server_path: String,
+    backend: String,
 ) -> Result<u32, String> {
     let mut llama_server = state
         .llama_server
@@ -309,6 +311,11 @@ fn start_llama_server(
         llama_server.take();
     }
 
+    let gpu_layers = match backend.as_str() {
+        "cuda" | "rocm" | "metal" => "999",
+        _ => "0",
+    };
+
     let mut command = Command::new(&llama_server_path);
     command
         .arg("-m")
@@ -320,7 +327,11 @@ fn start_llama_server(
         .arg("--port")
         .arg("8080")
         .arg("-c")
-        .arg(DEFAULT_CTX_SIZE);
+        .arg(DEFAULT_CTX_SIZE)
+        .arg("--n-gpu-layers")
+        .arg(gpu_layers)
+        .arg("--parallel")
+        .arg(DEFAULT_N_PARALLEL);
 
     let child = command
         .spawn()
