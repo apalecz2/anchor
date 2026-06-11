@@ -22,6 +22,7 @@ export interface AssetManifestEntry {
     url_primary: string;
     url_fallback: string | null;
     extract_to_dir: string | null;
+    flatten: boolean;
 }
 
 export interface AssetProgress {

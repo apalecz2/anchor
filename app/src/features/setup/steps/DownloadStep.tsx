@@ -85,9 +85,10 @@ export default function DownloadStep({ config, onComplete, onError }: Props): Re
                             ...prev,
                             [asset.asset_id]: { ...prev[asset.asset_id], status: 'extracting' },
                         }));
-                        await invoke('extract_zip', {
+                        await invoke('extract_archive', {
                             archivePath: asset.dest_path,
                             destDir: asset.extract_to_dir,
+                            flatten: asset.flatten,
                         });
                     }
 

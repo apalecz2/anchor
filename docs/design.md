@@ -12,9 +12,9 @@ By prioritizing a local‑first architecture, the application guarantees strict 
 |----------------------|----------------------------------------|---------------------------------------------------------------------------|
 | Front-End            | React with TypeScript                  | Robust, type‑safe, highly interactive UI (essential for split‑screen/heatmap features).
 | Framework            | Tauri                                  | Lightweight cross‑platform desktop framework with lower overhead than Electron.
-| AI Model(s)          | Qwen3.5‑4b (w/ Vision), Gemma4:e4b     | Run via llama.cpp; handles vision tasks and OCR validation/cleanup locally.
-| OCR Engine           | Tesseract                              | Fallback/baseline text extraction, useful for low‑end systems and verification.
-| Image Preprocessing  | imageproc (Rust, pure)                 | Pre‑OCR binarization, denoising, and rule‑line removal; no system OpenCV dependency.
+| AI Model(s)          | Qwen3.5‑4b (w/ Vision)                 | Run via llama.cpp; handles vision tasks and OCR validation/cleanup locally. (A lightweight ~2B model for Low‑End Mode is planned but not yet integrated.)
+| OCR Engine           | Tesseract                              | Word‑level bounding boxes and confidence scores; binarizes internally.
+| Image Preprocessing  | image crate (Rust, pure)               | Pre‑OCR grayscale conversion and Lanczos upscaling; no system OpenCV dependency.
 
 ## 3. Core Features & Capabilities
 
@@ -71,11 +71,11 @@ Adaptive hardware modes:
    - If machine‑readable: skip OCR and proceed to AI formatting.
 
 2a. Image preprocessing (OCR path only)
-   - A binarized, denoised, line-removed copy of the image is produced in a separate file for Tesseract only. The original image is unchanged and is what the vision model and UI see.
-   - Pipeline (order is strict): optional 2× upscale (image-upload path only, when the narrow side < 1500 px) → grayscale → mild median denoise → adaptive local binarization → table rule-line removal.
+   - A grayscale (and, when small, upscaled) copy of the image is produced in a separate file for Tesseract only. The original image is unchanged and is what the vision model and UI see.
+   - Pipeline (order is strict): grayscale → 2× Lanczos upscale (image-upload path only, when the narrow side < 1500 px) → save. Binarization is left to Tesseract's internal Sauvola/Otsu thresholding, which handles thin antialiased glyphs far better than a hard threshold applied at native resolution. (An earlier explicit denoise → adaptive-binarize → rule-line-removal pipeline fragmented glyphs and left smudge artifacts; see `docs/issues.md` § OCR/Preprocessing for the post-mortem.)
+   - Tesseract runs with `psm 6` (single uniform block — best for tabular layouts) and no forced DPI, letting it estimate from the image.
    - **Coordinate alignment:** upscaling is the only geometric transform. When applied, every Tesseract bounding box returned after OCR is divided by the scale factor before being stored, so all box coordinates remain in the original image's coordinate space. PDF inputs are already high-res (2000 px); they are never upscaled, so their scale factor is always 1.0.
-   - **Rule-line removal:** long horizontal and vertical runs of black pixels (≥ 50% of the image dimension) are set to white after binarization. This is a tonal (pixel-value) transform — it does not move pixels and has no effect on coordinate alignment. It eliminates the `|` and `-` glyphs that Tesseract reads from table grid lines.
-   - Binarization uses adaptive local thresholding (block radius 12 px), which handles uneven lighting better than a global threshold.
+   - Stray `|` glyphs that Tesseract reads from table rule lines are stripped later, during context assembly (step 3), rather than removed from the image.
 
 3. Context assembly
    - Sanitize OCR words once: strip column-rule pipe glyphs, filter empties, assign stable integer IDs. This single array feeds both downstream formatters.
@@ -123,16 +123,18 @@ The app installer is intentionally small (< 20 MB). Platform‑specific binaries
 | `Qwen3.5‑4B‑Q4_K_M.gguf` | All | Cloudflare R2 | HuggingFace (Qwen/Qwen3‑4B‑GGUF) | ~2.7 GB |
 | `mmproj‑F16.gguf` | All | Cloudflare R2 | HuggingFace (compatible clip projector) | ~656 MB |
 
-Cloudflare R2 is the primary source for all assets because it offers zero egress fees and consistent global latency. For the two GGUF model files, HuggingFace is available as a fallback if the R2 bucket is unreachable. All downloaded files are SHA‑256 verified before use; a failed hash triggers a re‑download from the fallback URL.
+Cloudflare R2 is the primary source for all assets because it offers zero egress fees and consistent global latency. For the two GGUF model files, HuggingFace is available as a fallback if the R2 bucket is unreachable (the wizard retries a failed download once from the fallback URL).
 
 All asset URLs, expected SHA‑256 digests, and destination paths are hardcoded as constants in the Rust backend so they can be audited and updated as a unit when new model or binary versions are pinned.
 
+> **Implementation status:** the R2 bucket is not yet provisioned — `R2_BASE` and the HuggingFace fallback URLs in `lib.rs` are placeholders, and the SHA‑256 digests are not yet pinned (empty digests skip verification). The wizard cannot complete a real download until these are filled in. Automatic re‑download on hash failure is also not yet implemented; a hash mismatch currently surfaces an error and asks the user to re‑run setup.
+
 ### 7.2 Storage Layout
 
-Everything is stored under the Tauri AppData directory (`%APPDATA%\DataExtractionAI` on Windows, `~/Library/Application Support/DataExtractionAI` on macOS):
+Everything is stored under the Tauri AppData directory, which is derived from the app identifier `com.aidenpaleczny.app` (`%APPDATA%\com.aidenpaleczny.app` on Windows, `~/Library/Application Support/com.aidenpaleczny.app` on macOS):
 
 ```
-{AppData}/DataExtractionAI/
+{AppData}/com.aidenpaleczny.app/
   binaries/
     llama-server[.exe]
   tesseract/
@@ -166,10 +168,12 @@ Welcome → Hardware Detection → Configuration → Download → Verify → Com
 
 - **Welcome** — lists what will be downloaded and the estimated total size.
 - **Hardware Detection** — displays the detected GPU/RAM and the recommended backend. Skipped if detection is unambiguous and the user has not previously customised the setting.
-- **Configuration** — backend selector (CPU / CUDA / ROCm / Metal) and Tesseract language‑data tier (fast / standard / best). Defaults to the recommended values.
-- **Download** — sequential download for the large model files, parallel for smaller assets. Each asset shows its own progress bar. Downloads write to a `.part` temp file and rename to the final path only after hash verification passes.
-- **Verify** — SHA‑256 check per file. Failed files are re‑downloaded once from the fallback URL before the wizard reports an error.
-- **Complete** — writes all resolved paths (`modelPath`, `mmprojPath`, `llamaServerPath`) and the chosen `hardwareBackend` to persistent settings, then restarts the main view.
+- **Configuration** — backend selector (CPU / CUDA / ROCm / Metal). Defaults to the recommended value. (A Tesseract language‑data tier selector — fast / standard / best — is planned but not yet implemented; the wizard currently downloads a single English tier.)
+- **Download** — all assets download sequentially, smallest first so early progress is fast. Each asset shows its own progress bar. Downloads write to a `.part` temp file and rename to the final path once the stream completes; hash verification happens in the following step.
+- **Verify** — SHA‑256 check per file. A failed check currently reports an error and restarts the wizard (automatic re‑download from the fallback URL is planned).
+- **Complete** — writes all resolved paths (`modelPath`, `mmprojPath`, `llamaServerPath`) and the chosen `hardwareBackend` to persistent settings, then reloads the webview to enter the main app.
+
+> **Known gap:** the Rust startup hook that injects the Tesseract directory into `PATH` / `TESSDATA_PREFIX` runs once at process launch — before the wizard has downloaded anything on a true first run. The webview reload at the end of the wizard does not re-run that hook, so OCR is unavailable until the app process is fully restarted. See `CODE_REVIEW.md`.
 
 ### 7.5 Settings Schema Additions
 

@@ -4,7 +4,7 @@
 
 - [ ] Fix: editing OCR words breaks the highlight boxes shown when clicking a cell in the output table
 - [ ] Persist `SplitLayout` divider position across navigation -- currently resets to 50% every time (`SplitLayout.tsx`)
-- [ ] Restrict `ReactMarkdown` to a safe `allowedElements` allowlist -- currently renders arbitrary HTML/script from LLM output (`Session.tsx:228`)
+- [x] ~~Restrict `ReactMarkdown` to a safe `allowedElements` allowlist~~ -- obsolete: `ReactMarkdown` is no longer used anywhere (LLM output renders as plain text); the `react-markdown` / `remark-gfm` dependencies can be removed from `package.json`
 - [ ] Add LLM chat box to the output panel so the user can ask the model to fix column structure problems automatically
 
 ## Provenance / Matching

@@ -633,17 +633,39 @@ fn verify_file_hash(path: String, expected_sha256: String) -> Result<bool, Strin
 }
 
 // ---------------------------------------------------------------------------
-// extract_zip
+// extract_archive
+//
+// Handles both .zip (Windows/Linux llama.cpp + Tesseract) and .tar.gz (macOS
+// llama.cpp) so the unmodified upstream release archive can be dropped into R2.
+//
+// `flatten`: the macOS tarball nests binaries under e.g. `build/bin/`, while the
+// Windows zips are flat. When flatten is set, we extract to a staging dir, locate
+// the directory that contains `llama-server[.exe]`, and copy that directory's
+// files up into `dest_dir`. The result is identical for both layouts: the server
+// binary and its shared libraries land directly in `dest_dir`.
 // ---------------------------------------------------------------------------
 
-#[tauri::command]
-fn extract_zip(archive_path: String, dest_dir: String) -> Result<(), String> {
-    use zip::ZipArchive;
+fn is_targz(path: &str) -> bool {
+    let p = path.to_lowercase();
+    p.ends_with(".tar.gz") || p.ends_with(".tgz")
+}
 
-    let dest = Path::new(&dest_dir);
+/// Extract an archive into `dest`, preserving its internal directory structure.
+fn extract_preserving(archive_path: &str, dest: &Path) -> Result<(), String> {
     fs::create_dir_all(dest).map_err(|e| format!("mkdir failed: {e}"))?;
 
-    let file = fs::File::open(&archive_path)
+    if is_targz(archive_path) {
+        let file = fs::File::open(archive_path)
+            .map_err(|e| format!("open archive failed: {e}"))?;
+        let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
+        // unpack() preserves permissions (incl. the executable bit) and rejects
+        // entries that would escape `dest` via path traversal.
+        archive.unpack(dest).map_err(|e| format!("tar.gz extract failed: {e}"))?;
+        return Ok(());
+    }
+
+    use zip::ZipArchive;
+    let file = fs::File::open(archive_path)
         .map_err(|e| format!("open archive failed: {e}"))?;
     let mut archive = ZipArchive::new(file)
         .map_err(|e| format!("zip open failed: {e}"))?;
@@ -667,7 +689,71 @@ fn extract_zip(archive_path: String, dest_dir: String) -> Result<(), String> {
                 .map_err(|e| format!("create file failed: {e}"))?;
             std::io::copy(&mut entry, &mut out_file)
                 .map_err(|e| format!("extract failed: {e}"))?;
+
+            // Preserve the executable bit (llama-server in upstream zips).
+            #[cfg(unix)]
+            if let Some(mode) = entry.unix_mode() {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&out_path, fs::Permissions::from_mode(mode));
+            }
         }
+    }
+
+    Ok(())
+}
+
+/// Find the directory containing `llama-server` / `llama-server.exe` anywhere
+/// under `root`. The upstream archive keeps the server and its shared libraries
+/// side by side in this directory.
+fn find_server_dir(root: &Path) -> Option<PathBuf> {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(read_dir) = fs::read_dir(&dir) else { continue };
+        let mut subdirs = Vec::new();
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                subdirs.push(path);
+            } else if matches!(
+                path.file_name().and_then(|n| n.to_str()),
+                Some("llama-server") | Some("llama-server.exe")
+            ) {
+                return Some(dir);
+            }
+        }
+        stack.extend(subdirs);
+    }
+    None
+}
+
+#[tauri::command]
+fn extract_archive(archive_path: String, dest_dir: String, flatten: bool) -> Result<(), String> {
+    let dest = Path::new(&dest_dir);
+
+    if flatten {
+        // Stage alongside the archive, then lift the server's directory up.
+        let staging = PathBuf::from(format!("{archive_path}.extract"));
+        let _ = fs::remove_dir_all(&staging); // clear any stale staging dir
+        extract_preserving(&archive_path, &staging)?;
+
+        let server_dir = find_server_dir(&staging)
+            .ok_or_else(|| "llama-server not found inside archive".to_string())?;
+
+        fs::create_dir_all(dest).map_err(|e| format!("mkdir failed: {e}"))?;
+        for entry in fs::read_dir(&server_dir).map_err(|e| format!("read staging failed: {e}"))? {
+            let path = entry.map_err(|e| format!("read staging failed: {e}"))?.path();
+            if path.is_file() {
+                if let Some(name) = path.file_name() {
+                    // fs::copy preserves permission bits (and thus the exec bit) on unix.
+                    fs::copy(&path, dest.join(name))
+                        .map_err(|e| format!("copy failed: {e}"))?;
+                }
+            }
+        }
+
+        let _ = fs::remove_dir_all(&staging);
+    } else {
+        extract_preserving(&archive_path, dest)?;
     }
 
     fs::remove_file(&archive_path).ok();
@@ -708,28 +794,37 @@ pub struct AssetManifestEntry {
     pub sha256: String,
     pub url_primary: String,
     pub url_fallback: Option<String>,
-    /// If set, the downloaded file is a zip that should be extracted to this directory.
+    /// If set, the downloaded file is an archive (.zip or .tar.gz) extracted to this directory.
     pub extract_to_dir: Option<String>,
+    /// When extracting, collapse nested archive layouts (e.g. macOS `build/bin/`)
+    /// so the llama-server binary lands directly in `extract_to_dir`.
+    pub flatten: bool,
 }
 
-fn get_llama_server_spec(backend: &str) -> (&'static str, &'static str, u64, &'static str) {
-    // (filename, label, size_bytes, url_suffix)
+// llama.cpp release archives are uploaded to R2 as-is, under `binaries/`, with the
+// build tag and CUDA version stripped from the filename. Examples:
+//   llama-b9596-bin-win-cpu-x64.zip        → binaries/llama-bin-win-cpu-x64.zip
+//   llama-b9550-bin-win-cuda-13.3-x64.zip  → binaries/llama-bin-win-cuda-x64.zip
+//   cudart-llama-bin-win-cuda-13.3-x64.zip → binaries/cudart-llama-bin-win-cuda-x64.zip
+//   llama-b9596-bin-macos-arm64.tar.gz     → binaries/llama-bin-macos-arm64.tar.gz
+// Windows/Linux zips are flat; the macOS .tar.gz nests binaries under build/bin.
+// extract_archive(flatten=true) normalizes both so llama-server[.exe] and its
+// shared libraries end up directly in the `binaries` dir.
+fn get_llama_server_spec(backend: &str) -> (&'static str, u64, &'static str) {
+    // (label, approx_size_bytes, r2_object_key)
     if cfg!(target_os = "macos") {
-        return ("llama-server", "llama-server (Metal / Apple Silicon)", 46_000_000, "macos/llama-server");
+        // macOS releases are .tar.gz (nested under build/bin) — see extract_archive.
+        return ("llama.cpp server (Metal / Apple Silicon)", 50_000_000, "llama-bin-macos-arm64.tar.gz");
     }
     if cfg!(target_os = "windows") {
         return if backend == "cuda" {
-            ("llama-server.exe", "llama-server (CUDA / GPU)", 80_000_000, "windows/llama-server-cuda.exe")
+            ("llama.cpp server (CUDA / GPU)", 160_000_000, "llama-bin-win-cuda-x64.zip")
         } else {
-            ("llama-server.exe", "llama-server (CPU)", 46_000_000, "windows/llama-server-cpu.exe")
+            ("llama.cpp server (CPU)", 17_000_000, "llama-bin-win-cpu-x64.zip")
         };
     }
-    // Linux
-    match backend {
-        "cuda" => ("llama-server", "llama-server (CUDA / GPU)", 80_000_000, "linux/llama-server-cuda"),
-        "rocm" => ("llama-server", "llama-server (ROCm / AMD GPU)", 80_000_000, "linux/llama-server-rocm"),
-        _      => ("llama-server", "llama-server (CPU)", 46_000_000, "linux/llama-server-cpu"),
-    }
+    // Linux — upstream only publishes CPU (ubuntu) builds; GPU backends fall back to it.
+    ("llama.cpp server (CPU)", 25_000_000, "llama-bin-ubuntu-x64.zip")
 }
 
 fn get_tesseract_spec(data_dir: &Path) -> AssetManifestEntry {
@@ -750,24 +845,46 @@ fn get_tesseract_spec(data_dir: &Path) -> AssetManifestEntry {
         url_primary:    format!("{R2_BASE}/{url_suffix}"),
         url_fallback:   None,
         extract_to_dir: Some(data_dir.join("tesseract").to_string_lossy().into_owned()),
+        flatten:        false, // tessdata/ subdir must be preserved
     }
 }
 
 #[tauri::command]
 fn get_asset_manifest(app_handle: tauri::AppHandle, backend: String) -> Vec<AssetManifestEntry> {
     let data_dir = resolve_data_dir(&app_handle);
-    let (filename, label, size_bytes, url_suffix) = get_llama_server_spec(&backend);
+    let binaries_dir = data_dir.join("binaries").to_string_lossy().into_owned();
+    let (label, size_bytes, r2_key) = get_llama_server_spec(&backend);
+
+    // Keep the local archive's extension matching the upstream format so
+    // extract_archive can dispatch zip vs tar.gz.
+    let llama_archive = if is_targz(r2_key) { "llama.tar.gz" } else { "llama.zip" };
 
     let llama = AssetManifestEntry {
         asset_id:       "llama_server".into(),
         label:          label.into(),
         size_bytes,
-        dest_path:      data_dir.join("binaries").join(filename).to_string_lossy().into_owned(),
+        dest_path:      data_dir.join(llama_archive).to_string_lossy().into_owned(),
         sha256:         String::new(),
-        url_primary:    format!("{R2_BASE}/binaries/{url_suffix}"),
+        url_primary:    format!("{R2_BASE}/binaries/{r2_key}"),
         url_fallback:   None,
-        extract_to_dir: None,
+        extract_to_dir: Some(binaries_dir.clone()),
+        flatten:        true, // macOS nests under build/bin; Windows is flat (no-op)
     };
+
+    // Windows CUDA builds need the CUDA runtime DLLs, which llama.cpp ships as a
+    // separate zip. Its DLLs sit flat at the root, so a plain extract into the
+    // binaries dir places them alongside llama-server.exe.
+    let cudart = (cfg!(target_os = "windows") && backend == "cuda").then(|| AssetManifestEntry {
+        asset_id:       "cudart".into(),
+        label:          "CUDA runtime libraries".into(),
+        size_bytes:     400_000_000,
+        dest_path:      data_dir.join("cudart.zip").to_string_lossy().into_owned(),
+        sha256:         String::new(),
+        url_primary:    format!("{R2_BASE}/binaries/cudart-llama-bin-win-cuda-x64.zip"),
+        url_fallback:   None,
+        extract_to_dir: Some(binaries_dir),
+        flatten:        false,
+    });
 
     let tesseract = get_tesseract_spec(&data_dir);
 
@@ -780,6 +897,7 @@ fn get_asset_manifest(app_handle: tauri::AppHandle, backend: String) -> Vec<Asse
         url_primary:    format!("{R2_BASE}/models/mmproj-F16.gguf"),
         url_fallback:   Some(HF_MMPROJ_URL.into()),
         extract_to_dir: None,
+        flatten:        false,
     };
 
     let model = AssetManifestEntry {
@@ -791,10 +909,14 @@ fn get_asset_manifest(app_handle: tauri::AppHandle, backend: String) -> Vec<Asse
         url_primary:    format!("{R2_BASE}/models/Qwen3.5-4B-Q4_K_M.gguf"),
         url_fallback:   Some(HF_MODEL_URL.into()),
         extract_to_dir: None,
+        flatten:        false,
     };
 
     // Ordered smallest → largest so early progress is fast.
-    vec![llama, tesseract, mmproj, model]
+    let mut assets = vec![llama];
+    assets.extend(cudart);
+    assets.extend([tesseract, mmproj, model]);
+    assets
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -841,7 +963,7 @@ pub fn run() {
             // Setup wizard
             check_setup_complete, detect_hardware,
             download_file, verify_file_hash,
-            get_setup_paths, get_asset_manifest, extract_zip,
+            get_setup_paths, get_asset_manifest, extract_archive,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

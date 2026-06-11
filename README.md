@@ -9,9 +9,9 @@ A local-first desktop application for extracting structured data from non-machin
 3. **Extract** -- a local vision LLM (Qwen3.5-4B via llama.cpp) reads the image and spatially-arranged OCR text and produces a clean TSV table.
 4. **Provenance** -- a deterministic code pass walks the CSV cells and OCR words in parallel to link each output cell back to its source region in the document.
 5. **Verify** -- a split-pane UI shows the document on the left and the extracted table on the right; clicking any cell highlights its source on the document. Cells are color-coded by a confidence score derived from LLM token log-probabilities, Tesseract word confidence, and source agreement.
-6. **Export** -- save the verified output in your chosen format.
+6. **Export** -- save the verified table as CSV, HTML, Markdown, or plain text (or copy it as Markdown).
 
-All processing runs on-device. No network calls are made.
+All document processing runs on-device — no document data ever leaves the machine. The only network activity is the one-time first-run setup wizard, which downloads the OCR engine, llama-server binary, and GGUF model files (~3.5 GB total), plus loopback HTTP calls to the local llama-server on `127.0.0.1:8080`.
 
 ## Tech Stack
 
@@ -29,10 +29,8 @@ All processing runs on-device. No network calls are made.
 
 ```
 app/          # Main application -- React frontend + Tauri/Rust backend
-prototypes/   # Early feasibility experiments
+prototypes/   # Early feasibility experiments (Python OCR, grounding, Tauri test)
 docs/         # Design spec, architecture docs, issues, to-do
-tests/
-scripts/
 ```
 
 See [app/README.md](app/README.md) for build instructions and [docs/design.md](docs/design.md) for the full system design.
@@ -45,7 +43,7 @@ See [app/README.md](app/README.md) for the expected AppData layout and dev setup
 
 ## Quick Start
 
-Prerequisites: [Node.js](https://nodejs.org) and [Rust](https://rustup.rs) -- see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for platform-specific steps.
+Prerequisites: [Node.js](https://nodejs.org) and [Rust](https://rustup.rs) -- see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for platform-specific steps. PDF processing additionally requires the pdfium dynamic library (see [pdfium-render](https://github.com/ajrcarey/pdfium-render#binding-to-pdfium); it is not yet downloaded by the setup wizard).
 
 ```bash
 cd app
