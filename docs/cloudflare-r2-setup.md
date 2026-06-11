@@ -132,7 +132,7 @@ tesseract/
 └── *.dll                    ← Windows only: all DLLs Tesseract depends on
 ```
 
-The zip itself must preserve this directory structure. When extracted to `tesseract/`, every file must land at the correct relative path.
+The zip must contain this structure, but it **may be wrapped in any number of enclosing folders** (e.g. a top-level `tesseract-w64/` folder is fine). On extraction the backend locates the folder that actually contains the `tesseract[.exe]` binary and lifts its whole subtree — including `tessdata/` — into `tesseract/`. So you can zip the installer's output folder as-is without flattening it first.
 
 ### Windows
 

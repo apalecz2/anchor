@@ -59,7 +59,13 @@ export function useDocumentExtraction(sessionId: string | undefined, activePageI
                 setExtractionResult(rustResult);
 
             } catch (err) {
-                setError(err instanceof Error ? err.message : 'Failed to process document.');
+                // Tauri rejects invoke() with a plain string, not an Error, so don't
+                // discard it — surface the real backend message.
+                const message =
+                    err instanceof Error ? err.message
+                    : typeof err === 'string' ? err
+                    : 'Failed to process document.';
+                setError(message);
                 hasProcessed.current = false;
             } finally {
                 setIsLoading(false);

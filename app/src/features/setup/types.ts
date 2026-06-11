@@ -22,11 +22,12 @@ export interface AssetManifestEntry {
     url_primary: string;
     url_fallback: string | null;
     extract_to_dir: string | null;
-    flatten: boolean;
+    flatten_marker: string | null;
+    installed: boolean;
 }
 
 export interface AssetProgress {
-    status: 'pending' | 'downloading' | 'extracting' | 'done' | 'error';
+    status: 'pending' | 'downloading' | 'extracting' | 'done' | 'skipped' | 'error';
     bytes_received: number;
     total_bytes: number | null;
     error?: string;

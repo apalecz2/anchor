@@ -43,7 +43,11 @@ export default function DownloadStep({ config, onComplete, onError }: Props): Re
                 setManifest(entries);
 
                 const initialProgress: Record<string, AssetProgress> = {};
-                entries.forEach(e => { initialProgress[e.asset_id] = { status: 'pending', bytes_received: 0, total_bytes: e.size_bytes }; });
+                entries.forEach(e => {
+                    initialProgress[e.asset_id] = e.installed
+                        ? { status: 'skipped', bytes_received: e.size_bytes, total_bytes: e.size_bytes }
+                        : { status: 'pending', bytes_received: 0, total_bytes: e.size_bytes };
+                });
                 setProgress(initialProgress);
                 setStarted(true);
 
@@ -56,9 +60,10 @@ export default function DownloadStep({ config, onComplete, onError }: Props): Re
                     }));
                 });
 
-                // Download sequentially
+                // Download sequentially, skipping anything already on disk
                 for (let i = 0; i < entries.length; i++) {
                     const asset = entries[i];
+                    if (asset.installed) continue; // partial install — already present
                     setCurrentIdx(i);
                     setProgress(prev => ({ ...prev, [asset.asset_id]: { ...prev[asset.asset_id], status: 'downloading' } }));
 
@@ -88,7 +93,7 @@ export default function DownloadStep({ config, onComplete, onError }: Props): Re
                         await invoke('extract_archive', {
                             archivePath: asset.dest_path,
                             destDir: asset.extract_to_dir,
-                            flatten: asset.flatten,
+                            flattenMarker: asset.flatten_marker,
                         });
                     }
 
@@ -148,12 +153,15 @@ export default function DownloadStep({ config, onComplete, onError }: Props): Re
                                 {p?.status === 'done' && (
                                     <span className="font-body-sm text-body-sm text-on-surface-variant">{formatBytes(asset.size_bytes)}</span>
                                 )}
+                                {p?.status === 'skipped' && (
+                                    <span className="font-body-sm text-body-sm text-on-surface-variant">Already installed</span>
+                                )}
                             </div>
-                            {(p?.status === 'downloading' || p?.status === 'done') && (
+                            {(p?.status === 'downloading' || p?.status === 'done' || p?.status === 'skipped') && (
                                 <div className="h-1.5 rounded-full bg-surface-container-high overflow-hidden">
                                     <div
                                         className="h-1.5 rounded-full bg-primary transition-all duration-300"
-                                        style={{ width: `${p.status === 'done' ? 100 : pct}%` }}
+                                        style={{ width: `${p.status === 'downloading' ? pct : 100}%` }}
                                     />
                                 </div>
                             )}
@@ -166,7 +174,7 @@ export default function DownloadStep({ config, onComplete, onError }: Props): Re
 }
 
 function StatusIcon({ status, isActive }: { status: AssetProgress['status']; isActive: boolean }): React.ReactElement {
-    if (status === 'done') {
+    if (status === 'done' || status === 'skipped') {
         return (
             <span
                 className="material-symbols-outlined text-primary shrink-0"

@@ -164,6 +164,23 @@ async fn process_document(
         .unwrap_or("")
         .to_lowercase();
 
+    // Make sure the bundled Tesseract is on PATH / TESSDATA_PREFIX before OCR.
+    // The startup hook can't do this when Tesseract was installed by the wizard
+    // earlier in this same session, so do it here too (idempotent).
+    let data_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("failed to resolve app data directory: {error}"))?;
+    configure_tesseract_env(&data_dir);
+
+    let eng_traineddata = data_dir.join("tesseract").join("tessdata").join("eng.traineddata");
+    if !eng_traineddata.exists() {
+        return Err(format!(
+            "Tesseract English language data not found at {}. Re-run setup to reinstall Tesseract.",
+            eng_traineddata.display()
+        ));
+    }
+
     let session_dir = app_handle
         .path()
         .resolve("sessions", tauri::path::BaseDirectory::AppData)
@@ -354,8 +371,8 @@ fn stop_llama_server(state: tauri::State<'_, AppState>) -> Result<(), String> {
 // Setup / first-run dependency management
 // ─────────────────────────────────────────────────────────────────────────────
 
-// R2 bucket base URL — update this once the bucket is provisioned.
-const R2_BASE: &str = "https://r2.artifact-app.com";
+// R2 bucket base URL
+const R2_BASE: &str = "https://artifact-assets.aidenpaleczny.com";
 
 // HuggingFace fallback URLs — update with the exact repo/file paths.
 const HF_MODEL_URL: &str =
@@ -369,12 +386,74 @@ fn resolve_data_dir(app: &tauri::AppHandle) -> PathBuf {
         .expect("failed to resolve AppData directory")
 }
 
+const MODEL_FILENAME: &str = "Qwen3.5-4B-Q4_K_M.gguf";
+const MMPROJ_FILENAME: &str = "mmproj-F16.gguf";
+
 fn llama_exe_name() -> &'static str {
     if cfg!(target_os = "windows") { "llama-server.exe" } else { "llama-server" }
 }
 
 fn tesseract_exe_name() -> &'static str {
     if cfg!(target_os = "windows") { "tesseract.exe" } else { "tesseract" }
+}
+
+/// Prepend the bundled Tesseract dir to PATH and point TESSDATA_PREFIX at its
+/// `tessdata` folder so OCR (which invokes a bare `tesseract` binary) resolves
+/// the right executable and language data.
+///
+/// Idempotent. Must run before every OCR call rather than only at startup: when
+/// Tesseract is installed by the first-run wizard, the `tesseract` dir does not
+/// exist yet when the startup hook fires, so without this the env stays unset
+/// until the app is restarted and the first OCR silently fails.
+///
+/// Note: this Tesseract 5.x build requires TESSDATA_PREFIX to point *directly at*
+/// the tessdata folder — pointing it at the parent dir makes tesseract exit
+/// non-zero with no output.
+fn configure_tesseract_env(data_dir: &Path) {
+    let dir = data_dir.join("tesseract");
+    if !dir.exists() {
+        return;
+    }
+    let sep = if cfg!(target_os = "windows") { ";" } else { ":" };
+    let dir_str = dir.display().to_string();
+    let current = std::env::var("PATH").unwrap_or_default();
+    if !current.split(sep).any(|p| p == dir_str) {
+        std::env::set_var("PATH", format!("{dir_str}{sep}{current}"));
+    }
+    std::env::set_var("TESSDATA_PREFIX", dir.join("tessdata").display().to_string());
+}
+
+/// True if `dir` contains at least one entry whose filename starts with `prefix`.
+fn dir_contains_prefix(dir: &Path, prefix: &str) -> bool {
+    fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten().any(|e| {
+                e.file_name().to_str().is_some_and(|n| n.starts_with(prefix))
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Whether the final installed artifact(s) for a given manifest asset already
+/// exist in AppData. Drives partial-install detection: the wizard skips assets
+/// the user already has rather than re-downloading them. The checks target the
+/// *extracted* result (not the archive, which is deleted after extraction).
+fn asset_installed(asset_id: &str, data_dir: &Path) -> bool {
+    let binaries = data_dir.join("binaries");
+    let models = data_dir.join("models");
+    let tesseract = data_dir.join("tesseract");
+    match asset_id {
+        "llama_server" => binaries.join(llama_exe_name()).exists(),
+        // CUDA runtime DLLs are version-named (cudart64_12.dll / _13.dll) — match by prefix.
+        "cudart" => dir_contains_prefix(&binaries, "cudart64"),
+        "tesseract" => {
+            tesseract.join(tesseract_exe_name()).exists()
+                && tesseract.join("tessdata").join("eng.traineddata").exists()
+        }
+        "mmproj_gguf" => models.join(MMPROJ_FILENAME).exists(),
+        "model_gguf" => models.join(MODEL_FILENAME).exists(),
+        _ => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -384,14 +463,11 @@ fn tesseract_exe_name() -> &'static str {
 #[tauri::command]
 fn check_setup_complete(app_handle: tauri::AppHandle) -> bool {
     let data_dir = resolve_data_dir(&app_handle);
-    let required = [
-        data_dir.join("binaries").join(llama_exe_name()),
-        data_dir.join("tesseract").join(tesseract_exe_name()),
-        data_dir.join("tesseract").join("tessdata").join("eng.traineddata"),
-        data_dir.join("models").join("Qwen3.5-4B-Q4_K_M.gguf"),
-        data_dir.join("models").join("mmproj-F16.gguf"),
-    ];
-    required.iter().all(|p| p.exists())
+    // cudart is intentionally excluded: it's only needed for the CUDA backend,
+    // so requiring it would wrongly block CPU/Metal users.
+    ["llama_server", "tesseract", "mmproj_gguf", "model_gguf"]
+        .iter()
+        .all(|id| asset_installed(id, &data_dir))
 }
 
 // ---------------------------------------------------------------------------
@@ -638,11 +714,15 @@ fn verify_file_hash(path: String, expected_sha256: String) -> Result<bool, Strin
 // Handles both .zip (Windows/Linux llama.cpp + Tesseract) and .tar.gz (macOS
 // llama.cpp) so the unmodified upstream release archive can be dropped into R2.
 //
-// `flatten`: the macOS tarball nests binaries under e.g. `build/bin/`, while the
-// Windows zips are flat. When flatten is set, we extract to a staging dir, locate
-// the directory that contains `llama-server[.exe]`, and copy that directory's
-// files up into `dest_dir`. The result is identical for both layouts: the server
-// binary and its shared libraries land directly in `dest_dir`.
+// `flatten_marker`: upstream archives wrap their payload in an inconsistent
+// directory layout — the macOS llama tarball nests binaries under `build/bin/`,
+// and the Tesseract installer zip wraps everything in a `tesseract-w64/` folder,
+// while the Windows llama zips are flat. When a marker is given (e.g.
+// `llama-server` or `tesseract`), we extract to a staging dir, find the directory
+// that actually contains the marker binary at any depth, and copy that directory's
+// whole subtree into `dest_dir`. This normalizes every layout: the binary (and
+// any sibling dirs it needs, like Tesseract's `tessdata/`) land directly in
+// `dest_dir`, regardless of how many wrapper folders the archive added.
 // ---------------------------------------------------------------------------
 
 fn is_targz(path: &str) -> bool {
@@ -702,10 +782,11 @@ fn extract_preserving(archive_path: &str, dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Find the directory containing `llama-server` / `llama-server.exe` anywhere
-/// under `root`. The upstream archive keeps the server and its shared libraries
-/// side by side in this directory.
-fn find_server_dir(root: &Path) -> Option<PathBuf> {
+/// Find the directory that contains a file named `marker` or `marker.exe`
+/// anywhere under `root`. Used to locate the real payload root inside an archive
+/// that may have wrapped it in one or more enclosing folders.
+fn find_marker_dir(root: &Path, marker: &str) -> Option<PathBuf> {
+    let marker_exe = format!("{marker}.exe");
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let Ok(read_dir) = fs::read_dir(&dir) else { continue };
@@ -716,7 +797,7 @@ fn find_server_dir(root: &Path) -> Option<PathBuf> {
                 subdirs.push(path);
             } else if matches!(
                 path.file_name().and_then(|n| n.to_str()),
-                Some("llama-server") | Some("llama-server.exe")
+                Some(name) if name == marker || name == marker_exe
             ) {
                 return Some(dir);
             }
@@ -726,31 +807,42 @@ fn find_server_dir(root: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Recursively copy the contents of `src` into `dest`, preserving subdirectories
+/// (e.g. Tesseract's `tessdata/`). `fs::copy` carries permission bits on unix,
+/// so the executable bit on binaries is retained.
+fn copy_dir_contents(src: &Path, dest: &Path) -> Result<(), String> {
+    fs::create_dir_all(dest).map_err(|e| format!("mkdir failed: {e}"))?;
+    for entry in fs::read_dir(src).map_err(|e| format!("read dir failed: {e}"))? {
+        let path = entry.map_err(|e| format!("read dir failed: {e}"))?.path();
+        let Some(name) = path.file_name() else { continue };
+        let target = dest.join(name);
+        if path.is_dir() {
+            copy_dir_contents(&path, &target)?;
+        } else {
+            fs::copy(&path, &target).map_err(|e| format!("copy failed: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
-fn extract_archive(archive_path: String, dest_dir: String, flatten: bool) -> Result<(), String> {
+fn extract_archive(
+    archive_path: String,
+    dest_dir: String,
+    flatten_marker: Option<String>,
+) -> Result<(), String> {
     let dest = Path::new(&dest_dir);
 
-    if flatten {
-        // Stage alongside the archive, then lift the server's directory up.
+    if let Some(marker) = flatten_marker {
+        // Stage alongside the archive, locate the real payload root, then lift it up.
         let staging = PathBuf::from(format!("{archive_path}.extract"));
         let _ = fs::remove_dir_all(&staging); // clear any stale staging dir
         extract_preserving(&archive_path, &staging)?;
 
-        let server_dir = find_server_dir(&staging)
-            .ok_or_else(|| "llama-server not found inside archive".to_string())?;
+        let root = find_marker_dir(&staging, &marker)
+            .ok_or_else(|| format!("'{marker}' not found inside archive"))?;
 
-        fs::create_dir_all(dest).map_err(|e| format!("mkdir failed: {e}"))?;
-        for entry in fs::read_dir(&server_dir).map_err(|e| format!("read staging failed: {e}"))? {
-            let path = entry.map_err(|e| format!("read staging failed: {e}"))?.path();
-            if path.is_file() {
-                if let Some(name) = path.file_name() {
-                    // fs::copy preserves permission bits (and thus the exec bit) on unix.
-                    fs::copy(&path, dest.join(name))
-                        .map_err(|e| format!("copy failed: {e}"))?;
-                }
-            }
-        }
-
+        copy_dir_contents(&root, dest)?;
         let _ = fs::remove_dir_all(&staging);
     } else {
         extract_preserving(&archive_path, dest)?;
@@ -776,8 +868,8 @@ fn get_setup_paths(app_handle: tauri::AppHandle) -> SetupPaths {
     let d = resolve_data_dir(&app_handle);
     SetupPaths {
         llama_server: d.join("binaries").join(llama_exe_name()).to_string_lossy().into_owned(),
-        model_path:   d.join("models").join("Qwen3.5-4B-Q4_K_M.gguf").to_string_lossy().into_owned(),
-        mmproj_path:  d.join("models").join("mmproj-F16.gguf").to_string_lossy().into_owned(),
+        model_path:   d.join("models").join(MODEL_FILENAME).to_string_lossy().into_owned(),
+        mmproj_path:  d.join("models").join(MMPROJ_FILENAME).to_string_lossy().into_owned(),
     }
 }
 
@@ -796,9 +888,13 @@ pub struct AssetManifestEntry {
     pub url_fallback: Option<String>,
     /// If set, the downloaded file is an archive (.zip or .tar.gz) extracted to this directory.
     pub extract_to_dir: Option<String>,
-    /// When extracting, collapse nested archive layouts (e.g. macOS `build/bin/`)
-    /// so the llama-server binary lands directly in `extract_to_dir`.
-    pub flatten: bool,
+    /// When set, collapse any wrapper folders the archive added by locating the
+    /// directory containing this marker binary (e.g. `llama-server`, `tesseract`)
+    /// and copying its contents into `extract_to_dir`. When null, extract as-is.
+    pub flatten_marker: Option<String>,
+    /// True if this asset's final artifact already exists in AppData. The wizard
+    /// uses this to skip re-downloading assets the user already has.
+    pub installed: bool,
 }
 
 // llama.cpp release archives are uploaded to R2 as-is, under `binaries/`, with the
@@ -845,7 +941,10 @@ fn get_tesseract_spec(data_dir: &Path) -> AssetManifestEntry {
         url_primary:    format!("{R2_BASE}/{url_suffix}"),
         url_fallback:   None,
         extract_to_dir: Some(data_dir.join("tesseract").to_string_lossy().into_owned()),
-        flatten:        false, // tessdata/ subdir must be preserved
+        // Installer zips wrap files in a folder (e.g. tesseract-w64/); find the
+        // real root by the tesseract binary. tessdata/ subtree is preserved.
+        flatten_marker: Some("tesseract".into()),
+        installed:      false, // filled in by get_asset_manifest
     }
 }
 
@@ -868,7 +967,8 @@ fn get_asset_manifest(app_handle: tauri::AppHandle, backend: String) -> Vec<Asse
         url_primary:    format!("{R2_BASE}/binaries/{r2_key}"),
         url_fallback:   None,
         extract_to_dir: Some(binaries_dir.clone()),
-        flatten:        true, // macOS nests under build/bin; Windows is flat (no-op)
+        flatten_marker: Some("llama-server".into()), // macOS nests under build/bin; Windows is flat
+        installed:      false,
     };
 
     // Windows CUDA builds need the CUDA runtime DLLs, which llama.cpp ships as a
@@ -883,7 +983,8 @@ fn get_asset_manifest(app_handle: tauri::AppHandle, backend: String) -> Vec<Asse
         url_primary:    format!("{R2_BASE}/binaries/cudart-llama-bin-win-cuda-x64.zip"),
         url_fallback:   None,
         extract_to_dir: Some(binaries_dir),
-        flatten:        false,
+        flatten_marker: None, // DLLs sit flat at the zip root
+        installed:      false,
     });
 
     let tesseract = get_tesseract_spec(&data_dir);
@@ -892,30 +993,38 @@ fn get_asset_manifest(app_handle: tauri::AppHandle, backend: String) -> Vec<Asse
         asset_id:       "mmproj_gguf".into(),
         label:          "Vision projector (656 MB)".into(),
         size_bytes:     656_000_000,
-        dest_path:      data_dir.join("models").join("mmproj-F16.gguf").to_string_lossy().into_owned(),
+        dest_path:      data_dir.join("models").join(MMPROJ_FILENAME).to_string_lossy().into_owned(),
         sha256:         String::new(),
-        url_primary:    format!("{R2_BASE}/models/mmproj-F16.gguf"),
+        url_primary:    format!("{R2_BASE}/models/{MMPROJ_FILENAME}"),
         url_fallback:   Some(HF_MMPROJ_URL.into()),
         extract_to_dir: None,
-        flatten:        false,
+        flatten_marker: None,
+        installed:      false,
     };
 
     let model = AssetManifestEntry {
         asset_id:       "model_gguf".into(),
         label:          "Qwen language model (2.7 GB)".into(),
         size_bytes:     2_700_000_000,
-        dest_path:      data_dir.join("models").join("Qwen3.5-4B-Q4_K_M.gguf").to_string_lossy().into_owned(),
+        dest_path:      data_dir.join("models").join(MODEL_FILENAME).to_string_lossy().into_owned(),
         sha256:         String::new(),
-        url_primary:    format!("{R2_BASE}/models/Qwen3.5-4B-Q4_K_M.gguf"),
+        url_primary:    format!("{R2_BASE}/models/{MODEL_FILENAME}"),
         url_fallback:   Some(HF_MODEL_URL.into()),
         extract_to_dir: None,
-        flatten:        false,
+        flatten_marker: None,
+        installed:      false,
     };
 
     // Ordered smallest → largest so early progress is fast.
     let mut assets = vec![llama];
     assets.extend(cudart);
     assets.extend([tesseract, mmproj, model]);
+
+    // Flag assets whose final artifact is already on disk so the wizard can skip
+    // re-downloading them (partial-install detection).
+    for asset in &mut assets {
+        asset.installed = asset_installed(&asset.asset_id, &data_dir);
+    }
     assets
 }
 
@@ -925,18 +1034,10 @@ fn get_asset_manifest(app_handle: tauri::AppHandle, backend: String) -> Vec<Asse
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            let tesseract_dir = app
-                .path()
-                .app_data_dir()
-                .map(|d| d.join("tesseract"))
-                .ok()
-                .filter(|p| p.exists());
-
-            if let Some(dir) = tesseract_dir {
-                let current_path = std::env::var("PATH").unwrap_or_default();
-                let sep = if cfg!(target_os = "windows") { ";" } else { ":" };
-                std::env::set_var("PATH", format!("{}{}{}", dir.display(), sep, current_path));
-                std::env::set_var("TESSDATA_PREFIX", dir.join("tessdata").display().to_string());
+            // Best-effort at startup; process_document re-runs this so OCR also
+            // works when Tesseract is installed by the wizard mid-session.
+            if let Ok(data_dir) = app.path().app_data_dir() {
+                configure_tesseract_env(&data_dir);
             }
             Ok(())
         })
