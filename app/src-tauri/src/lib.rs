@@ -1037,30 +1037,40 @@ pub struct AssetManifestEntry {
 // Windows/Linux zips are flat; the macOS .tar.gz nests binaries under build/bin.
 // extract_archive(flatten=true) normalizes both so llama-server[.exe] and its
 // shared libraries end up directly in the `binaries` dir.
-fn get_llama_server_spec(backend: &str) -> (&'static str, u64, &'static str) {
-    // (label, approx_size_bytes, r2_object_key)
+fn get_llama_server_spec(backend: &str) -> (&'static str, u64, &'static str, &'static str) {
+    // (label, approx_size_bytes, r2_object_key, sha256_of_archive)
+    // The hash pins the downloaded archive at dest_path (pre-extraction). Empty =
+    // not yet uploaded to R2, so verify_file_hash skips it.
     if cfg!(target_os = "macos") {
         // macOS releases are .tar.gz (nested under build/bin) — see extract_archive.
-        return ("llama.cpp server (Metal / Apple Silicon)", 50_000_000, "llama-bin-macos-arm64.tar.gz");
+        return ("llama.cpp server (Metal / Apple Silicon)", 50_000_000, "llama-bin-macos-arm64.tar.gz",
+            "b77565f38c8cad9b0132dd4dbca54e201e8fb5b654d57780b87e0e05da25fafe");
     }
     if cfg!(target_os = "windows") {
         return if backend == "cuda" {
-            ("llama.cpp server (CUDA / GPU)", 160_000_000, "llama-bin-win-cuda-x64.zip")
+            ("llama.cpp server (CUDA / GPU)", 160_000_000, "llama-bin-win-cuda-x64.zip",
+                "4be0993b63ff501e3aa23e7f35e16e03a8b44404462792994cd66ce98915fa7e")
         } else {
-            ("llama.cpp server (CPU)", 17_000_000, "llama-bin-win-cpu-x64.zip")
+            ("llama.cpp server (CPU)", 17_000_000, "llama-bin-win-cpu-x64.zip",
+                "d6af2cdf070fe3222c1ffc0cf9665d1d395aff32b985a29d8dc2e3ae1398d780")
         };
     }
     // Linux — upstream only publishes CPU (ubuntu) builds; GPU backends fall back to it.
-    ("llama.cpp server (CPU)", 25_000_000, "llama-bin-ubuntu-x64.zip")
+    // Not yet uploaded to R2 — leave the hash empty until it is.
+    ("llama.cpp server (CPU)", 25_000_000, "llama-bin-ubuntu-x64.zip", "")
 }
 
 fn get_tesseract_spec(data_dir: &Path) -> AssetManifestEntry {
-    let (label, size_bytes, url_suffix) = if cfg!(target_os = "windows") {
-        ("Tesseract OCR engine (90 MB)", 90_000_000u64, "windows/tesseract.zip")
+    // sha256 pins the downloaded tesseract.zip (pre-extraction). Empty = not yet
+    // uploaded to R2 (Linux), so verify_file_hash skips it.
+    let (label, size_bytes, url_suffix, sha256) = if cfg!(target_os = "windows") {
+        ("Tesseract OCR engine (90 MB)", 90_000_000u64, "windows/tesseract.zip",
+            "268ded1253c5697071915e0dcea6c32a278bf037d51d0602165d4502c113dd1a")
     } else if cfg!(target_os = "macos") {
-        ("Tesseract OCR engine (15 MB)", 15_000_000u64, "macos/tesseract.zip")
+        ("Tesseract OCR engine (15 MB)", 15_000_000u64, "macos/tesseract.zip",
+            "efe841cbccfa2f65664101546a93cc47a793dcf8b2313d47460ca234482430ab")
     } else {
-        ("Tesseract OCR engine (15 MB)", 15_000_000u64, "linux/tesseract.zip")
+        ("Tesseract OCR engine (15 MB)", 15_000_000u64, "linux/tesseract.zip", "")
     };
 
     AssetManifestEntry {
@@ -1068,7 +1078,7 @@ fn get_tesseract_spec(data_dir: &Path) -> AssetManifestEntry {
         label:          label.into(),
         size_bytes,
         dest_path:      data_dir.join("tesseract.zip").to_string_lossy().into_owned(),
-        sha256:         String::new(),
+        sha256:         sha256.into(),
         url_primary:    format!("{R2_BASE}/{url_suffix}"),
         url_fallback:   None,
         extract_to_dir: Some(data_dir.join("tesseract").to_string_lossy().into_owned()),
@@ -1083,7 +1093,7 @@ fn get_tesseract_spec(data_dir: &Path) -> AssetManifestEntry {
 fn get_asset_manifest(app_handle: tauri::AppHandle, backend: String) -> Vec<AssetManifestEntry> {
     let data_dir = resolve_data_dir(&app_handle);
     let binaries_dir = data_dir.join("binaries").to_string_lossy().into_owned();
-    let (label, size_bytes, r2_key) = get_llama_server_spec(&backend);
+    let (label, size_bytes, r2_key, llama_sha) = get_llama_server_spec(&backend);
 
     // Keep the local archive's extension matching the upstream format so
     // extract_archive can dispatch zip vs tar.gz.
@@ -1094,7 +1104,7 @@ fn get_asset_manifest(app_handle: tauri::AppHandle, backend: String) -> Vec<Asse
         label:          label.into(),
         size_bytes,
         dest_path:      data_dir.join(llama_archive).to_string_lossy().into_owned(),
-        sha256:         String::new(),
+        sha256:         llama_sha.into(),
         url_primary:    format!("{R2_BASE}/binaries/{r2_key}"),
         url_fallback:   None,
         extract_to_dir: Some(binaries_dir.clone()),
@@ -1125,7 +1135,7 @@ fn get_asset_manifest(app_handle: tauri::AppHandle, backend: String) -> Vec<Asse
         label:          "Vision projector (656 MB)".into(),
         size_bytes:     656_000_000,
         dest_path:      data_dir.join("models").join(MMPROJ_FILENAME).to_string_lossy().into_owned(),
-        sha256:         String::new(),
+        sha256:         "cd88edcf8d031894960bb0c9c5b9b7e1fea6ebee02b9f7ce925a00d12891f864".into(),
         url_primary:    format!("{R2_BASE}/models/{MMPROJ_FILENAME}"),
         url_fallback:   Some(HF_MMPROJ_URL.into()),
         extract_to_dir: None,
@@ -1138,7 +1148,7 @@ fn get_asset_manifest(app_handle: tauri::AppHandle, backend: String) -> Vec<Asse
         label:          "Qwen language model (2.7 GB)".into(),
         size_bytes:     2_700_000_000,
         dest_path:      data_dir.join("models").join(MODEL_FILENAME).to_string_lossy().into_owned(),
-        sha256:         String::new(),
+        sha256:         "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4".into(),
         url_primary:    format!("{R2_BASE}/models/{MODEL_FILENAME}"),
         url_fallback:   Some(HF_MODEL_URL.into()),
         extract_to_dir: None,
