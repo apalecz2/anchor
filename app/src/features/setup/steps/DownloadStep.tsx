@@ -75,6 +75,10 @@ export default function DownloadStep({ config, onComplete, onError }: Props): Re
                         });
                     } catch (primaryErr) {
                         if (asset.url_fallback) {
+                            // Primary exhausted its retries. The fallback is a different
+                            // origin, so discard the primary's partial bytes before
+                            // resuming — mixing two sources would corrupt the file.
+                            await invoke('clear_partial_download', { destPath: asset.dest_path });
                             await invoke('download_file', {
                                 url: asset.url_fallback,
                                 destPath: asset.dest_path,

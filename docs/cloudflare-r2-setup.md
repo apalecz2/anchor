@@ -153,17 +153,20 @@ Compress-Archive -Path tesseract.exe, *.dll, tessdata -DestinationPath tesseract
 
 ### macOS
 
-1. Install via Homebrew: `brew install tesseract`
-2. Find the binary: `which tesseract` (usually `/opt/homebrew/bin/tesseract` on Apple Silicon)
-3. Find tessdata: `brew --prefix tesseract`; tessdata is in `share/tessdata/`
-4. Create the zip:
+Use the bundled tool — do **not** just `cp $(which tesseract)`. The Homebrew binary
+dynamically links against `/opt/homebrew` dylibs (libtesseract, libleptonica, libwebp,
+libsharpyuv, …) that don't exist on a user's machine, so a bare copy dies at launch with
+`dyld: Library not loaded`. The tool bundles every dependency next to the binary, rewrites
+all load paths to `@loader_path`, ad-hoc re-signs (required on Apple Silicon), and lays out
+the exact `tesseract` + `tessdata/eng.traineddata` structure the app expects:
 
 ```bash
-mkdir -p tesseract_pkg/tessdata
-cp $(which tesseract) tesseract_pkg/tesseract
-cp $(brew --prefix tesseract)/share/tessdata/eng.traineddata tesseract_pkg/tessdata/
-cd tesseract_pkg && zip -r ../tesseract.zip .
+brew install tesseract
+tools/package-tesseract-macos.sh eng ./tesseract.zip
 ```
+
+It verifies the result is fully self-contained before writing the zip. To bundle a
+different language, pass its code (e.g. `deu`) — install it first with `brew install tesseract-lang`.
 
 ---
 
@@ -346,12 +349,12 @@ To reset the wizard during testing:
 
 ```powershell
 # Windows
-Remove-Item -Recurse "$env:APPDATA\com.aidenpaleczny.app" -Force
+Remove-Item -Recurse "$env:APPDATA\com.aidenpaleczny.dataextraction" -Force
 ```
 
 ```bash
 # macOS
-rm -rf ~/Library/Application\ Support/com.aidenpaleczny.app
+rm -rf ~/Library/Application\ Support/com.aidenpaleczny.dataextraction
 ```
 
 ---

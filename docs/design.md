@@ -131,10 +131,10 @@ All asset URLs, expected SHA‑256 digests, and destination paths are hardcoded 
 
 ### 7.2 Storage Layout
 
-Everything is stored under the Tauri AppData directory, which is derived from the app identifier `com.aidenpaleczny.app` (`%APPDATA%\com.aidenpaleczny.app` on Windows, `~/Library/Application Support/com.aidenpaleczny.app` on macOS):
+Everything is stored under the Tauri AppData directory, which is derived from the app identifier `com.aidenpaleczny.artifact` (`%APPDATA%\com.aidenpaleczny.artifact` on Windows, `~/Library/Application Support/com.aidenpaleczny.artifact` on macOS). The identifier deliberately does not end in `.app`: macOS Finder treats any directory whose name ends in `.app` as an application bundle/package, which made the data directory display as an opaque package rather than a folder.
 
 ```
-{AppData}/com.aidenpaleczny.app/
+{AppData}/com.aidenpaleczny.artifact/
   binaries/
     llama-server[.exe]
   tesseract/

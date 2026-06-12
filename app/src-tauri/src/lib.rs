@@ -181,6 +181,10 @@ async fn process_document(
         ));
     }
 
+    // Ensure the `tsv` output config exists even if the Tesseract package shipped
+    // without its configs/ dir — otherwise OCR silently returns plain text.
+    ensure_tesseract_tsv_config(&data_dir);
+
     let session_dir = app_handle
         .path()
         .resolve("sessions", tauri::path::BaseDirectory::AppData)
@@ -423,6 +427,27 @@ fn configure_tesseract_env(data_dir: &Path) {
     std::env::set_var("TESSDATA_PREFIX", dir.join("tessdata").display().to_string());
 }
 
+/// Guarantee the `tsv` output config exists.
+///
+/// rusty-tesseract requests TSV by passing the *config file name* `tsv` to the
+/// tesseract CLI; the engine resolves it at `<tessdata>/configs/tsv` (a one-line
+/// file: `tessedit_create_tsv 1`). Some Tesseract packages omit the `configs/`
+/// directory entirely — then tesseract logs "read_params_file: Can't open tsv"
+/// and silently falls back to plain-text output, which fails our TSV parser with
+/// "Could not parse invalid line". We depend on exactly this one config, so write
+/// it ourselves when missing rather than trusting every package to include it.
+/// Idempotent; safe to call before each OCR run.
+fn ensure_tesseract_tsv_config(data_dir: &Path) {
+    let configs_dir = data_dir.join("tesseract").join("tessdata").join("configs");
+    let tsv = configs_dir.join("tsv");
+    if tsv.exists() {
+        return;
+    }
+    if fs::create_dir_all(&configs_dir).is_ok() {
+        let _ = fs::write(&tsv, "tessedit_create_tsv 1\n");
+    }
+}
+
 /// True if `dir` contains at least one entry whose filename starts with `prefix`.
 fn dir_contains_prefix(dir: &Path, prefix: &str) -> bool {
     fs::read_dir(dir)
@@ -627,6 +652,40 @@ struct DownloadProgress {
     total_bytes: Option<u64>,
 }
 
+/// How many times to (re)connect for a single download before giving up and
+/// letting the caller fall back to a different URL. Each retry resumes from the
+/// bytes already on disk rather than restarting.
+const DOWNLOAD_MAX_ATTEMPTS: u32 = 5;
+
+/// Total object size from a 206 response's `Content-Range: bytes a-b/total`.
+/// Returns None if the header is missing or the total is unknown (`*`).
+fn parse_content_range_total(response: &reqwest::Response) -> Option<u64> {
+    response
+        .headers()
+        .get(reqwest::header::CONTENT_RANGE)?
+        .to_str()
+        .ok()?
+        .rsplit('/')
+        .next()?
+        .trim()
+        .parse::<u64>()
+        .ok()
+}
+
+/// Delete a leftover `.part` for `dest_path`. The frontend calls this before
+/// retrying a download from a *different* URL (primary → fallback), since the
+/// two sources are distinct origins and resuming one stream into the other's
+/// bytes would corrupt the file.
+#[tauri::command]
+fn clear_partial_download(dest_path: String) -> Result<(), String> {
+    let part_path = PathBuf::from(format!("{dest_path}.part"));
+    match fs::remove_file(&part_path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("failed to clear partial download: {e}")),
+    }
+}
+
 #[tauri::command]
 async fn download_file(
     app_handle: tauri::AppHandle,
@@ -648,36 +707,102 @@ async fn download_file(
         .build()
         .map_err(|e| format!("client build failed: {e}"))?;
 
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("request failed: {e}"))?;
+    let mut last_err = String::new();
 
-    if !response.status().is_success() {
-        return Err(format!("HTTP {} for {url}", response.status()));
+    // Reconnect-and-resume loop: a transient drop mid-stream (common on a single
+    // multi-GB GET) no longer fails the whole download — we resume from the bytes
+    // already in `.part` via an HTTP Range request. Only a genuine HTTP error
+    // (404/403/5xx) returns immediately so the caller can try the fallback URL.
+    for attempt in 1..=DOWNLOAD_MAX_ATTEMPTS {
+        let resume_from = fs::metadata(&part_path).map(|m| m.len()).unwrap_or(0);
+
+        let mut request = client.get(&url);
+        if resume_from > 0 {
+            request = request.header(reqwest::header::RANGE, format!("bytes={resume_from}-"));
+        }
+
+        let response = match request.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = format!("request failed: {e}");
+                tokio::time::sleep(std::time::Duration::from_secs(2 * attempt as u64)).await;
+                continue;
+            }
+        };
+
+        let status = response.status();
+
+        // The `.part` is already >= the full object — nothing left to fetch.
+        if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE && resume_from > 0 {
+            drop(response);
+            fs::rename(&part_path, &dest).map_err(|e| format!("rename failed: {e}"))?;
+            return Ok(());
+        }
+
+        if !status.is_success() {
+            // Origin-level error; retrying the same URL won't help. Surface it so
+            // the caller falls back to the alternate source.
+            return Err(format!("HTTP {status} for {url}"));
+        }
+
+        // 206 → server honored Range, append. 200 → it ignored Range (or we had
+        // nothing to resume), so (re)start from zero.
+        let resuming = status == reqwest::StatusCode::PARTIAL_CONTENT && resume_from > 0;
+
+        let total_bytes = if resuming {
+            parse_content_range_total(&response)
+                .or_else(|| response.content_length().map(|l| l + resume_from))
+        } else {
+            response.content_length()
+        };
+
+        let mut file = if resuming {
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&part_path)
+                .map_err(|e| format!("open .part for resume failed: {e}"))?
+        } else {
+            std::fs::File::create(&part_path)
+                .map_err(|e| format!("create .part file failed: {e}"))?
+        };
+
+        let mut bytes_received: u64 = if resuming { resume_from } else { 0 };
+        let mut stream = response;
+        let mut stream_failed = false;
+
+        loop {
+            match stream.chunk().await {
+                Ok(Some(chunk)) => {
+                    file.write_all(&chunk).map_err(|e| format!("write error: {e}"))?;
+                    bytes_received += chunk.len() as u64;
+                    let _ = app_handle.emit("setup:progress", DownloadProgress {
+                        asset_id: asset_id.clone(),
+                        bytes_received,
+                        total_bytes,
+                    });
+                }
+                Ok(None) => break, // stream finished cleanly
+                Err(e) => {
+                    last_err = format!("stream error: {e}");
+                    stream_failed = true;
+                    break;
+                }
+            }
+        }
+
+        drop(file);
+
+        if stream_failed {
+            // Bytes received so far are preserved in `.part`; back off and resume.
+            tokio::time::sleep(std::time::Duration::from_secs(2 * attempt as u64)).await;
+            continue;
+        }
+
+        fs::rename(&part_path, &dest).map_err(|e| format!("rename failed: {e}"))?;
+        return Ok(());
     }
 
-    let total_bytes = response.content_length();
-    let mut file = std::fs::File::create(&part_path)
-        .map_err(|e| format!("create .part file failed: {e}"))?;
-
-    let mut bytes_received: u64 = 0;
-    let mut stream = response;
-
-    while let Some(chunk) = stream.chunk().await.map_err(|e| format!("stream error: {e}"))? {
-        file.write_all(&chunk).map_err(|e| format!("write error: {e}"))?;
-        bytes_received += chunk.len() as u64;
-        let _ = app_handle.emit("setup:progress", DownloadProgress {
-            asset_id: asset_id.clone(),
-            bytes_received,
-            total_bytes,
-        });
-    }
-
-    drop(file);
-    fs::rename(&part_path, &dest).map_err(|e| format!("rename failed: {e}"))?;
-    Ok(())
+    Err(format!("download failed after {DOWNLOAD_MAX_ATTEMPTS} attempts: {last_err}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -819,6 +944,12 @@ fn copy_dir_contents(src: &Path, dest: &Path) -> Result<(), String> {
         if path.is_dir() {
             copy_dir_contents(&path, &target)?;
         } else {
+            // Remove any existing target first. Release binaries (e.g. Tesseract)
+            // ship as mode 0o555 — no owner write bit — so fs::copy onto an existing
+            // copy from a previous run fails to truncate it with EACCES
+            // ("Permission denied, os error 13"). Deleting first makes re-extraction
+            // idempotent regardless of the source file's permissions.
+            let _ = fs::remove_file(&target);
             fs::copy(&path, &target).map_err(|e| format!("copy failed: {e}"))?;
         }
     }
@@ -1063,7 +1194,7 @@ pub fn run() {
             resolve_llama_server_path, start_llama_server, stop_llama_server,
             // Setup wizard
             check_setup_complete, detect_hardware,
-            download_file, verify_file_hash,
+            download_file, clear_partial_download, verify_file_hash,
             get_setup_paths, get_asset_manifest, extract_archive,
         ])
         .run(tauri::generate_context!())
