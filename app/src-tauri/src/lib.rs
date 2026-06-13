@@ -201,10 +201,19 @@ async fn process_document(
     let mut pages: Vec<DocumentPageResult> = Vec::new();
 
     if extension == "pdf" {
-        let pdfium = Pdfium::new(
-            Pdfium::bind_to_system_library()
-                .map_err(|error| format!("failed to bind to pdfium: {error}"))?,
-        );
+        // pdfium is installed by the setup wizard into the binaries dir. Bind to that
+        // explicit path; fall back to a system-wide install for dev machines that have
+        // one. A missing library is a setup problem, so the error points there.
+        let pdfium_lib = Pdfium::pdfium_platform_library_name_at_path(&data_dir.join("binaries"));
+        let bindings = Pdfium::bind_to_library(&pdfium_lib)
+            .or_else(|_| Pdfium::bind_to_system_library())
+            .map_err(|error| {
+                format!(
+                    "failed to load pdfium from {} or a system library ({error}). Re-run setup to reinstall pdfium.",
+                    pdfium_lib.display()
+                )
+            })?;
+        let pdfium = Pdfium::new(bindings);
 
         let document = pdfium
             .load_pdf_from_file(source_path, None)
@@ -401,6 +410,13 @@ fn tesseract_exe_name() -> &'static str {
     if cfg!(target_os = "windows") { "tesseract.exe" } else { "tesseract" }
 }
 
+/// Platform shared-library filename for pdfium (pdfium.dll / libpdfium.dylib /
+/// libpdfium.so). Used both as the installed-artifact check and as the archive
+/// flatten marker so the library lands flat in `binaries/`.
+fn pdfium_lib_name() -> String {
+    Pdfium::pdfium_platform_library_name().to_string_lossy().into_owned()
+}
+
 /// Prepend the bundled Tesseract dir to PATH and point TESSDATA_PREFIX at its
 /// `tessdata` folder so OCR (which invokes a bare `tesseract` binary) resolves
 /// the right executable and language data.
@@ -469,6 +485,8 @@ fn asset_installed(asset_id: &str, data_dir: &Path) -> bool {
     let tesseract = data_dir.join("tesseract");
     match asset_id {
         "llama_server" => binaries.join(llama_exe_name()).exists(),
+        // pdfium ships its shared library (pdfium.dll / libpdfium.dylib / .so) flat in binaries/.
+        "pdfium" => binaries.join(pdfium_lib_name()).exists(),
         // CUDA runtime DLLs are version-named (cudart64_12.dll / _13.dll) — match by prefix.
         "cudart" => dir_contains_prefix(&binaries, "cudart64"),
         "tesseract" => {
@@ -490,7 +508,7 @@ fn check_setup_complete(app_handle: tauri::AppHandle) -> bool {
     let data_dir = resolve_data_dir(&app_handle);
     // cudart is intentionally excluded: it's only needed for the CUDA backend,
     // so requiring it would wrongly block CPU/Metal users.
-    ["llama_server", "tesseract", "mmproj_gguf", "model_gguf"]
+    ["llama_server", "pdfium", "tesseract", "mmproj_gguf", "model_gguf"]
         .iter()
         .all(|id| asset_installed(id, &data_dir))
 }
@@ -813,9 +831,18 @@ async fn download_file(
 fn verify_file_hash(path: String, expected_sha256: String) -> Result<bool, String> {
     use sha2::{Digest, Sha256};
 
-    // Empty hash = not yet pinned, skip verification.
+    // An empty expected hash means the asset hasn't been pinned yet. Running an
+    // unverified binary in a shipped build is unacceptable (C1), so fail closed in
+    // release. Debug builds skip with a warning so development against not-yet-pinned
+    // R2 objects isn't blocked.
     if expected_sha256.is_empty() {
-        return Ok(true);
+        if cfg!(debug_assertions) {
+            eprintln!("WARNING: no pinned sha256 for {path}; skipping verification (debug build only)");
+            return Ok(true);
+        }
+        return Err(format!(
+            "no pinned sha256 for {path}; refusing to accept an unverified asset in a release build"
+        ));
     }
 
     let mut file = std::fs::File::open(&path)
@@ -1089,6 +1116,35 @@ fn get_tesseract_spec(data_dir: &Path) -> AssetManifestEntry {
     }
 }
 
+fn get_pdfium_spec(data_dir: &Path) -> AssetManifestEntry {
+    // pdfium prebuilt binaries (bblanchon/pdfium-binaries), repacked into R2. Each
+    // .tgz wraps the shared library under bin/ (Windows) or lib/ (macOS/Linux); the
+    // flatten marker (the platform library filename) lifts it flat into binaries/.
+    // sha256 empty = not yet uploaded to R2; must be pinned before a release build
+    // (verify_file_hash fails closed on an empty hash in release).
+    let (size_bytes, url_suffix, sha256) = if cfg!(target_os = "windows") {
+        (5_000_000u64, "binaries/pdfium-win-x64.tgz", "")
+    } else if cfg!(target_os = "macos") {
+        (4_000_000u64, "binaries/pdfium-mac-arm64.tgz", "")
+    } else {
+        (4_000_000u64, "binaries/pdfium-linux-x64.tgz", "")
+    };
+
+    AssetManifestEntry {
+        asset_id:       "pdfium".into(),
+        label:          "PDF rendering engine (pdfium)".into(),
+        size_bytes,
+        dest_path:      data_dir.join("pdfium.tgz").to_string_lossy().into_owned(),
+        sha256:         sha256.into(),
+        url_primary:    format!("{R2_BASE}/{url_suffix}"),
+        url_fallback:   None,
+        extract_to_dir: Some(data_dir.join("binaries").to_string_lossy().into_owned()),
+        // .tgz nests the library under bin/ or lib/; flatten by the library filename.
+        flatten_marker: Some(pdfium_lib_name()),
+        installed:      false,
+    }
+}
+
 #[tauri::command]
 fn get_asset_manifest(app_handle: tauri::AppHandle, backend: String) -> Vec<AssetManifestEntry> {
     let data_dir = resolve_data_dir(&app_handle);
@@ -1128,6 +1184,7 @@ fn get_asset_manifest(app_handle: tauri::AppHandle, backend: String) -> Vec<Asse
         installed:      false,
     });
 
+    let pdfium = get_pdfium_spec(&data_dir);
     let tesseract = get_tesseract_spec(&data_dir);
 
     let mmproj = AssetManifestEntry {
@@ -1159,7 +1216,7 @@ fn get_asset_manifest(app_handle: tauri::AppHandle, backend: String) -> Vec<Asse
     // Ordered smallest → largest so early progress is fast.
     let mut assets = vec![llama];
     assets.extend(cudart);
-    assets.extend([tesseract, mmproj, model]);
+    assets.extend([pdfium, tesseract, mmproj, model]);
 
     // Flag assets whose final artifact is already on disk so the wizard can skip
     // re-downloading them (partial-install detection).
@@ -1209,4 +1266,52 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Validates extract_archive's flatten logic against a real pdfium archive:
+    /// the upstream .tgz nests the shared library under bin/ (Windows) or lib/
+    /// (macOS/Linux), and the flatten marker must lift it flat into the dest dir
+    /// without dragging the wrapper folders (include/, etc.) along.
+    ///
+    /// Skipped unless PDFIUM_TGZ points at a downloaded pdfium archive, so a plain
+    /// `cargo test` stays green without the asset. To run it:
+    ///   PowerShell: $env:PDFIUM_TGZ="C:\path\to\pdfium-win-x64.tgz"
+    ///              cargo test extract_pdfium_flattens_library -- --nocapture
+    #[test]
+    fn extract_pdfium_flattens_library() {
+        let Ok(src) = std::env::var("PDFIUM_TGZ") else {
+            eprintln!("PDFIUM_TGZ not set — skipping pdfium extract test");
+            return;
+        };
+
+        // extract_archive deletes the archive on success, so operate on a copy.
+        let work = std::env::temp_dir().join(format!("pdfium_extract_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&work);
+        fs::create_dir_all(&work).expect("create work dir");
+        let archive = work.join("pdfium.tgz");
+        fs::copy(&src, &archive).expect("copy archive into work dir");
+
+        let dest = work.join("binaries");
+        let lib = pdfium_lib_name();
+
+        extract_archive(
+            archive.to_string_lossy().into_owned(),
+            dest.to_string_lossy().into_owned(),
+            Some(lib.clone()),
+        )
+        .expect("extract_archive failed");
+
+        // The library must land flat in dest…
+        assert!(dest.join(&lib).exists(), "{lib} did not land flat in {}", dest.display());
+        // …with the wrapper dirs collapsed away (only the marker dir's contents copied).
+        assert!(!dest.join("include").exists(), "wrapper dir 'include' leaked into dest");
+        // asset_installed must now agree the asset is present.
+        assert!(asset_installed("pdfium", &work), "asset_installed(pdfium) should be true");
+
+        let _ = fs::remove_dir_all(&work);
+    }
 }
