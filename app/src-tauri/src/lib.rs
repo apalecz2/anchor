@@ -201,9 +201,20 @@ async fn process_document(
     let mut pages: Vec<DocumentPageResult> = Vec::new();
 
     if extension == "pdf" {
+        // Load the PDFium library the wizard downloaded into AppData rather than a
+        // system copy — neither Windows nor macOS ships one. bind_to_library takes
+        // the full path to the shared library, so it resolves regardless of the
+        // process's library search path.
+        let pdfium_lib = data_dir.join("binaries").join(pdfium_lib_name());
+        if !pdfium_lib.exists() {
+            return Err(format!(
+                "PDFium library not found at {}. Re-run setup to reinstall it.",
+                pdfium_lib.display()
+            ));
+        }
         let pdfium = Pdfium::new(
-            Pdfium::bind_to_system_library()
-                .map_err(|error| format!("failed to bind to pdfium: {error}"))?,
+            Pdfium::bind_to_library(&pdfium_lib)
+                .map_err(|error| format!("failed to bind to pdfium at {}: {error}", pdfium_lib.display()))?,
         );
 
         let document = pdfium
@@ -401,6 +412,36 @@ fn tesseract_exe_name() -> &'static str {
     if cfg!(target_os = "windows") { "tesseract.exe" } else { "tesseract" }
 }
 
+/// Filename of the PDFium shared library once extracted into the binaries dir.
+/// Also used as the archive's flatten marker, since the library file is what we
+/// lift out of the archive's wrapper folder.
+fn pdfium_lib_name() -> &'static str {
+    if cfg!(target_os = "windows") { "pdfium.dll" } else { "libpdfium.dylib" }
+}
+
+/// (r2_object_key, sha256_of_archive, approx_size_bytes) for the current
+/// platform's prebuilt PDFium, or None on platforms we don't ship one for.
+/// pdfium-render binds to a system pdfium at runtime; neither Windows nor macOS
+/// has one, so we provide the upstream build. The Windows archive nests the lib
+/// under bin/, the macOS one under lib/ — flatten_marker normalizes both.
+fn pdfium_spec() -> Option<(&'static str, &'static str, u64)> {
+    if cfg!(target_os = "windows") {
+        return Some((
+            "pdfium-win-x64.tgz",
+            "b904e3898f952984fb744e0c8eb36512b5ee527124796108ed419a5b4da3c6d9",
+            3_600_000,
+        ));
+    }
+    if cfg!(target_os = "macos") {
+        return Some((
+            "pdfium-mac-arm64.tgz",
+            "52e94ca5aa8847934330daf3f8150c190682c5ca93831468794f8b90d4392e40",
+            3_400_000,
+        ));
+    }
+    None
+}
+
 /// Prepend the bundled Tesseract dir to PATH and point TESSDATA_PREFIX at its
 /// `tessdata` folder so OCR (which invokes a bare `tesseract` binary) resolves
 /// the right executable and language data.
@@ -471,7 +512,7 @@ fn asset_installed(asset_id: &str, data_dir: &Path) -> bool {
         "llama_server" => binaries.join(llama_exe_name()).exists(),
         // CUDA runtime DLLs are version-named (cudart64_12.dll / _13.dll) — match by prefix.
         "cudart" => dir_contains_prefix(&binaries, "cudart64"),
-        "pdfium" => binaries.join("pdfium.dll").exists(),
+        "pdfium" => binaries.join(pdfium_lib_name()).exists(),
         "tesseract" => {
             tesseract.join(tesseract_exe_name()).exists()
                 && tesseract.join("tessdata").join("eng.traineddata").exists()
@@ -491,9 +532,14 @@ fn check_setup_complete(app_handle: tauri::AppHandle) -> bool {
     let data_dir = resolve_data_dir(&app_handle);
     // cudart is intentionally excluded: it's only needed for the CUDA backend,
     // so requiring it would wrongly block CPU/Metal users.
-    ["llama_server", "tesseract", "mmproj_gguf", "model_gguf"]
-        .iter()
-        .all(|id| asset_installed(id, &data_dir))
+    let mut required = vec!["llama_server", "tesseract", "mmproj_gguf", "model_gguf"];
+    // pdfium is required wherever we ship one (Windows + macOS) — PDF rendering
+    // depends on it. Gated on pdfium_spec so platforms without an asset (Linux)
+    // aren't blocked on a file that never downloads.
+    if pdfium_spec().is_some() {
+        required.push("pdfium");
+    }
+    required.iter().all(|id| asset_installed(id, &data_dir))
 }
 
 // ---------------------------------------------------------------------------
@@ -1129,20 +1175,19 @@ fn get_asset_manifest(app_handle: tauri::AppHandle, backend: String) -> Vec<Asse
         installed:      false,
     });
 
-    // PDFium renderer. pdfium-render binds to a system pdfium at runtime; on
-    // Windows there's no system copy, so we ship the upstream win-x64 build. The
-    // .tgz nests the library under bin/, so flatten by the pdfium.dll marker to
-    // drop it directly into the binaries dir.
-    let pdfium = cfg!(target_os = "windows").then(|| AssetManifestEntry {
+    // PDFium renderer (Windows + macOS; see pdfium_spec). The library nests under
+    // a wrapper folder in the archive, so flatten by its filename to drop it
+    // directly into the binaries dir.
+    let pdfium = pdfium_spec().map(|(key, sha, size)| AssetManifestEntry {
         asset_id:       "pdfium".into(),
         label:          "PDFium renderer".into(),
-        size_bytes:     3_600_000,
+        size_bytes:     size,
         dest_path:      data_dir.join("pdfium.tgz").to_string_lossy().into_owned(),
-        sha256:         "b904e3898f952984fb744e0c8eb36512b5ee527124796108ed419a5b4da3c6d9".into(),
-        url_primary:    format!("{R2_BASE}/binaries/pdfium-win-x64.tgz"),
+        sha256:         sha.into(),
+        url_primary:    format!("{R2_BASE}/binaries/{key}"),
         url_fallback:   None,
         extract_to_dir: Some(binaries_dir),
-        flatten_marker: Some("pdfium.dll".into()), // payload is bin/pdfium.dll
+        flatten_marker: Some(pdfium_lib_name().into()),
         installed:      false,
     });
 
