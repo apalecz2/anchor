@@ -860,9 +860,18 @@ async fn download_file(
 fn verify_file_hash(path: String, expected_sha256: String) -> Result<bool, String> {
     use sha2::{Digest, Sha256};
 
-    // Empty hash = not yet pinned, skip verification.
+    // An empty expected hash means the asset hasn't been pinned yet. Running an
+    // unverified binary in a shipped build is unacceptable, so fail closed in
+    // release. Debug builds skip with a warning so development against not-yet-pinned
+    // R2 objects isn't blocked.
     if expected_sha256.is_empty() {
-        return Ok(true);
+        if cfg!(debug_assertions) {
+            eprintln!("WARNING: no pinned sha256 for {path}; skipping verification (debug build only)");
+            return Ok(true);
+        }
+        return Err(format!(
+            "no pinned sha256 for {path}; refusing to accept an unverified asset in a release build"
+        ));
     }
 
     let mut file = std::fs::File::open(&path)
@@ -1273,4 +1282,52 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Validates extract_archive's flatten logic against a real pdfium archive:
+    /// the upstream .tgz nests the shared library under bin/ (Windows) or lib/
+    /// (macOS), and the flatten marker must lift it flat into the dest dir without
+    /// dragging the wrapper folders (include/, etc.) along.
+    ///
+    /// Skipped unless PDFIUM_TGZ points at a downloaded pdfium archive, so a plain
+    /// `cargo test` stays green without the asset. To run it:
+    ///   PowerShell: $env:PDFIUM_TGZ="C:\path\to\pdfium-win-x64.tgz"
+    ///              cargo test extract_pdfium_flattens_library -- --nocapture
+    #[test]
+    fn extract_pdfium_flattens_library() {
+        let Ok(src) = std::env::var("PDFIUM_TGZ") else {
+            eprintln!("PDFIUM_TGZ not set — skipping pdfium extract test");
+            return;
+        };
+
+        // extract_archive deletes the archive on success, so operate on a copy.
+        let work = std::env::temp_dir().join(format!("pdfium_extract_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&work);
+        fs::create_dir_all(&work).expect("create work dir");
+        let archive = work.join("pdfium.tgz");
+        fs::copy(&src, &archive).expect("copy archive into work dir");
+
+        let dest = work.join("binaries");
+        let lib = pdfium_lib_name();
+
+        extract_archive(
+            archive.to_string_lossy().into_owned(),
+            dest.to_string_lossy().into_owned(),
+            Some(lib.to_string()),
+        )
+        .expect("extract_archive failed");
+
+        // The library must land flat in dest…
+        assert!(dest.join(lib).exists(), "{lib} did not land flat in {}", dest.display());
+        // …with the wrapper dirs collapsed away (only the marker dir's contents copied).
+        assert!(!dest.join("include").exists(), "wrapper dir 'include' leaked into dest");
+        // asset_installed must now agree the asset is present.
+        assert!(asset_installed("pdfium", &work), "asset_installed(pdfium) should be true");
+
+        let _ = fs::remove_dir_all(&work);
+    }
 }
