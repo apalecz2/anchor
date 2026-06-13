@@ -471,6 +471,7 @@ fn asset_installed(asset_id: &str, data_dir: &Path) -> bool {
         "llama_server" => binaries.join(llama_exe_name()).exists(),
         // CUDA runtime DLLs are version-named (cudart64_12.dll / _13.dll) — match by prefix.
         "cudart" => dir_contains_prefix(&binaries, "cudart64"),
+        "pdfium" => binaries.join("pdfium.dll").exists(),
         "tesseract" => {
             tesseract.join(tesseract_exe_name()).exists()
                 && tesseract.join("tessdata").join("eng.traineddata").exists()
@@ -1123,8 +1124,25 @@ fn get_asset_manifest(app_handle: tauri::AppHandle, backend: String) -> Vec<Asse
         sha256:         String::new(),
         url_primary:    format!("{R2_BASE}/binaries/cudart-llama-bin-win-cuda-x64.zip"),
         url_fallback:   None,
-        extract_to_dir: Some(binaries_dir),
+        extract_to_dir: Some(binaries_dir.clone()),
         flatten_marker: None, // DLLs sit flat at the zip root
+        installed:      false,
+    });
+
+    // PDFium renderer. pdfium-render binds to a system pdfium at runtime; on
+    // Windows there's no system copy, so we ship the upstream win-x64 build. The
+    // .tgz nests the library under bin/, so flatten by the pdfium.dll marker to
+    // drop it directly into the binaries dir.
+    let pdfium = cfg!(target_os = "windows").then(|| AssetManifestEntry {
+        asset_id:       "pdfium".into(),
+        label:          "PDFium renderer".into(),
+        size_bytes:     3_600_000,
+        dest_path:      data_dir.join("pdfium.tgz").to_string_lossy().into_owned(),
+        sha256:         "b904e3898f952984fb744e0c8eb36512b5ee527124796108ed419a5b4da3c6d9".into(),
+        url_primary:    format!("{R2_BASE}/binaries/pdfium-win-x64.tgz"),
+        url_fallback:   None,
+        extract_to_dir: Some(binaries_dir),
+        flatten_marker: Some("pdfium.dll".into()), // payload is bin/pdfium.dll
         installed:      false,
     });
 
@@ -1159,6 +1177,7 @@ fn get_asset_manifest(app_handle: tauri::AppHandle, backend: String) -> Vec<Asse
     // Ordered smallest → largest so early progress is fast.
     let mut assets = vec![llama];
     assets.extend(cudart);
+    assets.extend(pdfium);
     assets.extend([tesseract, mmproj, model]);
 
     // Flag assets whose final artifact is already on disk so the wizard can skip
