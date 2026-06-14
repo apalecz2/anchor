@@ -1,5 +1,7 @@
-export type SetupStep = 'welcome' | 'hardware' | 'config' | 'download' | 'verify' | 'complete';
+export type SetupStep = 'welcome' | 'config' | 'download' | 'verify' | 'complete';
+export type SetupMode = 'automatic' | 'custom';
 export type Backend = 'cpu' | 'cuda' | 'rocm' | 'metal';
+export type OS = 'windows' | 'macos' | 'linux';
 
 export interface HardwareInfo {
     gpu_name: string | null;
@@ -7,6 +9,8 @@ export interface HardwareInfo {
     vram_mb: number | null;
     ram_mb: number;
     recommended_backend: Backend;
+    os: OS;
+    available_backends: Backend[];
 }
 
 export interface SetupConfig {

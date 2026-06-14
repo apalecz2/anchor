@@ -15,19 +15,44 @@ pub struct HardwareInfo {
     pub vram_mb: Option<u64>,
     pub ram_mb: u64,
     pub recommended_backend: String,
+    /// Platform string ("windows" | "macos" | "linux") so the wizard can present
+    /// only the backends that actually ship an asset for this OS.
+    pub os: String,
+    /// Backends the user may choose in the custom installer on this platform,
+    /// independent of the detected GPU (the wizard warns about mismatches).
+    pub available_backends: Vec<String>,
 }
 
 #[tauri::command]
 pub fn detect_hardware() -> HardwareInfo {
     let (gpu_name, gpu_vendor, vram_mb, ram_mb) = query_hardware();
     let recommended_backend = recommend_backend(gpu_vendor.as_deref(), vram_mb);
-    HardwareInfo { gpu_name, gpu_vendor, vram_mb, ram_mb, recommended_backend }
+    HardwareInfo {
+        gpu_name,
+        gpu_vendor,
+        vram_mb,
+        ram_mb,
+        recommended_backend,
+        os: current_os().into(),
+        available_backends: available_backends(),
+    }
 }
+
+/// Minimum VRAM (MB) before an NVIDIA GPU is worth the CUDA build over CPU.
+const CUDA_MIN_VRAM_MB: u64 = 4096;
 
 fn recommend_backend(vendor: Option<&str>, vram_mb: Option<u64>) -> String {
     let v = match vendor { Some(s) => s, None => return "cpu".into() };
-    if v.contains("NVIDIA") && vram_mb.unwrap_or(0) >= 4096 {
-        return "cuda".into();
+    if v.contains("NVIDIA") {
+        // An NVIDIA GPU is present. Recommend CUDA unless we have a *reliable*
+        // VRAM reading below the threshold. VRAM of None means detection was
+        // unreliable (e.g. Win32_VideoController.AdapterRAM saturated near 4 GB
+        // and nvidia-smi was unavailable) — in that case assume the card is
+        // CUDA-capable rather than wrongly downgrading a capable GPU to CPU.
+        return match vram_mb {
+            Some(mb) if mb < CUDA_MIN_VRAM_MB => "cpu".into(),
+            _ => "cuda".into(),
+        };
     }
     if v.contains("AMD") {
         #[cfg(target_os = "linux")]
@@ -37,6 +62,42 @@ fn recommend_backend(vendor: Option<&str>, vram_mb: Option<u64>) -> String {
         return "metal".into();
     }
     "cpu".into()
+}
+
+fn current_os() -> &'static str {
+    if cfg!(target_os = "windows") { "windows" }
+    else if cfg!(target_os = "macos") { "macos" }
+    else { "linux" }
+}
+
+/// Backends with a downloadable asset on this platform, ordered best → fallback.
+/// macOS ships only the Metal (Apple Silicon) build; the CPU/GPU split is a
+/// Windows/Linux concern.
+fn available_backends() -> Vec<String> {
+    if cfg!(target_os = "macos") {
+        vec!["metal".into()]
+    } else if cfg!(target_os = "windows") {
+        vec!["cuda".into(), "cpu".into()]
+    } else {
+        vec!["cuda".into(), "rocm".into(), "cpu".into()]
+    }
+}
+
+/// Accurate total VRAM (MB) from nvidia-smi, which ships with the NVIDIA driver
+/// on Windows and Linux. Used to bypass Win32_VideoController.AdapterRAM's 4 GB
+/// uint32 saturation. Returns None if nvidia-smi is absent or unparseable.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn nvidia_smi_vram_mb() -> Option<u64> {
+    let out = Command::new("nvidia-smi")
+        .args(["--query-gpu=memory.total", "--format=csv,noheader,nounits"])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()?
+        .trim()
+        .parse::<u64>()
+        .ok()
 }
 
 fn extract_gpu_vendor(name: &str) -> &'static str {
@@ -70,8 +131,22 @@ fn query_hardware_windows() -> (Option<String>, Option<String>, Option<u64>, u64
     let gpu_json = run_powershell(ps_gpu).unwrap_or_default();
     let gpu_val: serde_json::Value = serde_json::from_str(gpu_json.trim()).unwrap_or_default();
     let gpu_name = gpu_val["Name"].as_str().map(String::from);
-    let vram_mb = gpu_val["VRAM"].as_u64().map(|b| b / (1024 * 1024));
     let gpu_vendor = gpu_name.as_deref().map(extract_gpu_vendor).map(String::from);
+
+    // Win32_VideoController.AdapterRAM is a uint32 and saturates near 4 GB, so a
+    // 6/8/12 GB card reports ~4095 MB — just under the CUDA threshold, which is
+    // why a clearly CUDA-capable machine was being recommended CPU. Discard any
+    // reading in that saturation band as unreliable…
+    let mut vram_mb = gpu_val["VRAM"]
+        .as_u64()
+        .filter(|&b| b < 4_000_000_000)
+        .map(|b| b / (1024 * 1024));
+    // …and, for NVIDIA, prefer nvidia-smi's accurate figure when it's installed.
+    if gpu_vendor.as_deref() == Some("NVIDIA") {
+        if let Some(v) = nvidia_smi_vram_mb() {
+            vram_mb = Some(v);
+        }
+    }
 
     let ram_mb = run_powershell(ps_ram)
         .and_then(|s| s.trim().parse::<u64>().ok())
@@ -147,5 +222,13 @@ fn query_hardware_linux() -> (Option<String>, Option<String>, Option<u64>, u64) 
         .map(|kb| kb / 1024)
         .unwrap_or(0);
 
-    (gpu_line, gpu_vendor, None, ram_mb)
+    // lspci doesn't report VRAM; query nvidia-smi for an accurate figure so the
+    // CUDA recommendation has real data to gate on.
+    let vram_mb = if gpu_vendor.as_deref() == Some("NVIDIA") {
+        nvidia_smi_vram_mb()
+    } else {
+        None
+    };
+
+    (gpu_line, gpu_vendor, vram_mb, ram_mb)
 }
