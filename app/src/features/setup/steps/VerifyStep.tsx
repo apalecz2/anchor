@@ -22,6 +22,17 @@ export default function VerifyStep({ manifest, onComplete, onError }: Props): Re
 
         const run = async () => {
             for (const asset of manifest) {
+                // Extracted archives are hash-verified in DownloadStep *before*
+                // extraction (extract_archive deletes the archive afterward), and
+                // already-installed assets have no archive left on disk — for both,
+                // the dest_path file is gone, so verifying it here would fail with
+                // "cannot find the file". Only the un-extracted GGUF model files
+                // still sit at dest_path and are checked here.
+                if (asset.installed || asset.extract_to_dir) {
+                    setStatuses(prev => ({ ...prev, [asset.asset_id]: 'ok' }));
+                    continue;
+                }
+
                 setStatuses(prev => ({ ...prev, [asset.asset_id]: 'checking' }));
                 try {
                     const ok = await invoke<boolean>('verify_file_hash', {

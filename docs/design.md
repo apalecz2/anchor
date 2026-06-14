@@ -120,14 +120,17 @@ The app installer is intentionally small (< 20 MB). Platform‑specific binaries
 | `llama-server` CPU build | All | Cloudflare R2 | llama.cpp GitHub releases | ~46 MB |
 | `llama-server` CUDA build | Windows / Linux | Cloudflare R2 | llama.cpp GitHub releases | ~80 MB |
 | `llama-server` Metal build | macOS (Apple Silicon) | Cloudflare R2 | llama.cpp GitHub releases | ~46 MB |
+| PDFium shared library | Windows / macOS | Cloudflare R2 | — | ~3.5 MB |
 | `Qwen3.5‑4B‑Q4_K_M.gguf` | All | Cloudflare R2 | HuggingFace (Qwen/Qwen3‑4B‑GGUF) | ~2.7 GB |
 | `mmproj‑F16.gguf` | All | Cloudflare R2 | HuggingFace (compatible clip projector) | ~656 MB |
 
 Cloudflare R2 is the primary source for all assets because it offers zero egress fees and consistent global latency. For the two GGUF model files, HuggingFace is available as a fallback if the R2 bucket is unreachable (the wizard retries a failed download once from the fallback URL).
 
+PDFium is required because `pdfium-render` binds to a pdfium shared library at runtime, and neither Windows nor macOS ships one. The wizard downloads the upstream prebuilt archive (the library nests under `bin/` on Windows and `lib/` on macOS; extraction flattens it directly into `binaries/`) and the backend binds to that explicit path.
+
 All asset URLs, expected SHA‑256 digests, and destination paths are hardcoded as constants in the Rust backend so they can be audited and updated as a unit when new model or binary versions are pinned.
 
-> **Implementation status:** the R2 bucket is not yet provisioned — `R2_BASE` and the HuggingFace fallback URLs in `lib.rs` are placeholders, and the SHA‑256 digests are not yet pinned (empty digests skip verification). The wizard cannot complete a real download until these are filled in. Automatic re‑download on hash failure is also not yet implemented; a hash mismatch currently surfaces an error and asks the user to re‑run setup.
+Note: Still outstanding: the HuggingFace fallback URLs are placeholders, and a few assets (cudart, the Linux llama-server build, and the non-Windows Tesseract builds) are not yet pinned or uploaded. Automatic re‑download on hash failure is also not yet implemented; a hash mismatch currently surfaces an error and asks the user to re‑run setup.
 
 ### 7.2 Storage Layout
 
@@ -137,6 +140,7 @@ Everything is stored under the Tauri AppData directory, which is derived from th
 {AppData}/com.aidenpaleczny.artifact/
   binaries/
     llama-server[.exe]
+    pdfium.dll / libpdfium.dylib    (Windows / macOS only)
   tesseract/
     tesseract[.exe]
     *.dll                    (Windows only)
@@ -172,8 +176,6 @@ Welcome → Hardware Detection → Configuration → Download → Verify → Com
 - **Download** — all assets download sequentially, smallest first so early progress is fast. Each asset shows its own progress bar. Downloads write to a `.part` temp file and rename to the final path once the stream completes; hash verification happens in the following step.
 - **Verify** — SHA‑256 check per file. A failed check currently reports an error and restarts the wizard (automatic re‑download from the fallback URL is planned).
 - **Complete** — writes all resolved paths (`modelPath`, `mmprojPath`, `llamaServerPath`) and the chosen `hardwareBackend` to persistent settings, then reloads the webview to enter the main app.
-
-> **Known gap:** the Rust startup hook that injects the Tesseract directory into `PATH` / `TESSDATA_PREFIX` runs once at process launch — before the wizard has downloaded anything on a true first run. The webview reload at the end of the wizard does not re-run that hook, so OCR is unavailable until the app process is fully restarted. See `CODE_REVIEW.md`.
 
 ### 7.5 Settings Schema Additions
 

@@ -22,7 +22,7 @@ All document processing runs on-device — no document data ever leaves the mach
 | Styling | Tailwind CSS 4 |
 | Database | SQLite (tauri-plugin-sql) |
 | OCR | Tesseract (not in git -- see Setup) |
-| PDF rendering | pdfium-render (Rust) |
+| PDF rendering | pdfium-render (Rust); the pdfium library is downloaded by the setup wizard (not in git -- see Setup) |
 | LLM | Qwen3.5-4B-Q4_K_M via llama.cpp (not in git -- see Setup) |
 
 ## Repository Structure
@@ -43,7 +43,7 @@ See [app/README.md](app/README.md) for the expected AppData layout and dev setup
 
 ## Quick Start
 
-Prerequisites: [Node.js](https://nodejs.org) and [Rust](https://rustup.rs) -- see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for platform-specific steps. PDF processing additionally requires the pdfium dynamic library (see [pdfium-render](https://github.com/ajrcarey/pdfium-render#binding-to-pdfium); it is not yet downloaded by the setup wizard).
+Prerequisites: [Node.js](https://nodejs.org) and [Rust](https://rustup.rs) -- see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for platform-specific steps.
 
 ```bash
 cd app

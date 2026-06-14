@@ -62,12 +62,16 @@
 - [x] `useSetupCheck` hook -- gates `App.tsx` on setup completion; shows wizard if incomplete
 - [x] `CompleteStep` writes `llamaServerPath`, `modelPath`, `mmprojPath`, `hardwareBackend` to settings
 - [x] Removed all dead bundled-resource wiring (`resolveResource`, dev path fallbacks, bundled Tesseract setup hook)
-- [ ] Provision Cloudflare R2 bucket and replace `R2_BASE` placeholder URL in `lib.rs`
+- [x] Add PDFium to the asset manifest (Windows + macOS), download into `binaries/` with archive flatten, bind via `Pdfium::bind_to_library(<explicit path>)`, gate `check_setup_complete` on it, and pin its SHA-256 (fixes `CODE_REVIEW.md` C3)
+- [x] Fail closed in `verify_file_hash` on an empty/unpinned digest in release builds (debug skips with a warning) -- fixes the fail-open half of `CODE_REVIEW.md` C1
+- [x] Re-run Tesseract `PATH` / `TESSDATA_PREFIX` injection at `process_document` call time so OCR works in the wizard's first session without a restart (fixes `CODE_REVIEW.md` C2)
+- [x] Replace `R2_BASE` placeholder with the real asset domain (`artifact-assets.aidenpaleczny.com`)
+- [ ] Provision the Cloudflare R2 bucket end-to-end and confirm every asset object is reachable
 - [ ] Replace `HF_MODEL_URL` / `HF_MMPROJ_URL` placeholder constants with real HuggingFace URLs
-- [ ] Build and upload platform-specific Tesseract zips to R2
-- [ ] Upload llama-server CPU and GPU binaries per platform to R2
-- [ ] Upload GGUF model files to R2
-- [ ] Compute and pin SHA-256 hashes for all assets in `get_asset_manifest` / `get_tesseract_spec`
+- [ ] Build and upload remaining platform-specific Tesseract zips to R2 (Windows pinned; macOS/Linux still unpinned)
+- [x] Upload llama-server binaries per platform to R2 and pin hashes (Windows CPU/CUDA, macOS) -- Linux build still unpinned
+- [x] Upload GGUF model + mmproj files to R2 and pin their SHA-256 hashes
+- [ ] Pin the remaining SHA-256 hashes (cudart, Linux llama-server, non-Windows Tesseract) in `get_asset_manifest` / `get_tesseract_spec`
 - [ ] Resume interrupted downloads -- wizard currently restarts from scratch if closed mid-download
 - [ ] Update about page
 

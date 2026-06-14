@@ -90,6 +90,18 @@ export default function DownloadStep({ config, onComplete, onError }: Props): Re
                     }
 
                     if (asset.extract_to_dir) {
+                        // Verify the archive's hash *before* unpacking it: never
+                        // extract an unverified archive, and extract_archive deletes
+                        // the archive on success, so this is the only point it still
+                        // exists on disk. (VerifyStep can't check these afterward.)
+                        const ok = await invoke<boolean>('verify_file_hash', {
+                            path: asset.dest_path,
+                            expectedSha256: asset.sha256,
+                        });
+                        if (!ok) {
+                            throw new Error(`Hash mismatch for ${asset.label}. The download may be corrupted. Please re-run setup.`);
+                        }
+
                         setProgress(prev => ({
                             ...prev,
                             [asset.asset_id]: { ...prev[asset.asset_id], status: 'extracting' },
