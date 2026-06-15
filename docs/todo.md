@@ -9,8 +9,9 @@
 
 ## Provenance / Matching
 
-- [ ] Fix: column splitting -- multi-word column values (e.g. capitalized name + right-justified course code) are being split into separate columns
-- [ ] Fix: alignment breaks when OCR misses a word, especially when the missed word is a duplicate of a common value -- confirm second pass is running
+- [x] Fix: column splitting -- multi-word column values (e.g. capitalized name + right-justified course code) are being split into separate columns -- `buildTableText` now derives column boundaries once from the header line and snaps every row to them, so a within-cell left/right gap no longer spawns a phantom unnamed column. Watch for: legitimately header-less columns now merge into their neighbour. The chat-box mitigation (let the user ask the LLM to fix structure) is still open (see UI section).
+- [x] Fuzzy second pass for unmatched cells (`fuzzyMatchPass`) -- bounded Levenshtein match within the positional gap between matched neighbours; recovers single-glyph OCR misreads, flags them `fuzzy`, and lowers trust one level
+- [ ] Fix: alignment breaks when OCR misses a word, especially when the missed word is a duplicate of a common value -- fuzzy second pass now exists, but a *missing* (not misread) word still has no OCR run to match; assess whether residual cases remain
 - [ ] Fix: empty columns ruin matching
 - [ ] Measure Stage 2a residual rate on real documents -- count `unmatched` cells per document; this decides whether Stage 2b is worth building
 - [ ] Investigate grid-based matching as an alternative: infer column x-ranges and row y-ranges from OCR bounding boxes to place provenance links by grid index rather than sequence position
@@ -86,6 +87,8 @@
 - [ ] Integration tests for database operations
 - [ ] Stage 2a duplicate handling: verify that N identical values each map to a distinct, correctly-positioned OCR word (not all to the first one)
 - [ ] Cursor desync test: drop an OCR word and confirm a single unmatched cell does not cascade misalignment across the rest of the table
+- [ ] Fuzzy second pass tests: single-glyph misread (`I`→`|`) recovers as `fuzzy`; fuzzy match cannot claim a word already owned by a matched neighbour; perfect gap hit promotes to `matched` not `fuzzy`
+- [ ] `buildTableText` header-anchored column test: a row with left- and right-justified content in one wide column stays a single column (no phantom trailing column)
 
 ## Roadmap
 

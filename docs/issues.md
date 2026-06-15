@@ -13,16 +13,12 @@
 
 1. The columns got messed up. The course column items got split into course and description columns since each has 2 words that seems distinct semantically and positionally. First bit is capitalized name, then numerical course code. Course code is right justified within the course column area (all course code items end before the starting x of the desciption column)
     - Also need a way to mitigate this on the users end -- e.g. chat box to ask LLM to fix this automatically.
+    - **Root cause / mostly resolved:** the OCR text fed to the LLM (`buildTableText`) spaced each line independently by pixel X, so a wide column with left- and right-justified content (capitalized name + right-justified course code) produced a large within-cell gap that the LLM read as a column break. Fixed by deriving column boundaries once from the header line and snapping every row to them. The user-facing chat-box mitigation is still open.
 
 2. Everything breaks if the OCR is not perfect. If ocr misses a word, and especially if the missed word is a duplicate of a common word, everything loses alignment.
-    - Is the second pass happening?
+    - Is the second pass happening? -- **Yes now:** a fuzzy second pass (`fuzzyMatchPass`) runs after the exact reading-order walk. Note it only helps *misread* words; a word the OCR *missed entirely* still has no run to match against, so duplicate-value misalignment from a dropped word can remain.
 
 3. Empty columns ruin matching
-
-4. If the OCR doesn't provide an exact match to the LLM it will say completely unverified. e.g "Calc for eng I" vs "Calc for eng |" leads to the result being unverified even though it was only off by one char. Use XOR distance??? / some sort of fuzzy matching??
-    - If it's above some threshold, allow it to be matched but just degrade confidence?
-
-    - Possible addion / solution: create mapping between all cells and OCR, clear out items with clear match, then fuzzy match remaining
 
 ### Possible Solutions
 
@@ -40,6 +36,12 @@
 ---
 
 ## Resolved
+
+### Provenance / Matching
+
+1. If the OCR doesn't provide an exact match to the LLM it will say completely unverified. e.g "Calc for eng I" vs "Calc for eng |" leads to the result being unverified even though it was only off by one char.
+
+    - Resolved with a fuzzy second pass (`fuzzyMatchPass`). After the exact reading-order walk, each still-unmatched cell is matched against the OCR words bounded by its nearest matched neighbours using normalized Levenshtein similarity (threshold 0.8). Exactly the "clear out items with clear match, then fuzzy match remaining" approach proposed below. Above the threshold the cell is matched but flagged `fuzzy`, its trust is dropped one level, and it shows an `≈` badge instead of the gray "unverified" cell. Bounding the search to the positional gap keeps reading order intact and stops a fuzzy match from stealing a word another cell already owns.
 
 ### Parsing
 

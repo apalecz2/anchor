@@ -43,7 +43,7 @@ export type CellProvenance = {
     colIndex: number;
     value: string;
     wordIds: number[];      // indices into the sanitized OcrWord array from sanitizeWordsForProvenance
-    matchStatus: "matched" | "multi_word" | "unmatched";
+    matchStatus: "matched" | "multi_word" | "fuzzy" | "unmatched";
 };
 
 export type TokenLogprob = {

@@ -146,7 +146,12 @@ export const computeProvenanceCells = (
             const agreement: AgreementStatus =
                 cell.matchStatus === "unmatched" ? "image_only" : "agree";
 
-            const trust = cellTrust(agreement, llmMean, llmMin, ocr);
+            // A fuzzy match means OCR and the LLM only roughly agree, so cap
+            // certainty by knocking the computed trust down one level.
+            const baseTrust = cellTrust(agreement, llmMean, llmMin, ocr);
+            const trust: TrustLevel = cell.matchStatus === "fuzzy"
+                ? (baseTrust === "high" ? "medium" : "low")
+                : baseTrust;
 
             return { ...cell, confidence: { llmMean, llmMin, ocr, agreement, trust } };
         })

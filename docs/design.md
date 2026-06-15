@@ -35,7 +35,8 @@ By prioritizing a local‑first architecture, the application guarantees strict 
 - Confidence heatmap: per‑cell trust level (high / medium / low) color‑codes the output table. Each cell's score is derived from three independent signals: LLM token log‑probabilities, Tesseract OCR word confidence, and source agreement.
 - Mathematical confidence mapping: LLM geometric mean and minimum token log‑probability (from llama.cpp logprobs) are blended with Tesseract word confidence into a `cellTrust` state machine.
 - Provenance by code (Stage 2a): deterministic parallel reading‑order walk links each CSV cell to its source OCR word(s). A bounded lookahead window (12 words) disambiguates duplicate values by sequence position — information the model would have to infer but code has directly. Cursor only advances on a match, so one unmatched cell cannot desync the rest of the row.
-- Unmatched cell badge: cells the model read from the image with no corresponding OCR word are marked with an "unverified source" indicator rather than silently dropped.
+- Fuzzy second pass: cells the exact walk cannot place are re‑matched against the OCR words in the positional gap between their nearest matched neighbours, using a Levenshtein similarity threshold. This recovers single‑glyph OCR misreads (e.g. `I` read as `|`) that would otherwise leave a cell unverified; recovered cells are flagged `fuzzy` and have their trust lowered one level.
+- Unmatched cell badge: cells the model read from the image with no corresponding OCR word are marked with an "unverified source" indicator rather than silently dropped. Fuzzy‑matched cells carry a separate "approximate match" (`≈`) indicator.
 
 ## 4. User Stories
 
@@ -80,6 +81,7 @@ Adaptive hardware modes:
 3. Context assembly
    - Sanitize OCR words once: strip column-rule pipe glyphs, filter empties, assign stable integer IDs. This single array feeds both downstream formatters.
    - Two formatters from the same array: (a) **spatial text** — words placed at character columns proportional to pixel X position, preserving column alignment for the vision model; (b) **indexed word list** — each word with ID, text, bounding box, and confidence — used by Stage 2a matching.
+   - Spatial text column model: column boundaries are derived once from the header (first) line and every row is snapped to those columns; intra‑column words are joined with a single space. Because real columns are vertically consistent across rows while a wide cell holding left‑ and right‑justified content is not, pinning every row to the header's columns prevents that within‑cell gap from reading as a column break and spawning a phantom, unnamed trailing column.
 
 4. Stage 1 — Structured extraction (LLM, vision)
    - The vision-language model receives the document image and spatially-arranged OCR text. Settings: temperature 0, top‑k 1, no presence penalty, no grammar constraint. Output: clean TSV with the first row as the header.
@@ -89,19 +91,20 @@ Adaptive hardware modes:
 4a. Stage 2a — Provenance by code (deterministic)
    - Parallel reading-order walk: iterate TSV cells and OCR words simultaneously in the same left-to-right, top-to-bottom order.
    - `matchFromCursor`: bounded lookahead of 12 words from the current cursor position. Handles single-word and multi-word cell values. Cursor advances only on a match — one unmatched cell cannot desync the rest of the table.
-   - Produces `CellProvenance` per cell: `matched` | `multi_word` | `unmatched`.
+   - Fuzzy second pass (`fuzzyMatchPass`): after the exact walk, each still-`unmatched` cell is searched against the OCR words bounded by its nearest matched neighbours (lower bound = max word ID of the previous match + 1; upper bound = min word ID of the next match). The best contiguous run by normalized Levenshtein similarity wins if it clears a 0.8 threshold. Bounding to the gap keeps reading order intact and prevents stealing a word another cell already claimed. A perfect (1.0) hit is promoted to a normal `matched`/`multi_word`; anything below is flagged `fuzzy`.
+   - Produces `CellProvenance` per cell: `matched` | `multi_word` | `fuzzy` | `unmatched`.
 
 5. Confidence scoring
    - LLM confidence: geometric mean and minimum of per-token probabilities for each cell, mapped from Stage 1 logprob offsets to cell character ranges.
    - OCR confidence: mean Tesseract word confidence of matched words; `null` for unmatched cells.
-   - Agreement: `agree` (code-matched), `image_only` (no OCR source), `disagree` (Stage 2b mismatch, future).
-   - `cellTrust` state machine: `high` → green / `medium` → yellow / `low` → red. Drives the per-cell UI heatmap.
+   - Agreement: `agree` (code-matched, including fuzzy), `image_only` (no OCR source), `disagree` (Stage 2b mismatch, future).
+   - `cellTrust` state machine: `high` → green / `medium` → yellow / `low` → red. Drives the per-cell UI heatmap. Fuzzy-matched cells have their computed trust knocked down one level to reflect the approximate OCR agreement.
 
 6. Memory unloading
    - Unload the AI model from RAM after Stage 1 completes to free resources (unless queued jobs remain). The vision projector is not needed for Stage 2.
 
 7. Human verification
-   - Provenance table with per-cell trust coloring. Click any cell to highlight its bounding box on the source document. Unmatched cells show an "unverified source" badge.
+   - Provenance table with per-cell trust coloring. Click any cell to highlight its bounding box on the source document. Unmatched cells show an "unverified source" (`?`) badge; fuzzy-matched cells show an "approximate match" (`≈`) badge.
 
 8. Export
    - Save the verified output in the user’s chosen format.

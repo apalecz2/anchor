@@ -26,7 +26,8 @@ function cellTooltip(cell: ProvenanceCell): string {
     }
     const llmPct = (cell.confidence.llmMean * 100).toFixed(0);
     const ocrPct = cell.confidence.ocr != null ? cell.confidence.ocr.toFixed(0) : 'N/A';
-    return `LLM confidence: ${llmPct}% | OCR confidence: ${ocrPct}%`;
+    const prefix = cell.matchStatus === 'fuzzy' ? 'Approximate OCR match — verify value | ' : '';
+    return `${prefix}LLM confidence: ${llmPct}% | OCR confidence: ${ocrPct}%`;
 }
 
 function cellClasses(cell: ProvenanceCell, isSelected: boolean): string {
@@ -81,6 +82,14 @@ export default function ProvenanceTable({ rows, onCellClick, selectedCell }: Pro
                                             title="No OCR match — source unverified"
                                         >
                                             ?
+                                        </span>
+                                    )}
+                                    {cell.matchStatus === 'fuzzy' && (
+                                        <span
+                                            className="ml-1 inline-block rounded-full bg-surface-variant px-1 text-[10px] font-medium text-on-surface-variant leading-tight"
+                                            title="Approximate OCR match — value differs slightly from OCR"
+                                        >
+                                            ≈
                                         </span>
                                     )}
                                 </td>

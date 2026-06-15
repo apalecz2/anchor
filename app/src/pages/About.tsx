@@ -177,7 +177,7 @@ export default function About(): React.ReactElement {
                         <StepRow
                             number="8"
                             title="Human verification"
-                            body="The output table color-codes every cell by trust level. Click any cell to highlight its exact source region on the document. Cells the model read from the image with no matching OCR word are marked with an unverified-source badge."
+                            body="The output table color-codes every cell by trust level. Click any cell to highlight its exact source region on the document. Cells the model read from the image with no matching OCR word are marked with an unverified-source badge, and cells that only approximately match the OCR (e.g. a single misread character) are marked with an approximate-match badge at a lowered confidence."
                         />
                         <StepRow
                             number="9"
