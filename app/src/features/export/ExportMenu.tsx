@@ -10,6 +10,8 @@ interface ExportMenuProps {
     /** Filename stem (no extension) for the save dialog, e.g. "invoice_page1" */
     fileStem: string;
     disabled?: boolean;
+    /** Open the menu above the trigger instead of below (for bottom-anchored toolbars) */
+    openUp?: boolean;
 }
 
 function normalizeRows(
@@ -37,7 +39,7 @@ const FORMAT_CONFIG: Record<ExportFormatKey, {
     txt:  { label: 'Plain text', icon: 'text_fields', serialize: toPlainText, saveFormat: { ext: 'txt',  label: 'Text files',     filters: [{ name: 'Text',     extensions: ['txt']  }] } },
 };
 
-export function ExportMenu({ provenanceCells, savedCsv, fileStem, disabled }: ExportMenuProps) {
+export function ExportMenu({ provenanceCells, savedCsv, fileStem, disabled, openUp }: ExportMenuProps) {
     const [open, setOpen] = useState(false);
     const [copied, setCopied] = useState(false);
     const menuRef = useRef<HTMLDivElement>(null);
@@ -75,7 +77,7 @@ export function ExportMenu({ provenanceCells, savedCsv, fileStem, disabled }: Ex
             <button
                 onClick={() => setOpen(o => !o)}
                 disabled={disabled || !hasData}
-                className="flex items-center gap-1 px-3 py-1 text-sm bg-surface-variant text-on-surface-variant rounded-lg hover:bg-surface-container-high disabled:opacity-50 transition-colors"
+                className="flex h-9 items-center gap-1 px-3 text-sm bg-surface-variant text-on-surface-variant rounded-lg hover:bg-surface-container-high disabled:opacity-50 transition-colors"
                 aria-haspopup="true"
                 aria-expanded={open}
             >
@@ -87,7 +89,7 @@ export function ExportMenu({ provenanceCells, savedCsv, fileStem, disabled }: Ex
             </button>
 
             {open && (
-                <div className="absolute right-0 top-full mt-1 z-50 min-w-40 rounded-xl border border-outline-variant bg-surface shadow-lg py-1">
+                <div className={`absolute right-0 z-50 min-w-40 rounded-xl border border-outline-variant bg-surface shadow-lg py-1 ${openUp ? 'bottom-full mb-1' : 'top-full mt-1'}`}>
                     {(Object.entries(FORMAT_CONFIG) as [ExportFormatKey, typeof FORMAT_CONFIG[ExportFormatKey]][]).map(([key, { label, icon }]) => (
                         <button
                             key={key}
