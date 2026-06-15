@@ -568,7 +568,7 @@ pub fn get_asset_manifest(app_handle: tauri::AppHandle, backend: String) -> Vec<
         label:          "CUDA runtime libraries".into(),
         size_bytes:     400_000_000,
         dest_path:      data_dir.join("cudart.zip").to_string_lossy().into_owned(),
-        sha256:         String::new(),
+        sha256:         "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6".into(),
         url_primary:    format!("{R2_BASE}/binaries/cudart-llama-bin-win-cuda-x64.zip"),
         url_fallback:   None,
         extract_to_dir: Some(binaries_dir.clone()),
