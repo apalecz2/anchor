@@ -39,18 +39,19 @@ pub fn pdfium_lib_name() -> &'static str {
 /// has one, so we provide the upstream build. The Windows archive nests the lib
 /// under bin/, the macOS one under lib/ — flatten_marker normalizes both.
 pub fn pdfium_spec() -> Option<(&'static str, &'static str, u64)> {
+    // The u64 is the archive's actual R2 Content-Length (verified 2026-06-16).
     if cfg!(target_os = "windows") {
         return Some((
             "pdfium-win-x64.tgz",
             "b904e3898f952984fb744e0c8eb36512b5ee527124796108ed419a5b4da3c6d9",
-            3_600_000,
+            3_763_404,
         ));
     }
     if cfg!(target_os = "macos") {
         return Some((
             "pdfium-mac-arm64.tgz",
             "52e94ca5aa8847934330daf3f8150c190682c5ca93831468794f8b90d4392e40",
-            3_400_000,
+            3_533_019,
         ));
     }
     None

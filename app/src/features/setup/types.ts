@@ -1,4 +1,4 @@
-export type SetupStep = 'welcome' | 'config' | 'download' | 'verify' | 'complete';
+export type SetupStep = 'welcome' | 'config' | 'install' | 'complete';
 export type SetupMode = 'automatic' | 'custom';
 export type Backend = 'cpu' | 'cuda' | 'rocm' | 'metal';
 export type OS = 'windows' | 'macos' | 'linux';
@@ -31,7 +31,7 @@ export interface AssetManifestEntry {
 }
 
 export interface AssetProgress {
-    status: 'pending' | 'downloading' | 'extracting' | 'done' | 'skipped' | 'error';
+    status: 'pending' | 'downloading' | 'verifying' | 'extracting' | 'done' | 'skipped' | 'error';
     bytes_received: number;
     total_bytes: number | null;
     error?: string;

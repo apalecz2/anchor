@@ -7,8 +7,9 @@
 
 use std::{
     fs,
-    io::{Read as _, Write as _},
+    io::{Read as _, Seek as _, Write as _},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
 
@@ -85,11 +86,49 @@ pub fn check_setup_complete(app_handle: tauri::AppHandle) -> bool {
 // download_file  (streams to a .part file; renames on completion)
 // ---------------------------------------------------------------------------
 
+/// One progress update for the setup wizard. `phase` lets a single event channel
+/// drive the whole per-asset lifecycle in the UI: bytes accumulate during
+/// `downloading`, then a brief `verifying` tick once the (incrementally computed)
+/// hash is checked. Extraction status is driven from the frontend.
 #[derive(Serialize, Clone)]
-struct DownloadProgress {
+struct SetupProgress {
     asset_id: String,
+    phase: &'static str, // "downloading" | "verifying"
     bytes_received: u64,
     total_bytes: Option<u64>,
+}
+
+/// Policy for an asset with no pinned SHA-256: accept (with a warning) in debug so
+/// development against not-yet-pinned R2 objects isn't blocked, but fail closed in
+/// release — running an unverified binary in a shipped build is unacceptable.
+fn accept_unpinned_or_err(what: &str) -> Result<(), String> {
+    if cfg!(debug_assertions) {
+        eprintln!("WARNING: no pinned sha256 for {what}; skipping verification (debug build only)");
+        Ok(())
+    } else {
+        Err(format!(
+            "no pinned sha256 for {what}; refusing to accept an unverified asset in a release build"
+        ))
+    }
+}
+
+/// Feed bytes `[from, to)` of `path` into `hasher`. Used to seed the rolling hash
+/// when resuming a `.part` left by a previous app run (the in-memory hasher didn't
+/// see those bytes). Only this gap is read — not the whole file.
+fn hash_file_range(path: &Path, hasher: &mut sha2::Sha256, from: u64, to: u64) -> Result<(), String> {
+    use sha2::Digest;
+    let mut f = fs::File::open(path).map_err(|e| format!("open .part for hashing failed: {e}"))?;
+    f.seek(std::io::SeekFrom::Start(from)).map_err(|e| format!("seek failed: {e}"))?;
+    let mut remaining = to - from;
+    let mut buf = [0u8; 65536];
+    while remaining > 0 {
+        let want = remaining.min(buf.len() as u64) as usize;
+        let n = f.read(&mut buf[..want]).map_err(|e| format!("read error: {e}"))?;
+        if n == 0 { break; }
+        hasher.update(&buf[..n]);
+        remaining -= n as u64;
+    }
+    Ok(())
 }
 
 /// How many times to (re)connect for a single download before giving up and
@@ -126,6 +165,22 @@ fn parse_content_range_total(response: &reqwest::Response) -> Option<u64> {
         .ok()
 }
 
+/// Monotonic "install generation". Each `download_file` binds to the value current
+/// when it starts; if the global value moves on (the user cancelled, or a fresh
+/// install run began), the in-flight download notices between/within chunks and
+/// bails out — leaving its `.part` intact so a later run resumes from exactly where
+/// it stopped. A counter (rather than a bool) makes the cancel→restart sequence
+/// race-free: a lingering old download can never be "un-cancelled" by a new run,
+/// and a new run never adopts an old download's cancellation.
+static SETUP_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Cancel any in-flight setup download by advancing the generation. Safe to call
+/// repeatedly; a download not currently running is unaffected.
+#[tauri::command]
+pub fn cancel_setup() {
+    SETUP_GENERATION.fetch_add(1, Ordering::SeqCst);
+}
+
 /// Delete a leftover `.part` for `dest_path`. The frontend calls this before
 /// retrying a download from a *different* URL (primary → fallback), since the
 /// two sources are distinct origins and resuming one stream into the other's
@@ -140,13 +195,24 @@ pub fn clear_partial_download(dest_path: String) -> Result<(), String> {
     }
 }
 
+/// Download `url` to `dest_path`, verifying its SHA-256 *during* the download.
+///
+/// The hash is computed incrementally from the same bytes as they stream through
+/// memory, so there is no second full-file read afterward (the old separate verify
+/// pass re-read every byte — a wasted ~3.5 GB of disk I/O across the asset set).
+/// The file is only renamed from `.part` to its final path once the hash matches,
+/// so a corrupt/truncated download never leaves a "complete-looking" file behind.
+/// On a hash mismatch the `.part` is kept so the caller can `clear_partial_download`
+/// and fall back to the alternate URL.
 #[tauri::command]
 pub async fn download_file(
     app_handle: tauri::AppHandle,
     url: String,
     dest_path: String,
     asset_id: String,
+    expected_sha256: String,
 ) -> Result<(), String> {
+    use sha2::Digest;
     use tauri::Emitter;
 
     let dest = PathBuf::from(&dest_path);
@@ -161,6 +227,38 @@ pub async fn download_file(
         .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
         .build()
         .map_err(|e| format!("client build failed: {e}"))?;
+
+    // Finalize once the bytes on disk are known-good: emit a `verifying` tick,
+    // confirm the rolling hash (or apply the unpinned-asset policy), then rename.
+    let finalize = |app_handle: &tauri::AppHandle, hex: Option<String>, bytes: u64, total: Option<u64>| -> Result<(), String> {
+        let _ = app_handle.emit("setup:progress", SetupProgress {
+            asset_id: asset_id.clone(), phase: "verifying", bytes_received: bytes, total_bytes: total,
+        });
+        match hex {
+            Some(actual) => {
+                if !actual.eq_ignore_ascii_case(&expected_sha256) {
+                    // Keep `.part` — caller clears it before trying the fallback URL.
+                    return Err(format!(
+                        "hash mismatch for {asset_id}: expected {expected_sha256}, got {actual}"
+                    ));
+                }
+            }
+            None => accept_unpinned_or_err(&dest_path)?, // empty expected hash
+        }
+        fs::rename(&part_path, &dest).map_err(|e| format!("rename failed: {e}"))
+    };
+
+    // Bind to the current install generation; if it advances (cancel / new run) we
+    // abandon this download. Reading it once here means the normal sequential flow
+    // (generation never moves) never self-cancels.
+    let my_generation = SETUP_GENERATION.load(Ordering::SeqCst);
+    let cancelled = || SETUP_GENERATION.load(Ordering::SeqCst) != my_generation;
+
+    let verify = !expected_sha256.is_empty();
+    // Rolling hash + how many of the final file's bytes it has consumed. Both live
+    // across reconnect attempts so a resumed download still produces the full hash.
+    let mut hasher = sha2::Sha256::new();
+    let mut hashed_up_to: u64 = 0;
 
     let mut last_err = String::new();
 
@@ -180,18 +278,25 @@ pub async fn download_file(
             Ok(r) => r,
             Err(e) => {
                 last_err = format!("request failed: {e}");
-                tokio::time::sleep(std::time::Duration::from_secs(2 * attempt as u64)).await;
+                tokio::time::sleep(Duration::from_secs(2 * attempt as u64)).await;
                 continue;
             }
         };
 
         let status = response.status();
 
-        // The `.part` is already >= the full object — nothing left to fetch.
+        // The `.part` is already >= the full object — nothing left to fetch. We
+        // didn't stream it this run, so hash it from disk before finalizing.
         if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE && resume_from > 0 {
             drop(response);
-            fs::rename(&part_path, &dest).map_err(|e| format!("rename failed: {e}"))?;
-            return Ok(());
+            let hex = if verify {
+                let mut h = sha2::Sha256::new();
+                hash_file_range(&part_path, &mut h, 0, resume_from)?;
+                Some(format!("{:x}", h.finalize()))
+            } else {
+                None
+            };
+            return finalize(&app_handle, hex, resume_from, Some(resume_from));
         }
 
         if !status.is_success() {
@@ -203,6 +308,22 @@ pub async fn download_file(
         // 206 → server honored Range, append. 200 → it ignored Range (or we had
         // nothing to resume), so (re)start from zero.
         let resuming = status == reqwest::StatusCode::PARTIAL_CONTENT && resume_from > 0;
+
+        // Keep the rolling hash consistent with the bytes about to be on disk.
+        if verify {
+            if resuming {
+                // Seed any gap the in-memory hasher hasn't seen (e.g. a `.part`
+                // left by a previous app run). After an in-run drop this is a no-op.
+                if hashed_up_to < resume_from {
+                    hash_file_range(&part_path, &mut hasher, hashed_up_to, resume_from)?;
+                    hashed_up_to = resume_from;
+                }
+            } else {
+                // Fresh start (or the server ignored Range and we truncate `.part`).
+                hasher = sha2::Sha256::new();
+                hashed_up_to = 0;
+            }
+        }
 
         let total_bytes = if resuming {
             parse_content_range_total(&response)
@@ -231,6 +352,12 @@ pub async fn download_file(
             .unwrap_or_else(Instant::now);
 
         loop {
+            // Cooperative cancellation: bail promptly (between chunks) if cancelled
+            // or superseded. The `.part` is kept so a later run resumes from here.
+            if cancelled() {
+                return Err("setup cancelled".into());
+            }
+
             // Bound each read so a silently hung socket is detected instead of
             // blocking forever; a timeout is handled the same as a stream drop.
             let next = tokio::time::timeout(
@@ -241,12 +368,22 @@ pub async fn download_file(
 
             match next {
                 Ok(Ok(Some(chunk))) => {
+                    // Re-check before writing so a chunk that arrived after cancellation
+                    // is never appended (which would corrupt a `.part` a new run may own).
+                    if cancelled() {
+                        return Err("setup cancelled".into());
+                    }
                     file.write_all(&chunk).map_err(|e| format!("write error: {e}"))?;
+                    if verify {
+                        hasher.update(&chunk);
+                        hashed_up_to += chunk.len() as u64;
+                    }
                     bytes_received += chunk.len() as u64;
                     // Coalesce progress events to PROGRESS_THROTTLE to avoid flooding the UI.
                     if last_emit.elapsed() >= PROGRESS_THROTTLE {
-                        let _ = app_handle.emit("setup:progress", DownloadProgress {
+                        let _ = app_handle.emit("setup:progress", SetupProgress {
                             asset_id: asset_id.clone(),
+                            phase: "downloading",
                             bytes_received,
                             total_bytes,
                         });
@@ -275,15 +412,16 @@ pub async fn download_file(
             continue;
         }
 
-        // Final progress so the bar reaches 100% even if the last chunk was throttled.
-        let _ = app_handle.emit("setup:progress", DownloadProgress {
+        // Final download progress so the bar reaches 100% even if the last chunk
+        // was throttled, then verify-and-finalize from the rolling hash.
+        let _ = app_handle.emit("setup:progress", SetupProgress {
             asset_id: asset_id.clone(),
+            phase: "downloading",
             bytes_received,
             total_bytes,
         });
-
-        fs::rename(&part_path, &dest).map_err(|e| format!("rename failed: {e}"))?;
-        return Ok(());
+        let hex = verify.then(|| format!("{:x}", hasher.clone().finalize()));
+        return finalize(&app_handle, hex, bytes_received, total_bytes);
     }
 
     Err(format!("download failed after {DOWNLOAD_MAX_ATTEMPTS} attempts: {last_err}"))
@@ -300,18 +438,10 @@ pub async fn download_file(
 // and could also stall the concurrent download streaming.
 #[tauri::command]
 pub async fn verify_file_hash(path: String, expected_sha256: String) -> Result<bool, String> {
-    // An empty expected hash means the asset hasn't been pinned yet. Running an
-    // unverified binary in a shipped build is unacceptable, so fail closed in
-    // release. Debug builds skip with a warning so development against not-yet-pinned
-    // R2 objects isn't blocked.
+    // Empty expected hash → asset not yet pinned; apply the shared fail-closed
+    // (release) / warn-and-accept (debug) policy.
     if expected_sha256.is_empty() {
-        if cfg!(debug_assertions) {
-            eprintln!("WARNING: no pinned sha256 for {path}; skipping verification (debug build only)");
-            return Ok(true);
-        }
-        return Err(format!(
-            "no pinned sha256 for {path}; refusing to accept an unverified asset in a release build"
-        ));
+        return accept_unpinned_or_err(&path).map(|_| true);
     }
 
     tokio::task::spawn_blocking(move || {
@@ -458,19 +588,32 @@ fn copy_dir_contents(src: &Path, dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
+// async + spawn_blocking so unpacking (CPU- and disk-bound) runs on the blocking
+// pool instead of the main/UI thread. This both keeps the wizard responsive and
+// lets the frontend overlap an asset's extraction with the *next* asset's download.
 #[tauri::command]
-pub fn extract_archive(
+pub async fn extract_archive(
     archive_path: String,
     dest_dir: String,
     flatten_marker: Option<String>,
 ) -> Result<(), String> {
-    let dest = Path::new(&dest_dir);
+    tokio::task::spawn_blocking(move || extract_archive_inner(&archive_path, &dest_dir, flatten_marker))
+        .await
+        .map_err(|e| format!("extract task failed: {e}"))?
+}
+
+fn extract_archive_inner(
+    archive_path: &str,
+    dest_dir: &str,
+    flatten_marker: Option<String>,
+) -> Result<(), String> {
+    let dest = Path::new(dest_dir);
 
     if let Some(marker) = flatten_marker {
         // Stage alongside the archive, locate the real payload root, then lift it up.
         let staging = PathBuf::from(format!("{archive_path}.extract"));
         let _ = fs::remove_dir_all(&staging); // clear any stale staging dir
-        extract_preserving(&archive_path, &staging)?;
+        extract_preserving(archive_path, &staging)?;
 
         let root = find_marker_dir(&staging, &marker)
             .ok_or_else(|| format!("'{marker}' not found inside archive"))?;
@@ -478,10 +621,10 @@ pub fn extract_archive(
         copy_dir_contents(&root, dest)?;
         let _ = fs::remove_dir_all(&staging);
     } else {
-        extract_preserving(&archive_path, dest)?;
+        extract_preserving(archive_path, dest)?;
     }
 
-    fs::remove_file(&archive_path).ok();
+    fs::remove_file(archive_path).ok();
     Ok(())
 }
 
@@ -540,36 +683,39 @@ pub struct AssetManifestEntry {
 // extract_archive(flatten=true) normalizes both so llama-server[.exe] and its
 // shared libraries end up directly in the `binaries` dir.
 fn get_llama_server_spec(backend: &str) -> (&'static str, u64, &'static str, &'static str) {
-    // (label, approx_size_bytes, r2_object_key, sha256_of_archive)
-    // The hash pins the downloaded archive at dest_path (pre-extraction). Empty =
-    // not yet uploaded to R2, so verify_file_hash skips it.
+    // (label, size_bytes, r2_object_key, sha256_of_archive)
+    // size_bytes is the R2 object's actual Content-Length (verified 2026-06-16); it
+    // seeds the progress bar / time-remaining estimate before the download's own
+    // Content-Length arrives. The hash pins the downloaded archive at dest_path
+    // (pre-extraction). Empty = not yet uploaded to R2, so verify_file_hash skips it.
     if cfg!(target_os = "macos") {
         // macOS releases are .tar.gz (nested under build/bin) — see extract_archive.
-        return ("llama.cpp server (Metal / Apple Silicon)", 50_000_000, "llama-bin-macos-arm64.tar.gz",
+        return ("llama.cpp server (Metal / Apple Silicon)", 10_547_769, "llama-bin-macos-arm64.tar.gz",
             "b77565f38c8cad9b0132dd4dbca54e201e8fb5b654d57780b87e0e05da25fafe");
     }
     if cfg!(target_os = "windows") {
         return if backend == "cuda" {
-            ("llama.cpp server (CUDA / GPU)", 160_000_000, "llama-bin-win-cuda-x64.zip",
+            ("llama.cpp server (CUDA / GPU)", 260_955_318, "llama-bin-win-cuda-x64.zip",
                 "4be0993b63ff501e3aa23e7f35e16e03a8b44404462792994cd66ce98915fa7e")
         } else {
-            ("llama.cpp server (CPU)", 17_000_000, "llama-bin-win-cpu-x64.zip",
+            ("llama.cpp server (CPU)", 16_721_561, "llama-bin-win-cpu-x64.zip",
                 "d6af2cdf070fe3222c1ffc0cf9665d1d395aff32b985a29d8dc2e3ae1398d780")
         };
     }
     // Linux — upstream only publishes CPU (ubuntu) builds; GPU backends fall back to it.
-    // Not yet uploaded to R2 — leave the hash empty until it is.
+    // Not yet uploaded to R2 — size is a rough placeholder, hash empty, until it is.
     ("llama.cpp server (CPU)", 25_000_000, "llama-bin-ubuntu-x64.zip", "")
 }
 
 fn get_tesseract_spec(data_dir: &Path) -> AssetManifestEntry {
     // sha256 pins the downloaded tesseract.zip (pre-extraction). Empty = not yet
     // uploaded to R2 (Linux), so verify_file_hash skips it.
+    // size_bytes = actual R2 Content-Length (verified 2026-06-16).
     let (label, size_bytes, url_suffix, sha256) = if cfg!(target_os = "windows") {
-        ("Tesseract OCR engine (90 MB)", 90_000_000u64, "windows/tesseract.zip",
+        ("Tesseract OCR engine (38 MB)", 38_218_316u64, "windows/tesseract.zip",
             "268ded1253c5697071915e0dcea6c32a278bf037d51d0602165d4502c113dd1a")
     } else if cfg!(target_os = "macos") {
-        ("Tesseract OCR engine (15 MB)", 15_000_000u64, "macos/tesseract.zip",
+        ("Tesseract OCR engine (5.7 MB)", 5_701_459u64, "macos/tesseract.zip",
             "efe841cbccfa2f65664101546a93cc47a793dcf8b2313d47460ca234482430ab")
     } else {
         ("Tesseract OCR engine (15 MB)", 15_000_000u64, "linux/tesseract.zip", "")
@@ -620,7 +766,7 @@ pub fn get_asset_manifest(app_handle: tauri::AppHandle, backend: String) -> Vec<
     let cudart = (cfg!(target_os = "windows") && backend == "cuda").then(|| AssetManifestEntry {
         asset_id:       "cudart".into(),
         label:          "CUDA runtime libraries".into(),
-        size_bytes:     400_000_000,
+        size_bytes:     391_443_627, // actual R2 Content-Length (verified 2026-06-16)
         dest_path:      data_dir.join("cudart.zip").to_string_lossy().into_owned(),
         sha256:         "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6".into(),
         url_primary:    format!("{R2_BASE}/binaries/cudart-llama-bin-win-cuda-x64.zip"),
@@ -650,8 +796,8 @@ pub fn get_asset_manifest(app_handle: tauri::AppHandle, backend: String) -> Vec<
 
     let mmproj = AssetManifestEntry {
         asset_id:       "mmproj_gguf".into(),
-        label:          "Vision projector (656 MB)".into(),
-        size_bytes:     656_000_000,
+        label:          "Vision projector (672 MB)".into(),
+        size_bytes:     672_423_616, // actual R2 Content-Length (verified 2026-06-16)
         dest_path:      data_dir.join("models").join(MMPROJ_FILENAME).to_string_lossy().into_owned(),
         sha256:         "cd88edcf8d031894960bb0c9c5b9b7e1fea6ebee02b9f7ce925a00d12891f864".into(),
         url_primary:    format!("{R2_BASE}/models/{MMPROJ_FILENAME}"),
@@ -664,7 +810,7 @@ pub fn get_asset_manifest(app_handle: tauri::AppHandle, backend: String) -> Vec<
     let model = AssetManifestEntry {
         asset_id:       "model_gguf".into(),
         label:          "Qwen language model (2.7 GB)".into(),
-        size_bytes:     2_700_000_000,
+        size_bytes:     2_740_937_888, // actual R2 Content-Length (verified 2026-06-16)
         dest_path:      data_dir.join("models").join(MODEL_FILENAME).to_string_lossy().into_owned(),
         sha256:         "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4".into(),
         url_primary:    format!("{R2_BASE}/models/{MODEL_FILENAME}"),
@@ -718,9 +864,9 @@ mod tests {
         let dest = work.join("binaries");
         let lib = pdfium_lib_name();
 
-        extract_archive(
-            archive.to_string_lossy().into_owned(),
-            dest.to_string_lossy().into_owned(),
+        extract_archive_inner(
+            &archive.to_string_lossy(),
+            &dest.to_string_lossy(),
             Some(lib.to_string()),
         )
         .expect("extract_archive failed");

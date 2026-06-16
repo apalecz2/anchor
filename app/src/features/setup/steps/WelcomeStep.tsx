@@ -10,8 +10,8 @@ interface Props {
 
 const ASSETS = [
     { icon: 'smart_toy',    label: 'Qwen language model',   size: '2.7 GB' },
-    { icon: 'visibility',   label: 'Vision projector',      size: '656 MB' },
-    { icon: 'memory',       label: 'llama-server binary',   size: '~46–80 MB' },
+    { icon: 'visibility',   label: 'Vision projector',      size: '672 MB' },
+    { icon: 'memory',       label: 'llama-server + runtime', size: '~10–650 MB' },
 ];
 
 function summarize(hw: HardwareInfo): string {

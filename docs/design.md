@@ -119,15 +119,17 @@ Platforms below are limited to the currently supported targets (**Windows + macO
 
 | Asset | Platforms | Primary Source | Fallback | Size |
 |---|---|---|---|---|
-| Tesseract binary + DLLs | Windows | Cloudflare R2 | — | ~86 MB |
-| Tesseract binary | macOS | Cloudflare R2 | — | ~15 MB |
-| `eng.traineddata` | All | Cloudflare R2 | — | ~4 MB (fast tier) |
-| `llama-server` CPU build | All | Cloudflare R2 | llama.cpp GitHub releases | ~46 MB |
-| `llama-server` CUDA build | Windows | Cloudflare R2 | llama.cpp GitHub releases | ~80 MB |
-| `llama-server` Metal build | macOS (Apple Silicon) | Cloudflare R2 | llama.cpp GitHub releases | ~46 MB |
-| PDFium shared library | Windows / macOS | Cloudflare R2 | — | ~3.5 MB |
-| `Qwen3.5‑4B‑Q4_K_M.gguf` | All | Cloudflare R2 | HuggingFace (Qwen/Qwen3‑4B‑GGUF) | ~2.7 GB |
-| `mmproj‑F16.gguf` | All | Cloudflare R2 | HuggingFace (compatible clip projector) | ~656 MB |
+| Tesseract (zip, incl. tessdata) | Windows | Cloudflare R2 | — | ~38 MB |
+| Tesseract (zip, incl. tessdata) | macOS | Cloudflare R2 | — | ~5.7 MB |
+| `llama-server` CPU build | Windows | Cloudflare R2 | llama.cpp GitHub releases | ~17 MB |
+| `llama-server` CUDA build | Windows | Cloudflare R2 | llama.cpp GitHub releases | ~261 MB |
+| CUDA runtime libraries (`cudart`) | Windows (CUDA only) | Cloudflare R2 | — | ~391 MB |
+| `llama-server` Metal build | macOS (Apple Silicon) | Cloudflare R2 | llama.cpp GitHub releases | ~10.5 MB |
+| PDFium shared library | Windows / macOS | Cloudflare R2 | — | ~3.7 MB |
+| `Qwen3.5‑4B‑Q4_K_M.gguf` | All | Cloudflare R2 | HuggingFace (Qwen/Qwen3‑4B‑GGUF) | ~2.74 GB |
+| `mmproj‑F16.gguf` | All | Cloudflare R2 | HuggingFace (compatible clip projector) | ~672 MB |
+
+Sizes above are the actual R2 object `Content-Length` values (verified 2026-06-16) and match `size_bytes` in the asset manifest, which seeds the progress bar and time-remaining estimate. The bundled `eng.traineddata` ships inside the Tesseract zip rather than as a separate object.
 
 Cloudflare R2 is the primary source for all assets because it offers zero egress fees and consistent global latency. For the two GGUF model files, HuggingFace is available as a fallback if the R2 bucket is unreachable (the wizard retries a failed download once from the fallback URL).
 
@@ -135,7 +137,7 @@ PDFium is required because `pdfium-render` binds to a pdfium shared library at r
 
 All asset URLs, expected SHA‑256 digests, and destination paths are hardcoded as constants in the Rust backend so they can be audited and updated as a unit when new model or binary versions are pinned.
 
-Note: Still outstanding for the supported platforms: the HuggingFace fallback URLs are placeholders, and the macOS Tesseract build is not yet pinned/uploaded. Automatic re‑download on hash failure is also not yet implemented; a hash mismatch currently surfaces an error and asks the user to re‑run setup. **Linux assets (the Linux llama-server build and Linux Tesseract) are deliberately not pinned or uploaded — Linux is a later addition and not required for now.**
+Note: Still outstanding for the supported platforms: the HuggingFace fallback URLs are placeholders, and the macOS Tesseract build is not yet pinned/uploaded. On a hash mismatch the wizard now automatically discards the partial download and retries from the fallback URL where one exists (the two GGUF models); an asset with no fallback (the binaries) surfaces an error and asks the user to re‑run setup. **Linux assets (the Linux llama-server build and Linux Tesseract) are deliberately not pinned or uploaded — Linux is a later addition and not required for now.**
 
 ### 7.2 Storage Layout
 
@@ -174,14 +176,16 @@ Detection output drives a `recommended_backend` value: `cuda` (NVIDIA, ≥ 4 GB 
 The wizard runs inside the existing app window; no separate Tauri window is created. It renders in place of the normal app routes until setup completes, then reloads.
 
 ```
-Welcome → Hardware Detection → Configuration → Download → Verify → Complete
+Welcome → (Configuration) → Install → Complete
 ```
 
-- **Welcome** — lists what will be downloaded and the estimated total size.
-- **Hardware Detection** — displays the detected GPU/RAM and the recommended backend. Skipped if detection is unambiguous and the user has not previously customised the setting.
-- **Configuration** — backend selector (CPU / CUDA / ROCm / Metal). Defaults to the recommended value. (A Tesseract language‑data tier selector — fast / standard / best — is planned but not yet implemented; the wizard currently downloads a single English tier.)
-- **Download** — all assets download sequentially, smallest first so early progress is fast. Each asset shows its own progress bar. Downloads write to a `.part` temp file and rename to the final path once the stream completes; hash verification happens in the following step.
-- **Verify** — SHA‑256 check per file. A failed check currently reports an error and restarts the wizard (automatic re‑download from the fallback URL is planned).
+- **Welcome** — lists what will be downloaded and the estimated total size, and probes hardware in the background. Offers a one‑click *Automatic* path (uses the recommended backend) or a *Custom* path (opens Configuration).
+- **Configuration** *(Custom only)* — backend selector (CPU / CUDA / ROCm / Metal), defaulting to the recommended value and filtered to the platform's available builds. (A Tesseract language‑data tier selector — fast / standard / best — is planned but not yet implemented; the wizard currently downloads a single English tier.)
+- **Install** — a single step that downloads, verifies, and unpacks every asset, with one prominent overall progress bar (byte‑weighted, so the multi‑GB model dominates and the bar moves smoothly) plus a per‑component list. Key properties:
+  - **Streaming verification:** the SHA‑256 is computed *incrementally from the bytes as they download* (`download_file`), so there is no separate read‑the‑whole‑file‑again verify pass. The `.part` temp file is renamed to its final path **only after** the hash matches — a corrupt/truncated download never leaves a "complete‑looking" file behind. On a mismatch the wizard discards the partial bytes and retries from the fallback URL.
+  - **Sequential downloads, overlapped extraction:** downloads run one at a time (they share a single network pipe, so racing them wouldn't be faster), but an archive's extraction (`extract_archive`, run off‑thread via `spawn_blocking`) is kicked off without blocking the *next* asset's download — CPU/disk work overlaps network work.
+  - **Resilience:** dropped or stalled connections reconnect and resume from the `.part` via HTTP Range; progress events are coalesced to ~10/sec.
+  - **Cancellable / resumable:** the user can cancel at any time (a Cancel button, or by closing the window — which prompts a confirmation rather than silently discarding work). Cancelling advances a monotonic generation counter that the in-flight download polls between chunks, so even the multi-GB model stops promptly; the partially-downloaded `.part` and any already-installed assets are kept, so the next run skips finished assets and resumes the rest. Because nothing reaches its final path until verified, an interrupted install can never leave a corrupt file behind.
 - **Complete** — writes all resolved paths (`modelPath`, `mmprojPath`, `llamaServerPath`) and the chosen `hardwareBackend` to persistent settings, then reloads the webview to enter the main app.
 
 ### 7.5 Settings Schema Additions

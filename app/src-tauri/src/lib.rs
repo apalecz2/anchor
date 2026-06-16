@@ -46,6 +46,7 @@ pub fn run() {
             hardware::detect_hardware,
             setup::download_file,
             setup::clear_partial_download,
+            setup::cancel_setup,
             setup::verify_file_hash,
             setup::get_setup_paths,
             setup::get_asset_manifest,

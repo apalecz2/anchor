@@ -1,9 +1,8 @@
 import React, { useState } from 'react';
-import type { AssetManifestEntry, HardwareInfo, SetupConfig, SetupMode, SetupStep } from './types';
+import type { HardwareInfo, SetupConfig, SetupMode, SetupStep } from './types';
 import WelcomeStep from './steps/WelcomeStep';
 import ConfigStep from './steps/ConfigStep';
 import DownloadStep from './steps/DownloadStep';
-import VerifyStep from './steps/VerifyStep';
 import CompleteStep from './steps/CompleteStep';
 
 interface Props {
@@ -13,17 +12,17 @@ interface Props {
 const STEP_LABELS: Record<SetupStep, string> = {
     welcome:  'Welcome',
     config:   'Configure',
-    download: 'Download',
-    verify:   'Verify',
+    install:  'Install',
     complete: 'Complete',
 };
 
 // Automatic setup skips the Configure step — the progress bar reflects whichever
-// path the user picked on the welcome screen.
+// path the user picked on the welcome screen. Download + verify + install are now a
+// single step (the hash is checked during the download, so there's no separate pass).
 function stepsForMode(mode: SetupMode): SetupStep[] {
     return mode === 'custom'
-        ? ['welcome', 'config', 'download', 'verify', 'complete']
-        : ['welcome', 'download', 'verify', 'complete'];
+        ? ['welcome', 'config', 'install', 'complete']
+        : ['welcome', 'install', 'complete'];
 }
 
 export default function SetupWizard({ onComplete }: Props): React.ReactElement {
@@ -31,7 +30,6 @@ export default function SetupWizard({ onComplete }: Props): React.ReactElement {
     const [mode, setMode] = useState<SetupMode>('automatic');
     const [hardware, setHardware] = useState<HardwareInfo | null>(null);
     const [config, setConfig] = useState<SetupConfig | null>(null);
-    const [manifest, setManifest] = useState<AssetManifestEntry[]>([]);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
     const stepOrder = stepsForMode(mode);
@@ -45,7 +43,7 @@ export default function SetupWizard({ onComplete }: Props): React.ReactElement {
         setHardware(info);
         setMode('automatic');
         setConfig({ backend: info.recommended_backend });
-        setStep('download');
+        setStep('install');
     };
 
     const startCustom = (info: HardwareInfo) => {
@@ -101,22 +99,16 @@ export default function SetupWizard({ onComplete }: Props): React.ReactElement {
                             {step === 'config' && hardware && (
                                 <ConfigStep
                                     hardware={hardware}
-                                    onNext={cfg => { setConfig(cfg); setStep('download'); }}
+                                    onNext={cfg => { setConfig(cfg); setStep('install'); }}
                                     onBack={() => setStep('welcome')}
                                 />
                             )}
-                            {step === 'download' && config && (
+                            {step === 'install' && config && (
                                 <DownloadStep
                                     config={config}
-                                    onComplete={entries => { setManifest(entries); setStep('verify'); }}
-                                    onError={handleError}
-                                />
-                            )}
-                            {step === 'verify' && (
-                                <VerifyStep
-                                    manifest={manifest}
                                     onComplete={() => setStep('complete')}
                                     onError={handleError}
+                                    onCancel={() => setStep('welcome')}
                                 />
                             )}
                             {step === 'complete' && config && (
