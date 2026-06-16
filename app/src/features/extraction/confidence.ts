@@ -125,6 +125,9 @@ export const computeProvenanceCells = (
     const { cellRanges } = parseTSVWithOffsets(rawContent);
     const tokenIndicesMap = mapLogprobsToCells(logprobs, cellRanges);
 
+    // wordIds are stable UUIDs — resolve confidence via id, not array position.
+    const wordById = new Map(ocrWords.map(w => [w.id, w]));
+
     return cellProvenance.map((row, r) =>
         row.map((cell, c): ProvenanceCell => {
             const indices = tokenIndicesMap[r]?.[c] ?? [];
@@ -139,9 +142,12 @@ export const computeProvenanceCells = (
                 ? Math.exp(Math.min(...tokenLogprobs))
                 : 0;
 
-            const ocr = cell.wordIds.length === 0
+            const ocrConfidences = cell.wordIds
+                .map(id => wordById.get(id)?.confidence)
+                .filter((c): c is number => c != null);
+            const ocr = ocrConfidences.length === 0
                 ? null
-                : arithmeticMean(cell.wordIds.map(id => ocrWords[id].confidence));
+                : arithmeticMean(ocrConfidences);
 
             const agreement: AgreementStatus =
                 cell.matchStatus === "unmatched" ? "image_only" : "agree";

@@ -6,8 +6,11 @@ export const normalize = (s: string): string =>
     s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
 // Sort words into reading order, strip column-rule pipe glyphs, drop empties.
-// The integer index in the returned array IS the word ID used by CellProvenance.wordIds.
-// Must be called before anything else — all downstream indexes are relative to this array.
+// Each word keeps its stable `id` (UUID) — that id, not the array position, is
+// what CellProvenance.wordIds stores, so a later add/edit/delete that reorders
+// the array can't mis-resolve a stored mapping.
+// Must be called before matching — the positional walk below is relative to the
+// order this produces, but only UUIDs survive into the stored provenance.
 // Words whose entire text is pipe glyphs (e.g. OCR misread of "I" as "|") are kept with
 // their original text so the LLM can cross-reference the image; they will be unmatched by
 // provenance and surface as "image_only" / ? badge rather than silently dropped.
@@ -29,16 +32,17 @@ const unionBoxes = (boxes: BoundingBox[]): BoundingBox => {
 
 // Returns the union bounding box for a cell's source words, or null if unmatched.
 //
-// `wordIds` are positional indices captured at extraction time. If the user has
-// since added/deleted words the array length can change, leaving an index out of
-// range — guard against it so a stale mapping degrades to "no highlight" instead
-// of throwing and blanking the pane. If *any* referenced word is missing we return
-// null rather than a misleading partial box (the proper fix is UUID-based ids).
+// `wordIds` are stable OcrWord UUIDs, resolved against the *current* word array
+// at click time. Because they are identities rather than positions, an add/edit
+// elsewhere on the page no longer shifts a cell onto the wrong box. If a word a
+// cell mapped to was since deleted its id won't resolve — we return null (no
+// highlight) rather than a misleading partial box or a throw that blanks the pane.
 export const getCellSourceBox = (prov: CellProvenance, ocrWords: OcrWord[]): BoundingBox | null => {
     if (prov.wordIds.length === 0) return null;
+    const byId = new Map(ocrWords.map(w => [w.id, w]));
     const boxes: BoundingBox[] = [];
     for (const id of prov.wordIds) {
-        const word = ocrWords[id];
+        const word = byId.get(id);
         if (!word) return null;
         boxes.push(word.box_coords);
     }
@@ -74,7 +78,7 @@ function matchFromCursor(
 }
 
 // Levenshtein edit distance between two normalized strings (rolling two-row DP).
-function levenshtein(a: string, b: string): number {
+export function levenshtein(a: string, b: string): number {
     const m = a.length, n = b.length;
     if (m === 0) return n;
     if (n === 0) return m;
@@ -92,7 +96,7 @@ function levenshtein(a: string, b: string): number {
 }
 
 // 0–1 similarity; 1 means identical. Used to judge near-miss OCR reads.
-const similarity = (a: string, b: string): number => {
+export const similarity = (a: string, b: string): number => {
     const maxLen = Math.max(a.length, b.length);
     return maxLen === 0 ? 1 : 1 - levenshtein(a, b) / maxLen;
 };
@@ -127,12 +131,23 @@ function findFuzzyMatch(
     return best;
 }
 
+// Internal working cell — carries *positional* indices into the sanitized word
+// array while the matcher runs (the walk and fuzzy bounds need contiguous order).
+// Converted to stable UUIDs only when the public CellProvenance is emitted.
+type WorkingCell = {
+    rowIndex: number;
+    colIndex: number;
+    value: string;
+    wordIdx: number[];
+    matchStatus: CellProvenance['matchStatus'];
+};
+
 // Second pass: for cells the exact walk left unmatched, search the positional
 // gap between their nearest matched neighbours (in reading order) for a close
 // OCR run. Bounding the search to that gap keeps ordering intact and prevents
 // stealing words already claimed by another cell. A perfect hit is promoted to a
 // normal match; anything below 1.0 is flagged "fuzzy" so confidence is lowered.
-function fuzzyMatchPass(result: CellProvenance[][], ocrWords: OcrWord[]): void {
+function fuzzyMatchPass(result: WorkingCell[][], ocrWords: OcrWord[]): void {
     const flat = result.flat();
     for (let i = 0; i < flat.length; i++) {
         const cell = flat[i];
@@ -140,21 +155,21 @@ function fuzzyMatchPass(result: CellProvenance[][], ocrWords: OcrWord[]): void {
         const target = normalize(cell.value);
         if (!target) continue;
 
-        // Matched cells have monotonically increasing wordIds, so the nearest
+        // Matched cells have monotonically increasing word indices, so the nearest
         // matched neighbour on each side gives the tightest positional bound.
         let lo = 0;
         for (let j = i - 1; j >= 0; j--) {
-            if (flat[j].wordIds.length > 0) { lo = Math.max(...flat[j].wordIds) + 1; break; }
+            if (flat[j].wordIdx.length > 0) { lo = Math.max(...flat[j].wordIdx) + 1; break; }
         }
         let hi = ocrWords.length;
         for (let j = i + 1; j < flat.length; j++) {
-            if (flat[j].wordIds.length > 0) { hi = Math.min(...flat[j].wordIds); break; }
+            if (flat[j].wordIdx.length > 0) { hi = Math.min(...flat[j].wordIdx); break; }
         }
 
         const found = findFuzzyMatch(ocrWords, lo, hi, target);
         if (!found) continue;
 
-        cell.wordIds = found.ids;
+        cell.wordIdx = found.ids;
         cell.matchStatus = found.similarity >= 1
             ? (found.ids.length > 1 ? "multi_word" : "matched")
             : "fuzzy";
@@ -168,10 +183,10 @@ export const matchCellsToOcr = (
     ocrWords: OcrWord[],
 ): CellProvenance[][] => {
     let cursor = 0;
-    const result: CellProvenance[][] = [];
+    const working: WorkingCell[][] = [];
 
     for (let r = 0; r < csvRows.length; r++) {
-        const rowOut: CellProvenance[] = [];
+        const rowOut: WorkingCell[] = [];
         for (let c = 0; c < csvRows[r].length; c++) {
             const value = csvRows[r][c];
             const target = normalize(value);
@@ -181,18 +196,27 @@ export const matchCellsToOcr = (
                 cursor = match.nextCursor;
                 rowOut.push({
                     rowIndex: r, colIndex: c, value,
-                    wordIds: match.ids,
+                    wordIdx: match.ids,
                     matchStatus: match.ids.length > 1 ? "multi_word" : "matched",
                 });
             } else {
-                rowOut.push({ rowIndex: r, colIndex: c, value, wordIds: [], matchStatus: "unmatched" });
+                rowOut.push({ rowIndex: r, colIndex: c, value, wordIdx: [], matchStatus: "unmatched" });
             }
         }
-        result.push(rowOut);
+        working.push(rowOut);
     }
 
     // Second pass — fuzzy-match whatever the exact walk could not place.
-    fuzzyMatchPass(result, ocrWords);
+    fuzzyMatchPass(working, ocrWords);
 
-    return result;
+    // Convert positional indices to stable UUIDs for storage/resolution.
+    return working.map(row =>
+        row.map(cell => ({
+            rowIndex: cell.rowIndex,
+            colIndex: cell.colIndex,
+            value: cell.value,
+            wordIds: cell.wordIdx.map(i => ocrWords[i].id),
+            matchStatus: cell.matchStatus,
+        }))
+    );
 };

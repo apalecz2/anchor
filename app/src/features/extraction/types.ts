@@ -42,7 +42,7 @@ export type CellProvenance = {
     rowIndex: number;
     colIndex: number;
     value: string;
-    wordIds: number[];      // indices into the sanitized OcrWord array from sanitizeWordsForProvenance
+    wordIds: string[];      // stable OcrWord UUIDs (OcrWord.id) — survive add/edit/delete reordering
     matchStatus: "matched" | "multi_word" | "fuzzy" | "unmatched";
 };
 

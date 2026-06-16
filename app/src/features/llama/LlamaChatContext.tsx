@@ -14,9 +14,13 @@ type LlamaChatContextValue = {
     attachImage: (file: File) => Promise<boolean>;
     removePendingAttachment: () => void;
     /** Resolves true once the server reports healthy, false if it failed to start
-     *  (the reason is also placed in `serverError`). */
+     *  (the reason is also placed in `serverError`). Cancels any pending idle unload. */
     startServer: () => Promise<boolean>;
     stopServer: () => Promise<void>;
+    /** Release the server after a job: keep it warm for a short idle window so an
+     *  immediate re-extract is instant, then unload to free RAM. A new startServer
+     *  cancels the pending unload. */
+    releaseServer: () => void;
     sendMessage: (text: string, attachmentOverride?: FileAttachment | null) => Promise<string | null>;
 };
 
@@ -46,11 +50,24 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
     const messageCounterRef = useRef(0);
     const activeRequestRef = useRef<AbortController | null>(null);
     const watchdogRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const idleUnloadRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const isMountedRef = useRef(true);
+
+    // How long to keep the model resident after a job finishes. Long enough that a
+    // user tweaking and re-extracting doesn't reload (tens of seconds for a 2.7 GB
+    // GGUF), short enough that an idle session releases its RAM (design §6).
+    const IDLE_UNLOAD_MS = 90_000;
 
     const allocateMessageId = () => {
         messageCounterRef.current += 1;
         return messageCounterRef.current;
+    };
+
+    const cancelIdleUnload = () => {
+        if (idleUnloadRef.current !== null) {
+            clearTimeout(idleUnloadRef.current);
+            idleUnloadRef.current = null;
+        }
     };
 
     const stopWatchdog = () => {
@@ -78,12 +95,15 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
         return () => {
             isMountedRef.current = false;
             stopWatchdog();
+            cancelIdleUnload();
             activeRequestRef.current?.abort();
             void stopLlamaServer();
         };
     }, []);
 
     const startServer = async (): Promise<boolean> => {
+        // A new job cancels any pending idle unload, whether or not the server is up.
+        cancelIdleUnload();
         if (isServerReady) return true;
         if (isServerStarting) return false;
 
@@ -114,10 +134,21 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
     };
 
     const stopServer = async () => {
+        cancelIdleUnload();
         stopWatchdog();
         await stopLlamaServer();
         setIsServerReady(false);
         setIsServerStarting(false);
+    };
+
+    // Defer the unload so a quick re-extract keeps the warm server. The timer is
+    // cancelled by the next startServer (or an explicit stopServer / unmount).
+    const releaseServer = () => {
+        cancelIdleUnload();
+        idleUnloadRef.current = setTimeout(() => {
+            idleUnloadRef.current = null;
+            void stopServer();
+        }, IDLE_UNLOAD_MS);
     };
 
     const attachImage = async (file: File) => {
@@ -262,6 +293,7 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
         removePendingAttachment,
         startServer,
         stopServer,
+        releaseServer,
         sendMessage,
     };
 

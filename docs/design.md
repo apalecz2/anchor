@@ -101,7 +101,7 @@ Adaptive hardware modes:
    - `cellTrust` state machine: `high` → green / `medium` → yellow / `low` → red. Drives the per-cell UI heatmap. Fuzzy-matched cells have their computed trust knocked down one level to reflect the approximate OCR agreement.
 
 6. Memory unloading
-   - Unload the AI model from RAM after Stage 1 completes to free resources (unless queued jobs remain). The vision projector is not needed for Stage 2.
+   - Free the AI model from RAM once it is no longer needed; the vision projector is not needed for Stage 2. To avoid paying the multi‑GB reload on a re‑extract or the next page, the server is kept **warm for a short idle window** after a job finishes and is then unloaded; a new job within that window cancels the pending unload, and leaving the session (Session unmount) unloads immediately. This honours the "free resources unless more work is imminent" intent without reloading the model between back‑to‑back extractions.
 
 7. Human verification
    - Provenance table with per-cell trust coloring. Click any cell to highlight its bounding box on the source document. Unmatched cells show an "unverified source" (`?`) badge; fuzzy-matched cells show an "approximate match" (`≈`) badge.

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { getDb } from '../lib/db';
+import { deleteSession } from '../features/sessions/sessionActions';
 
 import { writeFile, mkdir, BaseDirectory } from '@tauri-apps/plugin-fs';
 import { join, appDataDir } from '@tauri-apps/api/path';
@@ -13,79 +14,81 @@ export default function Dashboard(): React.ReactElement {
     const [fileError, setFileError] = useState<string | null>(null);
     const navigate = useNavigate();
 
-    // Call after the user selects files to create a session and navigate to the page for it
+    // Call after the user selects a file to create a session and navigate to it.
+    // One file per session: a session maps to a single document (a multi-page PDF
+    // still becomes one session with several pages). Extraction reads exactly one
+    // file, so accepting several here would silently drop all but the first —
+    // reject instead until batch/queue support (design §3.2) lands.
     const processFilesAndNavigate = async (files: FileList | null) => {
         if (!files || files.length === 0) return;
         setFileError(null);
 
-        for (let i = 0; i < files.length; i++) {
-            const file = files[i];
-            if (!ALLOWED_MIME_TYPES.has(file.type)) {
-                setFileError(`"${file.name}" is not a supported file type. Please upload PDF, PNG, or JPEG files.`);
-                return;
-            }
-            if (file.size > MAX_FILE_SIZE_BYTES) {
-                setFileError(`"${file.name}" exceeds the 500 MB size limit.`);
-                return;
-            }
+        if (files.length > 1) {
+            setFileError('Please upload one file at a time. Multi-file batches are not supported yet.');
+            return;
         }
 
-        let db;
-        // Move ID generation up so we can access it in the catch block if we need to clean up
+        const file = files[0];
+        if (!ALLOWED_MIME_TYPES.has(file.type)) {
+            setFileError(`"${file.name}" is not a supported file type. Please upload PDF, PNG, or JPEG files.`);
+            return;
+        }
+        if (file.size > MAX_FILE_SIZE_BYTES) {
+            setFileError(`"${file.name}" exceeds the 500 MB size limit.`);
+            return;
+        }
+
+        // Generate the ID up front so the catch block can clean up if needed.
         const newSessionId = crypto.randomUUID();
+        let sessionCreated = false;
 
         try {
-            db = await getDb();
-            const primaryFile = files[0];
+            const db = await getDb();
 
-            // 1. Ensure your app's data directory has a 'sessions' folder
+            // 1. Ensure the app's data directory has a 'sessions' folder
             await mkdir('sessions', { baseDir: BaseDirectory.AppData, recursive: true });
 
             // 2. Create the session record
             await db.execute(
                 'INSERT INTO sessions (id, title) VALUES ($1, $2)',
-                [newSessionId, primaryFile.name]
+                [newSessionId, file.name]
             );
+            sessionCreated = true;
 
-            // 3. Process and save the files
-            for (let i = 0; i < files.length; i++) {
-                const file = files[i];
-                const fileId = crypto.randomUUID();
+            // 3. Copy the file into AppData and record it
+            const fileId = crypto.randomUUID();
+            const arrayBuffer = await file.arrayBuffer();
+            const uint8Array = new Uint8Array(arrayBuffer);
 
-                const arrayBuffer = await file.arrayBuffer();
-                const uint8Array = new Uint8Array(arrayBuffer);
+            const extension = file.name.split('.').pop();
+            const safeFileName = `${fileId}.${extension}`;
+            const relativePath = await join('sessions', safeFileName);
 
-                const extension = file.name.split('.').pop();
-                const safeFileName = `${fileId}.${extension}`;
+            const appData = await appDataDir();
+            const absolutePath = await join(appData, relativePath);
 
-                const relativePath = await join('sessions', safeFileName);
-                
-                const appData = await appDataDir();
-                const absolutePath = await join(appData, relativePath);
+            await writeFile(relativePath, uint8Array, { baseDir: BaseDirectory.AppData });
 
-                await writeFile(relativePath, uint8Array, { baseDir: BaseDirectory.AppData });
-
-                // Save the ABSOLUTE path to the database so OCR and the Viewer can find it
-                await db.execute(
-                    'INSERT INTO files (id, session_id, file_name, file_path) VALUES ($1, $2, $3, $4)',
-                    [fileId, newSessionId, file.name, absolutePath]
-                );
-            }
+            // Save the ABSOLUTE path so OCR and the Viewer can find it
+            await db.execute(
+                'INSERT INTO files (id, session_id, file_name, file_path) VALUES ($1, $2, $3, $4)',
+                [fileId, newSessionId, file.name, absolutePath]
+            );
 
             // Navigate to the new workspace
             navigate(`/session/${newSessionId}`);
 
         } catch (error) {
-            console.error("Failed to process files:", error);
-            setFileError("An unexpected error occurred while processing your files. Please try again.");
+            console.error("Failed to process file:", error);
+            setFileError("An unexpected error occurred while processing your file. Please try again.");
 
-            // 4. Manual "Rollback": If anything fails, delete the session to prevent orphaned data
-            if (db) {
+            // Roll back any partial state. deleteSession removes child rows and the
+            // copied file explicitly (not relying on FK cascade).
+            if (sessionCreated) {
                 try {
-                    await db.execute('DELETE FROM sessions WHERE id = $1', [newSessionId]);
-                    console.log("Cleaned up incomplete session data due to an error.");
+                    await deleteSession(newSessionId);
                 } catch (cleanupError) {
-                    console.error("Failed to clean up database after error:", cleanupError);
+                    console.error("Failed to clean up session after error:", cleanupError);
                 }
             }
         }
@@ -151,7 +154,6 @@ export default function Dashboard(): React.ReactElement {
                     <input
                         accept=".pdf,.png,.jpg,.jpeg"
                         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                        multiple
                         type="file"
                         onChange={handleFileInput}
                     />
@@ -165,8 +167,8 @@ export default function Dashboard(): React.ReactElement {
                         </span>
                     </div>
 
-                    <h3 className="font-headline-md text-headline-md text-primary mb-2">Select files to upload</h3>
-                    <p className="font-body-md text-body-md text-on-surface-variant">or drag and drop them here</p>
+                    <h3 className="font-headline-md text-headline-md text-primary mb-2">Select a file to upload</h3>
+                    <p className="font-body-md text-body-md text-on-surface-variant">or drag and drop it here</p>
                 </div>
 
                 {/* File validation error */}

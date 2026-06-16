@@ -37,13 +37,13 @@ export const useLlamaChat = () => {
         sessionId: string,
         pageIndex: number,
     ): Promise<TableFormatResult> => {
-        if (!context.isServerReady) {
-            const ready = await context.startServer();
-            if (!ready) {
-                // startServer surfaces the specific reason via `serverError`; throw a
-                // fallback so the caller still gets a message even on a stale read.
-                throw new Error('The local model server failed to start. Check that the model files exist and you have enough free RAM, then retry.');
-            }
+        // Always go through startServer: it returns immediately when the server is
+        // already warm (and cancels any pending idle unload from a prior extraction).
+        const ready = await context.startServer();
+        if (!ready) {
+            // startServer surfaces the specific reason via `serverError`; throw a
+            // fallback so the caller still gets a message even on a stale read.
+            throw new Error('The local model server failed to start. Check that the model files exist and you have enough free RAM, then retry.');
         }
 
         setIsExtracting(true);
@@ -126,10 +126,13 @@ export const useLlamaChat = () => {
 
             return { csvContent, provenanceCells, sanitizedWords, truncated };
         } finally {
-            // Always reset UI + free the model, then let any error propagate to the
-            // caller so it can be shown in the Session pane (no longer swallowed).
+            // Reset UI, then release the server with a short warm window instead of
+            // unloading immediately: a re-extract or next page within that window
+            // skips the multi-GB reload, while an idle session still frees RAM
+            // (design §6). The model is unloaded outright on Session unmount.
+            // Any error still propagates to the caller for display in the pane.
             setIsExtracting(false);
-            await context.stopServer();
+            context.releaseServer();
         }
     };
 

@@ -4,8 +4,60 @@ import type { LineWord } from '../features/extraction/types';
 const lineThreshold = (imageHeight: number) => Math.max(2, imageHeight * 0.005);
 
 /**
+ * Cluster words into reading-order lines, then sort each line left-to-right.
+ *
+ * This is the single source of truth for line grouping — `sortWords`,
+ * `buildTableText`, and `generateLinesFromWords` all build on it so the three
+ * never drift apart (previously each rolled its own threshold logic).
+ *
+ * The clustering is a single pass over top-sorted words carrying a running
+ * anchor: a word opens a new line only when its `top` is more than `threshold`
+ * below the *previous* word's `top` (a gap), not below the line's first word.
+ * This is transitive — unlike a pairwise "is A within threshold of B" comparator,
+ * which is not a valid sort order (for A≈B, B≈C, A≉C it contradicts itself) and
+ * let noisy / slightly-tilted scans scramble reading order.
+ *
+ * Why gap-to-previous and not anchor-to-first: on low-resolution scans the
+ * threshold is only a few pixels, and a single visual row can still drift more
+ * than that across its width (slight tilt, or digits sitting a hair lower than
+ * the caps beside them). Anchoring to the first word caps a line's vertical
+ * span at `threshold` and exiles such a word to the next line — which reorders
+ * it relative to its row and silently desyncs the provenance cursor walk (e.g.
+ * a course number landing after its description instead of beside its code).
+ * Comparing to the previous word lets the line follow the drift, while the large
+ * gap between real rows still splits them.
+ */
+export const groupWordsIntoLines = (words: OcrWord[], imageHeight: number): OcrWord[][] => {
+    if (words.length === 0) return [];
+    const threshold = lineThreshold(imageHeight);
+
+    const byTop = [...words].sort((a, b) => a.box_coords.top - b.box_coords.top);
+
+    const lines: OcrWord[][] = [];
+    let currentLine: OcrWord[] = [byTop[0]];
+    let prevTop = byTop[0].box_coords.top;
+
+    for (let i = 1; i < byTop.length; i++) {
+        const w = byTop[i];
+        // byTop is ascending, so the gap from the previous word is always >= 0.
+        if (w.box_coords.top - prevTop > threshold) {
+            lines.push(currentLine);
+            currentLine = [w];
+        } else {
+            currentLine.push(w);
+        }
+        prevTop = w.box_coords.top;
+    }
+    lines.push(currentLine);
+
+    for (const line of lines) {
+        line.sort((a, b) => a.box_coords.left - b.box_coords.left);
+    }
+    return lines;
+};
+
+/**
  * Rebuild spatially-accurate text from the structured words array.
- * Words already sorted by Y then X (from sortWords during extraction).
  *
  * Column boundaries are derived once from the header line (first row) and every
  * row is snapped to those columns. Real columns are vertically consistent across
@@ -16,7 +68,6 @@ const lineThreshold = (imageHeight: number) => Math.max(2, imageHeight * 0.005);
  */
 export const buildTableText = (words: OcrWord[], naturalHeight: number): string => {
     if (words.length === 0) return '';
-    const threshold = lineThreshold(naturalHeight);
 
     // Derive a pixels-per-character scale from the word boxes themselves.
     let totalPx = 0, totalChars = 0;
@@ -28,21 +79,7 @@ export const buildTableText = (words: OcrWord[], naturalHeight: number): string 
     }
     const avgCharWidth = totalChars > 0 ? totalPx / totalChars : 8;
 
-    const lineGroups: OcrWord[][] = [];
-    let currentLine: OcrWord[] = [words[0]];
-    let currentTop = words[0].box_coords.top;
-
-    for (let i = 1; i < words.length; i++) {
-        const w = words[i];
-        if (Math.abs(w.box_coords.top - currentTop) > threshold) {
-            lineGroups.push(currentLine);
-            currentLine = [w];
-            currentTop = w.box_coords.top;
-        } else {
-            currentLine.push(w);
-        }
-    }
-    lineGroups.push(currentLine);
+    const lineGroups = groupWordsIntoLines(words, naturalHeight);
 
     // Derive canonical column anchors (pixel left edges) from the header line.
     // A gap wider than ~3 spaces between header words starts a new column;
@@ -95,32 +132,11 @@ export const buildTableText = (words: OcrWord[], naturalHeight: number): string 
     }).join('\n');
 };
 
-export const generateLinesFromWords = (words: OcrWord[], imageHeight: number): LineWord[][] => {
-    if (words.length === 0) return [];
-    const threshold = lineThreshold(imageHeight);
-    const lines: LineWord[][] = [];
-    let currentLine: LineWord[] = [];
-    let currentTop = words[0].box_coords.top;
+export const generateLinesFromWords = (words: OcrWord[], imageHeight: number): LineWord[][] =>
+    groupWordsIntoLines(words, imageHeight).map(line =>
+        line.map(word => ({ text: word.text, wordId: word.id }))
+    );
 
-    words.forEach((word) => {
-        if (Math.abs(word.box_coords.top - currentTop) > threshold) {
-            lines.push(currentLine);
-            currentLine = [{ text: word.text, wordId: word.id }];
-            currentTop = word.box_coords.top;
-        } else {
-            currentLine.push({ text: word.text, wordId: word.id });
-        }
-    });
-
-    if (currentLine.length > 0) lines.push(currentLine);
-    return lines;
-};
-
-export const sortWords = (words: OcrWord[], imageHeight: number) => {
-    const threshold = lineThreshold(imageHeight);
-    return [...words].sort((a, b) => {
-        const verticalDiff = a.box_coords.top - b.box_coords.top;
-        if (Math.abs(verticalDiff) > threshold) return verticalDiff;
-        return a.box_coords.left - b.box_coords.left;
-    });
-};
+// Reading order: lines top-to-bottom, words left-to-right within each line.
+export const sortWords = (words: OcrWord[], imageHeight: number): OcrWord[] =>
+    groupWordsIntoLines(words, imageHeight).flat();
