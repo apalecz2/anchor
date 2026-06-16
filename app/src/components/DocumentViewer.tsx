@@ -1,5 +1,17 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react';
 import type { OcrWord, BoundingBox } from '../features/ocr/types';
+
+export interface DocumentViewerHandle {
+    fitToScreen: () => void;
+    zoomTo: (scale: number) => void;
+}
+
+// Default lower zoom bound for panes large enough to hold the fitted image. When
+// the pane is smaller than that, the bound drops to the fit scale so the image can
+// always be shrunk to fit (see updateZoomBounds).
+const MIN_SCALE = 0.5;
+const MAX_SCALE = 4;
+const FIT_INSET = 16; // breathing room around the fitted image, in px
 
 interface DocumentViewerProps {
     fileUrl: string;
@@ -13,6 +25,7 @@ interface DocumentViewerProps {
     transform: { scale: number; x: number; y: number };
     setTransform: React.Dispatch<React.SetStateAction<{ scale: number; x: number; y: number }>>;
     provenanceHighlightBox?: BoundingBox | null;
+    onMinScaleChange?: (minScale: number) => void;
 }
 
 const getConfidenceColor = (confidence: number) => {
@@ -21,7 +34,7 @@ const getConfidenceColor = (confidence: number) => {
     return `hsl(${hue}, 80%, 45%)`;
 };
 
-export default function DocumentViewer({
+const DocumentViewer = forwardRef<DocumentViewerHandle, DocumentViewerProps>(function DocumentViewer({
     fileUrl,
     words,
     onAddWord,
@@ -33,10 +46,20 @@ export default function DocumentViewer({
     transform,
     setTransform,
     provenanceHighlightBox,
-}: DocumentViewerProps) {
+    onMinScaleChange,
+}: DocumentViewerProps, ref) {
     const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
     const svgRef = useRef<SVGSVGElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
+    const imgRef = useRef<HTMLImageElement>(null);
+
+    // Current lower zoom bound. Dynamic: never above MIN_SCALE, but lowered to the
+    // fit scale (and never above the current scale) so the image can always be
+    // shrunk to fit the pane and the slider thumb stays truthful after a resize.
+    const minScaleRef = useRef(MIN_SCALE);
+    // Latest scale, read inside stable callbacks without making them stale.
+    const scaleRef = useRef(transform.scale);
+    scaleRef.current = transform.scale;
 
     // Track active panning drag
     const [isDragging, setIsDragging] = useState(false);
@@ -59,10 +82,21 @@ export default function DocumentViewer({
             const zoomSensitivity = 0.002;
             const delta = -e.deltaY * zoomSensitivity;
 
-            setTransform(prev => ({
-                ...prev,
-                scale: Math.min(Math.max(0.1, prev.scale * (1 + delta)), 10)
-            }));
+            // Focal point of the zoom: cursor position relative to the container's
+            // top-left (the transform-origin), so the point under the cursor stays put.
+            const rect = container.getBoundingClientRect();
+            const focalX = e.clientX - rect.left;
+            const focalY = e.clientY - rect.top;
+
+            setTransform(prev => {
+                const newScale = Math.min(MAX_SCALE, Math.max(minScaleRef.current, prev.scale * (1 + delta)));
+                const ratio = newScale / prev.scale;
+                return {
+                    scale: newScale,
+                    x: focalX - ratio * (focalX - prev.x),
+                    y: focalY - ratio * (focalY - prev.y),
+                };
+            });
         };
 
         container.addEventListener('wheel', handleWheel, { passive: false });
@@ -102,10 +136,86 @@ export default function DocumentViewer({
         }
     };
 
+    // The scale that fits the whole image within the container (with margins), or
+    // null if not measurable yet.
+    const getFitScale = useCallback((): number | null => {
+        const container = containerRef.current;
+        const img = imgRef.current;
+        if (!container || !img || !img.offsetWidth || !img.offsetHeight) return null;
+        return Math.min(
+            (container.clientWidth - FIT_INSET * 2) / img.offsetWidth,
+            (container.clientHeight - FIT_INSET * 2) / img.offsetHeight,
+        );
+    }, []);
+
+    // Recompute the lower zoom bound for the current pane size and report it up so
+    // the slider's range tracks it. Only touches the bound — never the transform —
+    // so resizing the pane does not move or rescale the image.
+    const updateZoomBounds = useCallback(() => {
+        const fit = getFitScale();
+        if (fit === null) return;
+        const newMin = Math.min(MIN_SCALE, fit, scaleRef.current);
+        if (newMin !== minScaleRef.current) {
+            minScaleRef.current = newMin;
+            onMinScaleChange?.(newMin);
+        }
+    }, [getFitScale, onMinScaleChange]);
+
+    // Scale the image so it fits entirely within the container, then center it.
+    // With a top-left transform-origin, centering means computing the corner offset
+    // explicitly. The fit scale is allowed below MIN_SCALE so a small pane truly fits.
+    const fitToScreen = useCallback(() => {
+        const container = containerRef.current;
+        const img = imgRef.current;
+        const fit = getFitScale();
+        if (!container || !img || fit === null) return;
+
+        const cw = container.clientWidth;
+        const ch = container.clientHeight;
+        const scale = Math.min(MAX_SCALE, fit);
+        minScaleRef.current = Math.min(MIN_SCALE, scale);
+        onMinScaleChange?.(minScaleRef.current);
+        setTransform({
+            scale,
+            x: (cw - img.offsetWidth * scale) / 2,
+            y: (ch - img.offsetHeight * scale) / 2,
+        });
+    }, [getFitScale, onMinScaleChange, setTransform]);
+
+    // Zoom to a target scale about the center of the visible area (used by the
+    // slider and zoom buttons), keeping that center point fixed.
+    const zoomTo = useCallback((target: number) => {
+        const container = containerRef.current;
+        if (!container) return;
+        const focalX = container.clientWidth / 2;
+        const focalY = container.clientHeight / 2;
+        setTransform(prev => {
+            const newScale = Math.min(MAX_SCALE, Math.max(minScaleRef.current, target));
+            const ratio = newScale / prev.scale;
+            return {
+                scale: newScale,
+                x: focalX - ratio * (focalX - prev.x),
+                y: focalY - ratio * (focalY - prev.y),
+            };
+        });
+    }, [setTransform]);
+
+    useImperativeHandle(ref, () => ({ fitToScreen, zoomTo }), [fitToScreen, zoomTo]);
+
+    // Keep the zoom range in sync with the pane size as the split divider moves.
+    useEffect(() => {
+        const container = containerRef.current;
+        if (!container) return;
+        const ro = new ResizeObserver(() => updateZoomBounds());
+        ro.observe(container);
+        return () => ro.disconnect();
+    }, [updateZoomBounds]);
+
     // --- Drawing Logic ---
     const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
         const { naturalWidth, naturalHeight } = e.currentTarget;
         setNaturalSize({ width: naturalWidth, height: naturalHeight });
+        fitToScreen();
     };
 
     const getSvgPoint = (e: React.MouseEvent | MouseEvent) => {
@@ -189,19 +299,20 @@ export default function DocumentViewer({
                 </>
             )}
 
-            <div 
-                className="relative shadow-sm shadow-black/10"
+            <div
+                className="absolute left-0 top-0 shadow-sm shadow-black/10"
                 style={{
                     transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
-                    transformOrigin: 'center',
-                    transition: isDragging ? 'none' : 'transform 0.05s ease-out' 
+                    transformOrigin: '0 0',
+                    transition: isDragging ? 'none' : 'transform 0.05s ease-out'
                 }}
             >
                 <img
+                    ref={imgRef}
                     src={fileUrl}
                     alt="Document"
                     onLoad={handleImageLoad}
-                    className="block max-h-[80vh] max-w-full object-contain pointer-events-none"
+                    className="block max-h-[80vh] w-auto max-w-none pointer-events-none select-none"
                 />
 
                 {naturalSize.width > 0 && (
@@ -274,4 +385,6 @@ export default function DocumentViewer({
             </div>
         </div>
     );
-}
+});
+
+export default DocumentViewer;

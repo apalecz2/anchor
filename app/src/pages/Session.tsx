@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router';
 import DocumentViewer from '../components/DocumentViewer';
+import type { DocumentViewerHandle } from '../components/DocumentViewer';
 import ProvenanceTable from '../components/ProvenanceTable';
 import type { SelectedCell } from '../components/ProvenanceTable';
 import { parseCSV } from '../features/llama/promptUtils';
@@ -51,6 +52,8 @@ function SessionContent(): React.ReactElement {
 
     const [activeTool, setActiveTool] = useState<'draw' | 'pan'>('draw');
     const [viewTransform, setViewTransform] = useState({ scale: 1, x: 0, y: 0 });
+    const [minZoom, setMinZoom] = useState(0.5);
+    const viewerRef = useRef<DocumentViewerHandle>(null);
     const [pageInputValue, setPageInputValue] = useState('1');
 
     const totalPages = extractionResult?.pages.length ?? 1;
@@ -114,6 +117,7 @@ function SessionContent(): React.ReactElement {
         }
     };
 
+
     const handleFormatTable = async () => {
         if (!fileUrl || !activePage?.words.length || !id) return;
         setOutputView('table');
@@ -169,6 +173,7 @@ function SessionContent(): React.ReactElement {
                         <div className="flex w-full items-center justify-center text-error h-full">{dbError}</div>
                     ) : fileUrl && activePage ? (
                         <DocumentViewer
+                            ref={viewerRef}
                             fileUrl={fileUrl}
                             words={activePage.words}
                             onAddWord={(box) => setEditingState({ box })}
@@ -179,6 +184,7 @@ function SessionContent(): React.ReactElement {
                             activeTool={activeTool}
                             transform={viewTransform}
                             setTransform={setViewTransform}
+                            onMinScaleChange={setMinZoom}
                             provenanceHighlightBox={provenanceHighlightBox}
                         />
                     ) : null}
@@ -258,7 +264,7 @@ function SessionContent(): React.ReactElement {
                                 <button
                                     aria-label="Zoom out"
                                     className={iconBtnClass}
-                                    onClick={() => setViewTransform(prev => ({ ...prev, scale: Math.max(0.1, prev.scale - 0.2) }))}
+                                    onClick={() => viewerRef.current?.zoomTo(viewTransform.scale - 0.25)}
                                     type="button"
                                 >
                                     <span className="material-symbols-outlined text-[18px]" style={{ fontVariationSettings: "'FILL' 0" }}>zoom_out</span>
@@ -266,11 +272,11 @@ function SessionContent(): React.ReactElement {
 
                                 <input
                                     type="range"
-                                    min="0.1"
-                                    max="5"
-                                    step="0.1"
+                                    min={minZoom}
+                                    max="4"
+                                    step="0.05"
                                     value={viewTransform.scale}
-                                    onChange={(e) => setViewTransform(prev => ({ ...prev, scale: parseFloat(e.target.value) }))}
+                                    onChange={(e) => viewerRef.current?.zoomTo(parseFloat(e.target.value))}
                                     className="hidden w-20 accent-primary cursor-pointer sm:block"
                                     title={`Zoom: ${Math.round(viewTransform.scale * 100)}%`}
                                 />
@@ -278,7 +284,7 @@ function SessionContent(): React.ReactElement {
                                 <button
                                     aria-label="Zoom in"
                                     className={iconBtnClass}
-                                    onClick={() => setViewTransform(prev => ({ ...prev, scale: Math.min(10, prev.scale + 0.2) }))}
+                                    onClick={() => viewerRef.current?.zoomTo(viewTransform.scale + 0.25)}
                                     type="button"
                                 >
                                     <span className="material-symbols-outlined text-[18px]" style={{ fontVariationSettings: "'FILL' 0" }}>zoom_in</span>
@@ -287,9 +293,9 @@ function SessionContent(): React.ReactElement {
                                 <button
                                     aria-label="Reset view"
                                     className={iconBtnClass}
-                                    onClick={() => setViewTransform({ scale: 1, x: 0, y: 0 })}
+                                    onClick={() => viewerRef.current?.fitToScreen()}
                                     type="button"
-                                    title="Reset View"
+                                    title="Fit to screen"
                                 >
                                     <span className="material-symbols-outlined text-[18px]" style={{ fontVariationSettings: "'FILL' 0" }}>fit_screen</span>
                                 </button>
