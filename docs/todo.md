@@ -52,7 +52,7 @@
 
 - [x] Updated `docs/design.md`
 - [x] Remove all bundled resources from `tauri.conf.json` (models, binaries, Tesseract)
-- [x] `detect_hardware` Tauri command -- GPU name, VRAM, RAM, recommended backend (Windows/macOS/Linux)
+- [x] `detect_hardware` Tauri command -- GPU name, VRAM, RAM, recommended backend (Windows/macOS; a best-effort Linux path exists but Linux is a later addition, not supported now)
 - [x] `download_file` command -- async streaming with `.part` temp file, `setup:progress` events
 - [x] `verify_file_hash` command -- SHA-256 integrity check
 - [x] `extract_zip` command -- path-traversal-safe extraction via `enclosed_name()`, deletes archive after
@@ -69,11 +69,11 @@
 - [x] Replace `R2_BASE` placeholder with the real asset domain (`artifact-assets.aidenpaleczny.com`)
 - [ ] Provision the Cloudflare R2 bucket end-to-end and confirm every asset object is reachable
 - [ ] Replace `HF_MODEL_URL` / `HF_MMPROJ_URL` placeholder constants with real HuggingFace URLs
-- [ ] Build and upload remaining platform-specific Tesseract zips to R2 (Windows pinned; macOS/Linux still unpinned)
-- [x] Upload llama-server binaries per platform to R2 and pin hashes (Windows CPU/CUDA, macOS) -- Linux build still unpinned
+- [ ] Build and upload the macOS Tesseract zip to R2 and pin it (Windows pinned). _(Linux is a later addition — not needed for now.)_
+- [x] Upload llama-server binaries per platform to R2 and pin hashes (Windows CPU/CUDA, macOS). _(Linux build deferred — later addition.)_
 - [x] Upload GGUF model + mmproj files to R2 and pin their SHA-256 hashes
-- [ ] Pin the remaining SHA-256 hashes (cudart, Linux llama-server, non-Windows Tesseract) in `get_asset_manifest` / `get_tesseract_spec`
-- [ ] Resume interrupted downloads -- wizard currently restarts from scratch if closed mid-download
+- [ ] Pin the remaining SHA-256 hash for the supported platforms (macOS Tesseract) in `get_tesseract_spec`. _(cudart is pinned; Linux llama-server/Tesseract are intentionally left unpinned until Linux support lands.)_
+- [x] Resume interrupted downloads -- `download_file` now reconnects and resumes from the `.part` via HTTP Range
 - [ ] Update about page
 
 ## Infrastructure / Architecture

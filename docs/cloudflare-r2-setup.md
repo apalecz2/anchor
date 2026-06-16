@@ -21,7 +21,7 @@ The first-run setup wizard downloads ~3.5 GB of assets at runtime rather than bu
 | Vision projector (mmproj) | ~656 MB | `models/mmproj-F16.gguf` |
 | Qwen language model | ~2.7 GB | `models/Qwen3.5-4B-Q4_K_M.gguf` |
 
-The llama.cpp archives are the **unmodified release artifacts** from GitHub — no repackaging (Windows/Linux `.zip`, macOS `.tar.gz`). The app downloads the archive and extracts the server binary + all its shared libraries into `{AppData}/binaries/`. To update llama.cpp, download the new release archive, rename it to strip the build tag (keep the extension), and overwrite the R2 object.
+The llama.cpp archives are the **unmodified release artifacts** from GitHub — no repackaging (Windows `.zip`, macOS `.tar.gz`; Linux is a later addition and not provisioned now). The app downloads the archive and extracts the server binary + all its shared libraries into `{AppData}/binaries/`. To update llama.cpp, download the new release archive, rename it to strip the build tag (keep the extension), and overwrite the R2 object.
 
 ---
 
@@ -101,7 +101,7 @@ Your new bucket should appear in the list.
 
 ## Step 5 — Obtain the llama.cpp release archives
 
-Download the pre-built release archives from the llama.cpp GitHub releases page — **do not unzip or repackage them**. Note Windows/Linux ship as `.zip`, macOS as `.tar.gz`:
+Download the pre-built release archives from the llama.cpp GitHub releases page — **do not unzip or repackage them**. Only Windows and macOS are provisioned for now (Linux is a later addition). Note Windows ships as `.zip`, macOS as `.tar.gz`:
 
 **URL:** https://github.com/ggerganov/llama.cpp/releases
 

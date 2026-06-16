@@ -49,7 +49,7 @@ By prioritizing a local‑first architecture, the application guarantees strict 
 
 ## 5. System Requirements & Hardware Adaptability
 
-- Cross‑platform: macOS, Windows, Linux.
+- Supported platforms: **Windows and macOS**. **Linux support is a planned later addition** and is out of scope for now — no Linux assets are built, uploaded, or pinned, and the Linux code paths that exist are best-effort placeholders only.
 - Minimum spec: 8 GB RAM.
 
 Adaptive hardware modes:
@@ -115,13 +115,15 @@ The app installer is intentionally small (< 20 MB). Platform‑specific binaries
 
 ### 7.1 Asset Inventory
 
+Platforms below are limited to the currently supported targets (**Windows + macOS**); "All" means all *supported* platforms. **Linux is a later addition** — its assets are intentionally not built or pinned yet.
+
 | Asset | Platforms | Primary Source | Fallback | Size |
 |---|---|---|---|---|
 | Tesseract binary + DLLs | Windows | Cloudflare R2 | — | ~86 MB |
 | Tesseract binary | macOS | Cloudflare R2 | — | ~15 MB |
 | `eng.traineddata` | All | Cloudflare R2 | — | ~4 MB (fast tier) |
 | `llama-server` CPU build | All | Cloudflare R2 | llama.cpp GitHub releases | ~46 MB |
-| `llama-server` CUDA build | Windows / Linux | Cloudflare R2 | llama.cpp GitHub releases | ~80 MB |
+| `llama-server` CUDA build | Windows | Cloudflare R2 | llama.cpp GitHub releases | ~80 MB |
 | `llama-server` Metal build | macOS (Apple Silicon) | Cloudflare R2 | llama.cpp GitHub releases | ~46 MB |
 | PDFium shared library | Windows / macOS | Cloudflare R2 | — | ~3.5 MB |
 | `Qwen3.5‑4B‑Q4_K_M.gguf` | All | Cloudflare R2 | HuggingFace (Qwen/Qwen3‑4B‑GGUF) | ~2.7 GB |
@@ -133,7 +135,7 @@ PDFium is required because `pdfium-render` binds to a pdfium shared library at r
 
 All asset URLs, expected SHA‑256 digests, and destination paths are hardcoded as constants in the Rust backend so they can be audited and updated as a unit when new model or binary versions are pinned.
 
-Note: Still outstanding: the HuggingFace fallback URLs are placeholders, and a few assets (cudart, the Linux llama-server build, and the non-Windows Tesseract builds) are not yet pinned or uploaded. Automatic re‑download on hash failure is also not yet implemented; a hash mismatch currently surfaces an error and asks the user to re‑run setup.
+Note: Still outstanding for the supported platforms: the HuggingFace fallback URLs are placeholders, and the macOS Tesseract build is not yet pinned/uploaded. Automatic re‑download on hash failure is also not yet implemented; a hash mismatch currently surfaces an error and asks the user to re‑run setup. **Linux assets (the Linux llama-server build and Linux Tesseract) are deliberately not pinned or uploaded — Linux is a later addition and not required for now.**
 
 ### 7.2 Storage Layout
 
@@ -160,10 +162,12 @@ The Rust startup hook that injects Tesseract into `PATH` and `TESSDATA_PREFIX` r
 
 Before presenting download options the app queries the host GPU to select the correct llama‑server build:
 
-- **Windows / Linux** — WMI (`Win32_VideoController`) or `/sys/class/drm` sysfs vendor IDs.
+- **Windows** — WMI (`Win32_VideoController`), with `nvidia-smi` for accurate VRAM on NVIDIA cards.
 - **macOS** — `system_profiler SPDisplaysDataType`.
 
-Detection output drives a `recommended_backend` value: `cuda` (NVIDIA, ≥ 4 GB VRAM), `rocm` (AMD on Linux), `metal` (Apple Silicon), or `cpu` (fallback). The user can override the recommendation before downloading.
+(A best-effort `lspci`/`nvidia-smi` Linux path exists in the code but is unsupported and untested — see the Linux note in §5.)
+
+Detection output drives a `recommended_backend` value: `cuda` (NVIDIA, ≥ 4 GB VRAM), `metal` (Apple Silicon), or `cpu` (fallback). The user can override the recommendation before downloading. (`rocm` for AMD is reserved for the future Linux target and is not offered on the supported platforms.)
 
 ### 7.4 First‑Run Wizard Flow
 
