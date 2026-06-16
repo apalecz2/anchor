@@ -248,10 +248,13 @@ pub async fn download_file(
 // verify_file_hash
 // ---------------------------------------------------------------------------
 
+// async so Tauri runs it on the async runtime instead of the main (UI) thread.
+// The actual hashing is CPU-bound for minutes on the multi-GB GGUF files, so it
+// goes on the blocking thread pool via spawn_blocking — running it directly on an
+// async worker would block the main thread on macOS (beachball / "not responding")
+// and could also stall the concurrent download streaming.
 #[tauri::command]
-pub fn verify_file_hash(path: String, expected_sha256: String) -> Result<bool, String> {
-    use sha2::{Digest, Sha256};
-
+pub async fn verify_file_hash(path: String, expected_sha256: String) -> Result<bool, String> {
     // An empty expected hash means the asset hasn't been pinned yet. Running an
     // unverified binary in a shipped build is unacceptable, so fail closed in
     // release. Debug builds skip with a warning so development against not-yet-pinned
@@ -266,19 +269,25 @@ pub fn verify_file_hash(path: String, expected_sha256: String) -> Result<bool, S
         ));
     }
 
-    let mut file = std::fs::File::open(&path)
-        .map_err(|e| format!("open failed: {e}"))?;
+    tokio::task::spawn_blocking(move || {
+        use sha2::{Digest, Sha256};
 
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 65536];
-    loop {
-        let n = file.read(&mut buf).map_err(|e| format!("read error: {e}"))?;
-        if n == 0 { break; }
-        hasher.update(&buf[..n]);
-    }
+        let mut file = std::fs::File::open(&path)
+            .map_err(|e| format!("open failed: {e}"))?;
 
-    let actual = format!("{:x}", hasher.finalize());
-    Ok(actual.eq_ignore_ascii_case(&expected_sha256))
+        let mut hasher = Sha256::new();
+        let mut buf = [0u8; 65536];
+        loop {
+            let n = file.read(&mut buf).map_err(|e| format!("read error: {e}"))?;
+            if n == 0 { break; }
+            hasher.update(&buf[..n]);
+        }
+
+        let actual = format!("{:x}", hasher.finalize());
+        Ok(actual.eq_ignore_ascii_case(&expected_sha256))
+    })
+    .await
+    .map_err(|e| format!("hash task failed: {e}"))?
 }
 
 // ---------------------------------------------------------------------------
