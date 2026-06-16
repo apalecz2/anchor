@@ -10,16 +10,20 @@ The first-run setup wizard downloads ~3.5 GB of assets at runtime rather than bu
 
 **Assets served from R2:**
 
+Sizes are the actual R2 object `Content-Length` (verified 2026-06-16) and match `size_bytes` in the asset manifest.
+
 | Asset | Size | R2 path |
 |---|---|---|
 | llama.cpp release zip (Windows CPU) | ~17 MB | `binaries/llama-bin-win-cpu-x64.zip` |
-| llama.cpp release zip (Windows CUDA) | ~160 MB | `binaries/llama-bin-win-cuda-x64.zip` |
-| CUDA runtime zip (Windows CUDA only) | ~400 MB | `binaries/cudart-llama-bin-win-cuda-x64.zip` |
-| llama.cpp release tarball (macOS Apple Silicon) | ~50 MB | `binaries/llama-bin-macos-arm64.tar.gz` |
-| Tesseract + DLLs (Windows) | ~90 MB | `windows/tesseract.zip` |
-| Tesseract (macOS) | ~15 MB | `macos/tesseract.zip` |
-| Vision projector (mmproj) | ~656 MB | `models/mmproj-F16.gguf` |
-| Qwen language model | ~2.7 GB | `models/Qwen3.5-4B-Q4_K_M.gguf` |
+| llama.cpp release zip (Windows CUDA) | ~261 MB | `binaries/llama-bin-win-cuda-x64.zip` |
+| CUDA runtime zip (Windows CUDA only) | ~391 MB | `binaries/cudart-llama-bin-win-cuda-x64.zip` |
+| llama.cpp release tarball (macOS Apple Silicon) | ~10.5 MB | `binaries/llama-bin-macos-arm64.tar.gz` |
+| PDFium (Windows) | ~3.8 MB | `binaries/pdfium-win-x64.tgz` |
+| PDFium (macOS) | ~3.5 MB | `binaries/pdfium-mac-arm64.tgz` |
+| Tesseract + DLLs (Windows) | ~38 MB | `windows/tesseract.zip` |
+| Tesseract (macOS) | ~5.7 MB | `macos/tesseract.zip` |
+| Vision projector (mmproj) | ~672 MB | `models/mmproj-F16.gguf` |
+| Qwen language model | ~2.74 GB | `models/Qwen3.5-4B-Q4_K_M.gguf` |
 
 The llama.cpp archives are the **unmodified release artifacts** from GitHub — no repackaging (Windows `.zip`, macOS `.tar.gz`; Linux is a later addition and not provisioned now). The app downloads the archive and extracts the server binary + all its shared libraries into `{AppData}/binaries/`. To update llama.cpp, download the new release archive, rename it to strip the build tag (keep the extension), and overwrite the R2 object.
 
@@ -174,8 +178,8 @@ different language, pass its code (e.g. `deu`) — install it first with `brew i
 
 The app uses:
 
-- **Qwen3.5-4B-Q4_K_M.gguf** (~2.7 GB) — quantized Qwen 3.5 4B language model
-- **mmproj-F16.gguf** (~656 MB) — vision projector
+- **Qwen3.5-4B-Q4_K_M.gguf** (~2.74 GB) — quantized Qwen 3.5 4B language model
+- **mmproj-F16.gguf** (~672 MB) — vision projector
 
 Download both from HuggingFace. Find the correct repository for the Qwen3-4B GGUF variant (search HuggingFace for `Qwen3-4B-Q4_K_M GGUF`). Once you locate the repository, copy the two file download URLs and update the `HF_MODEL_URL` and `HF_MMPROJ_URL` constants in [lib.rs:361-364](../app/src-tauri/src/lib.rs#L361) with the exact HuggingFace resolve URLs as fallbacks.
 
