@@ -126,18 +126,18 @@ Platforms below are limited to the currently supported targets (**Windows + macO
 | CUDA runtime libraries (`cudart`) | Windows (CUDA only) | Cloudflare R2 | — | ~391 MB |
 | `llama-server` Metal build | macOS (Apple Silicon) | Cloudflare R2 | llama.cpp GitHub releases | ~10.5 MB |
 | PDFium shared library | Windows / macOS | Cloudflare R2 | — | ~3.7 MB |
-| `Qwen3.5‑4B‑Q4_K_M.gguf` | All | Cloudflare R2 | HuggingFace (Qwen/Qwen3‑4B‑GGUF) | ~2.74 GB |
-| `mmproj‑F16.gguf` | All | Cloudflare R2 | HuggingFace (compatible clip projector) | ~672 MB |
+| `Qwen3.5‑4B‑Q4_K_M.gguf` | All | Cloudflare R2 | HuggingFace (unsloth/Qwen3.5‑4B‑GGUF) | ~2.74 GB |
+| `mmproj‑F16.gguf` | All | Cloudflare R2 | HuggingFace (unsloth/Qwen3.5‑4B‑GGUF, `mmproj‑F16.gguf`) | ~672 MB |
 
 Sizes above are the actual R2 object `Content-Length` values (verified 2026-06-16) and match `size_bytes` in the asset manifest, which seeds the progress bar and time-remaining estimate. The bundled `eng.traineddata` ships inside the Tesseract zip rather than as a separate object.
 
-Cloudflare R2 is the primary source for all assets because it offers zero egress fees and consistent global latency. For the two GGUF model files, HuggingFace is available as a fallback if the R2 bucket is unreachable (the wizard retries a failed download once from the fallback URL).
+Cloudflare R2 is the primary source for all assets because it offers zero egress fees and consistent global latency. For the two GGUF model files, HuggingFace is available as a fallback if the R2 bucket is unreachable (the wizard retries a failed download once from the fallback URL). The fallback URLs are **pinned to an exact commit revision** of `unsloth/Qwen3.5‑4B‑GGUF` (the same build whose SHA‑256 digests are pinned), not to `main`, so a future re‑quant on that repo cannot change the bytes underneath the pin and silently break the fallback.
 
 PDFium is required because `pdfium-render` binds to a pdfium shared library at runtime, and neither Windows nor macOS ships one. The wizard downloads the upstream prebuilt archive (the library nests under `bin/` on Windows and `lib/` on macOS; extraction flattens it directly into `binaries/`) and the backend binds to that explicit path.
 
 All asset URLs, expected SHA‑256 digests, and destination paths are hardcoded as constants in the Rust backend so they can be audited and updated as a unit when new model or binary versions are pinned.
 
-Note: Still outstanding for the supported platforms: the HuggingFace fallback URLs are placeholders, and the macOS Tesseract build is not yet pinned/uploaded. On a hash mismatch the wizard now automatically discards the partial download and retries from the fallback URL where one exists (the two GGUF models); an asset with no fallback (the binaries) surfaces an error and asks the user to re‑run setup. **Linux assets (the Linux llama-server build and Linux Tesseract) are deliberately not pinned or uploaded — Linux is a later addition and not required for now.**
+Note: Still outstanding for the supported platforms: the macOS Tesseract build is not yet pinned/uploaded. (The HuggingFace fallback URLs for the two GGUF models are now real, revision‑pinned links — see above.) On a hash mismatch the wizard now automatically discards the partial download and retries from the fallback URL where one exists (the two GGUF models); an asset with no fallback (the binaries) surfaces an error and asks the user to re‑run setup. **Linux assets (the Linux llama-server build and Linux Tesseract) are deliberately not pinned or uploaded — Linux is a later addition and not required for now.**
 
 ### 7.2 Storage Layout
 

@@ -23,11 +23,16 @@ use crate::paths::{
 // R2 bucket base URL
 const R2_BASE: &str = "https://artifact-assets.aidenpaleczny.com";
 
-// HuggingFace fallback URLs — update with the exact repo/file paths.
+// HuggingFace fallback URLs for the two GGUF models, used only if the R2 primary
+// is unreachable. Pinned to an exact commit revision (not `main`) so the bytes
+// can never change underneath the SHA-256 pins below — a re-quant pushed to `main`
+// would otherwise make the fallback fail verification exactly when it is needed.
+// Repo unsloth/Qwen3.5-4B-GGUF @ e87f176479d0855a907a41277aca2f8ee7a09523 is the
+// same build whose digests are pinned in get_asset_manifest.
 const HF_MODEL_URL: &str =
-    "https://huggingface.co/PLACEHOLDER/resolve/main/Qwen3.5-4B-Q4_K_M.gguf";
+    "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf";
 const HF_MMPROJ_URL: &str =
-    "https://huggingface.co/PLACEHOLDER/resolve/main/mmproj-F16.gguf";
+    "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/mmproj-F16.gguf";
 
 /// True if `dir` contains at least one entry whose filename starts with `prefix`.
 fn dir_contains_prefix(dir: &Path, prefix: &str) -> bool {
