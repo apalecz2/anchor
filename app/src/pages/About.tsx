@@ -197,7 +197,7 @@ export default function About(): React.ReactElement {
                             { label: 'AI runtime', value: 'llama.cpp server', note: 'Model-agnostic inference; swap models without rebuilding' },
                             { label: 'Vision model', value: 'Qwen3.5-4b (multimodal)', note: 'Handles vision tasks and OCR validation locally' },
                             { label: 'OCR engine', value: 'Tesseract', note: 'Word-level bounding boxes and per-character confidence' },
-                            { label: 'Image preprocessing', value: 'imageproc (Rust)', note: 'Binarization, denoising, and rule-line removal before OCR — no system OpenCV dependency' },
+                            { label: 'Image preprocessing', value: 'image (Rust)', note: 'Grayscale and Lanczos upscaling before OCR; Tesseract handles binarization internally — no system OpenCV dependency' },
                             { label: 'PDF rendering', value: 'PDFium', note: 'High-fidelity 2000px renders from native PDF pages' },
                             { label: 'Storage', value: 'SQLite (local)', note: 'Session and file metadata stored entirely on-device' },
                         ].map(({ label, value, note }) => (

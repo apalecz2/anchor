@@ -47,6 +47,8 @@ function SessionContent(): React.ReactElement {
     const [provenanceCells, setProvenanceCells] = useState<ProvenanceCell[][] | null>(null);
     const [selectedCell, setSelectedCell] = useState<SelectedCell>(null);
     const [provenanceHighlightBox, setProvenanceHighlightBox] = useState<BoundingBox | null>(null);
+    const [extractionError, setExtractionError] = useState<string | null>(null);
+    const [truncated, setTruncated] = useState(false);
     const [highlightedWordId, setHighlightedWordId] = useState<string | null>(null);
     const [editingState, setEditingState] = useState<{ box?: BoundingBox | null, id?: string, text?: string } | null>(null);
 
@@ -93,6 +95,8 @@ function SessionContent(): React.ReactElement {
             setProvenanceCells(mappingsJson ? JSON.parse(mappingsJson) as ProvenanceCell[][] : null);
             setSelectedCell(null);
             setProvenanceHighlightBox(null);
+            setExtractionError(null);
+            setTruncated(false);
             if (csv) setOutputView('table');
         }
         load();
@@ -123,18 +127,23 @@ function SessionContent(): React.ReactElement {
         setOutputView('table');
         setSelectedCell(null);
         setProvenanceHighlightBox(null);
+        setExtractionError(null);
+        setTruncated(false);
 
-        const result = await requestTableFormat(
-            fileUrl,
-            activePage.words,
-            activePage.natural_height,
-            id,
-            activePageIndex,
-        );
-
-        if (result) {
+        try {
+            const result = await requestTableFormat(
+                fileUrl,
+                activePage.words,
+                activePage.natural_height,
+                id,
+                activePageIndex,
+            );
             setSavedCsv(result.csvContent);
             setProvenanceCells(result.provenanceCells);
+            setTruncated(result.truncated);
+        } catch (err) {
+            // Surface the failure instead of leaving the pane on a stale prompt.
+            setExtractionError(err instanceof Error ? err.message : 'Extraction failed. Please try again.');
         }
     };
 
@@ -362,6 +371,17 @@ function SessionContent(): React.ReactElement {
                         </div>
                     ) : (
                         <div className="w-full">
+                            {/* When a table is already shown, surface a failed re-extract or a
+                                truncation warning as a banner above it (rather than replacing it). */}
+                            {!isExtracting && ((provenanceCells?.length ?? 0) > 0 || !!savedCsv) && (extractionError || truncated) && (
+                                <div className={`mb-3 flex items-start gap-2 rounded-lg border px-3 py-2 text-sm ${extractionError ? 'border-error/40 bg-error/5 text-error' : 'border-amber-400 bg-amber-50 text-amber-900'}`}>
+                                    <span className="material-symbols-outlined text-[18px] shrink-0" aria-hidden="true">{extractionError ? 'error' : 'warning'}</span>
+                                    <span className="flex-1">
+                                        {extractionError ?? 'The model reached its output limit, so this table may be missing trailing rows. Re-extract if any rows look cut off.'}
+                                    </span>
+                                    <button onClick={handleFormatTable} className="shrink-0 font-medium underline hover:no-underline">Retry</button>
+                                </div>
+                            )}
                             {isExtracting ? (
                                 /* Streaming progress */
                                 <div className="space-y-3">
@@ -438,9 +458,10 @@ function SessionContent(): React.ReactElement {
                                         <pre className="text-sm text-on-surface-variant whitespace-pre-wrap wrap-break-word">{savedCsv}</pre>
                                     );
                                 })()
-                            ) : llamaError ? (
+                            ) : (extractionError || llamaError) ? (
                                 <div className="flex flex-col h-full items-center justify-center gap-3">
-                                    <p className="text-error text-sm text-center max-w-sm">{llamaError}</p>
+                                    <span className="material-symbols-outlined text-error text-[28px]" aria-hidden="true">error</span>
+                                    <p className="text-error text-sm text-center max-w-sm">{extractionError || llamaError}</p>
                                     <button
                                         onClick={handleFormatTable}
                                         className="px-4 py-1 text-sm bg-primary text-on-primary rounded-lg hover:bg-primary/90"

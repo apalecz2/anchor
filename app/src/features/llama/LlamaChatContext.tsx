@@ -13,7 +13,9 @@ type LlamaChatContextValue = {
     pendingAttachment: FileAttachment | null;
     attachImage: (file: File) => Promise<boolean>;
     removePendingAttachment: () => void;
-    startServer: () => Promise<void>;
+    /** Resolves true once the server reports healthy, false if it failed to start
+     *  (the reason is also placed in `serverError`). */
+    startServer: () => Promise<boolean>;
     stopServer: () => Promise<void>;
     sendMessage: (text: string, attachmentOverride?: FileAttachment | null) => Promise<string | null>;
 };
@@ -81,10 +83,9 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
         };
     }, []);
 
-    const startServer = async () => {
-        if (isServerReady || isServerStarting) {
-            return;
-        }
+    const startServer = async (): Promise<boolean> => {
+        if (isServerReady) return true;
+        if (isServerStarting) return false;
 
         setIsServerStarting(true);
         setServerError(null);
@@ -96,15 +97,17 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
                 if (await checkLlamaServerHealth()) {
                     setIsServerReady(true);
                     startWatchdog();
-                    return;
+                    return true;
                 }
 
                 await new Promise(resolve => setTimeout(resolve, 1000));
             }
 
             setServerError('Server did not become ready within 60 seconds. Check that the model file exists and you have enough RAM.');
+            return false;
         } catch (err) {
             setServerError(err instanceof Error ? err.message : 'Failed to start server.');
+            return false;
         } finally {
             setIsServerStarting(false);
         }

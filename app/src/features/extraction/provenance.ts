@@ -28,9 +28,21 @@ const unionBoxes = (boxes: BoundingBox[]): BoundingBox => {
 };
 
 // Returns the union bounding box for a cell's source words, or null if unmatched.
+//
+// `wordIds` are positional indices captured at extraction time. If the user has
+// since added/deleted words the array length can change, leaving an index out of
+// range — guard against it so a stale mapping degrades to "no highlight" instead
+// of throwing and blanking the pane. If *any* referenced word is missing we return
+// null rather than a misleading partial box (the proper fix is UUID-based ids).
 export const getCellSourceBox = (prov: CellProvenance, ocrWords: OcrWord[]): BoundingBox | null => {
     if (prov.wordIds.length === 0) return null;
-    return unionBoxes(prov.wordIds.map(id => ocrWords[id].box_coords));
+    const boxes: BoundingBox[] = [];
+    for (const id of prov.wordIds) {
+        const word = ocrWords[id];
+        if (!word) return null;
+        boxes.push(word.box_coords);
+    }
+    return unionBoxes(boxes);
 };
 
 // Bounded lookahead window — keeps duplicate-value disambiguation correct.

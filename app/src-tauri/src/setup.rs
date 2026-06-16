@@ -9,6 +9,7 @@ use std::{
     fs,
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 use serde::Serialize;
@@ -96,6 +97,20 @@ struct DownloadProgress {
 /// bytes already on disk rather than restarting.
 const DOWNLOAD_MAX_ATTEMPTS: u32 = 5;
 
+/// Cap on how long to wait for the TCP connection to be established.
+const CONNECT_TIMEOUT_SECS: u64 = 30;
+
+/// Max gap with no bytes received before we treat the stream as stalled and
+/// reconnect-resume. Deliberately generous: a healthy multi-GB download still
+/// delivers data far more often than this, while a silently hung socket (which
+/// reqwest would otherwise wait on forever) is caught and retried.
+const STREAM_STALL_TIMEOUT_SECS: u64 = 60;
+
+/// Minimum gap between `setup:progress` events. The raw chunk cadence is tens of
+/// thousands of events for the multi-GB model — each one a React state update —
+/// so we coalesce to ~10/sec, which keeps the bar smooth without the jank.
+const PROGRESS_THROTTLE: Duration = Duration::from_millis(100);
+
 /// Total object size from a 206 response's `Content-Range: bytes a-b/total`.
 /// Returns None if the header is missing or the total is unknown (`*`).
 fn parse_content_range_total(response: &reqwest::Response) -> Option<u64> {
@@ -143,6 +158,7 @@ pub async fn download_file(
 
     let client = reqwest::Client::builder()
         .user_agent("artifact-setup/1.0")
+        .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
         .build()
         .map_err(|e| format!("client build failed: {e}"))?;
 
@@ -208,21 +224,43 @@ pub async fn download_file(
         let mut bytes_received: u64 = if resuming { resume_from } else { 0 };
         let mut stream = response;
         let mut stream_failed = false;
+        // Seed so the first chunk emits immediately (checked_sub avoids an underflow
+        // panic in the unlikely case the process started < PROGRESS_THROTTLE ago).
+        let mut last_emit = Instant::now()
+            .checked_sub(PROGRESS_THROTTLE)
+            .unwrap_or_else(Instant::now);
 
         loop {
-            match stream.chunk().await {
-                Ok(Some(chunk)) => {
+            // Bound each read so a silently hung socket is detected instead of
+            // blocking forever; a timeout is handled the same as a stream drop.
+            let next = tokio::time::timeout(
+                Duration::from_secs(STREAM_STALL_TIMEOUT_SECS),
+                stream.chunk(),
+            )
+            .await;
+
+            match next {
+                Ok(Ok(Some(chunk))) => {
                     file.write_all(&chunk).map_err(|e| format!("write error: {e}"))?;
                     bytes_received += chunk.len() as u64;
-                    let _ = app_handle.emit("setup:progress", DownloadProgress {
-                        asset_id: asset_id.clone(),
-                        bytes_received,
-                        total_bytes,
-                    });
+                    // Coalesce progress events to PROGRESS_THROTTLE to avoid flooding the UI.
+                    if last_emit.elapsed() >= PROGRESS_THROTTLE {
+                        let _ = app_handle.emit("setup:progress", DownloadProgress {
+                            asset_id: asset_id.clone(),
+                            bytes_received,
+                            total_bytes,
+                        });
+                        last_emit = Instant::now();
+                    }
                 }
-                Ok(None) => break, // stream finished cleanly
-                Err(e) => {
+                Ok(Ok(None)) => break, // stream finished cleanly
+                Ok(Err(e)) => {
                     last_err = format!("stream error: {e}");
+                    stream_failed = true;
+                    break;
+                }
+                Err(_) => {
+                    last_err = format!("stream stalled (no data for {STREAM_STALL_TIMEOUT_SECS}s)");
                     stream_failed = true;
                     break;
                 }
@@ -233,9 +271,16 @@ pub async fn download_file(
 
         if stream_failed {
             // Bytes received so far are preserved in `.part`; back off and resume.
-            tokio::time::sleep(std::time::Duration::from_secs(2 * attempt as u64)).await;
+            tokio::time::sleep(Duration::from_secs(2 * attempt as u64)).await;
             continue;
         }
+
+        // Final progress so the bar reaches 100% even if the last chunk was throttled.
+        let _ = app_handle.emit("setup:progress", DownloadProgress {
+            asset_id: asset_id.clone(),
+            bytes_received,
+            total_bytes,
+        });
 
         fs::rename(&part_path, &dest).map_err(|e| format!("rename failed: {e}"))?;
         return Ok(());

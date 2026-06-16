@@ -48,10 +48,10 @@ pub fn resolve_llama_server_path(app_handle: tauri::AppHandle) -> Result<String,
 
 #[tauri::command]
 pub fn start_llama_server(
+    app_handle: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     model_path: String,
     mmproj_path: String,
-    llama_server_path: String,
     backend: String,
 ) -> Result<u32, String> {
     let mut llama_server = state
@@ -69,6 +69,17 @@ pub fn start_llama_server(
         }
 
         llama_server.take();
+    }
+
+    // Resolve the executable in Rust from AppData rather than trusting a path
+    // supplied by the webview — accepting a frontend path would let XSS spawn an
+    // arbitrary local binary. The model/mmproj args are only
+    // ever passed as data to this fixed binary, never executed.
+    let llama_server_path = resolve_data_dir(&app_handle)
+        .join("binaries")
+        .join(llama_exe_name());
+    if !llama_server_path.exists() {
+        return Err("llama-server not found — run the setup wizard to download it.".into());
     }
 
     let gpu_layers = match backend.as_str() {

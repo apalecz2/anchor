@@ -7,6 +7,7 @@ import { buildTableText } from '../../utils/ocrTransforms';
 import { sanitizeWordsForProvenance } from '../extraction/provenance';
 import { matchCellsToOcr } from '../extraction/provenance';
 import { parseTSVWithOffsets, computeProvenanceCells } from '../extraction/confidence';
+import { toCsv } from '../export/exportUtils';
 import type { OcrWord } from '../ocr/types';
 import type { ProvenanceCell } from '../extraction/types';
 
@@ -14,6 +15,9 @@ type TableFormatResult = {
     csvContent: string;
     provenanceCells: ProvenanceCell[][];
     sanitizedWords: OcrWord[];
+    /** True when the model hit its token budget (`finish_reason: "length"`) and
+     *  the table is likely missing trailing rows/cells. */
+    truncated: boolean;
 };
 
 export const useLlamaChat = () => {
@@ -32,9 +36,14 @@ export const useLlamaChat = () => {
         naturalHeight: number,
         sessionId: string,
         pageIndex: number,
-    ): Promise<TableFormatResult | null> => {
+    ): Promise<TableFormatResult> => {
         if (!context.isServerReady) {
-            await context.startServer();
+            const ready = await context.startServer();
+            if (!ready) {
+                // startServer surfaces the specific reason via `serverError`; throw a
+                // fallback so the caller still gets a message even on a stale read.
+                throw new Error('The local model server failed to start. Check that the model files exist and you have enough free RAM, then retry.');
+            }
         }
 
         setIsExtracting(true);
@@ -77,15 +86,21 @@ export const useLlamaChat = () => {
             }];
 
             // Stage 1 — LLM extracts CSV from image + spatial OCR text
-            const { content: rawContent, logprobs } = await extractTableFromImage({
+            const { content: rawContent, logprobs, finishReason } = await extractTableFromImage({
                 messages,
                 maxTokens,
                 onContentDelta: setStreamingContent,
             });
 
+            // `finish_reason: "length"` means the model ran out of token budget before
+            // emitting the full table — surface it so the user knows rows may be missing.
+            const truncated = finishReason === 'length';
+
             // Parse the raw output while preserving char offsets for logprob mapping
             const { rows: csvRows } = parseTSVWithOffsets(rawContent);
-            if (csvRows.length === 0) return null;
+            if (csvRows.length === 0) {
+                throw new Error('The model did not return a parseable table. Try re-extracting, or check that the page contains tabular data.');
+            }
 
             // Stage 2a — deterministic reading-order walk to match cells to OCR words
             const cellProvenance = matchCellsToOcr(csvRows, sanitizedWords);
@@ -93,12 +108,10 @@ export const useLlamaChat = () => {
             // Attach logprob-based + OCR-based confidence to each cell
             const provenanceCells = computeProvenanceCells(cellProvenance, logprobs, rawContent, sanitizedWords);
 
-            // Re-serialize a clean CSV from the parsed rows
-            const csvContent = csvRows
-                .map(row =>
-                    row.map(cell => cell.includes(',') ? `"${cell.replace(/"/g, '""')}"` : cell).join(',')
-                )
-                .join('\n');
+            // Re-serialize a clean, correctly-escaped CSV from the parsed rows. Use the
+            // canonical exporter (RFC-4180 quoting) so cells containing quotes/newlines —
+            // not just commas — round-trip through parseCSV/export without corruption.
+            const csvContent = toCsv(csvRows);
 
             const db = await getDb();
             await db.execute(
@@ -111,11 +124,10 @@ export const useLlamaChat = () => {
                 [crypto.randomUUID(), sessionId, pageIndex, csvContent, JSON.stringify(provenanceCells)]
             );
 
-            return { csvContent, provenanceCells, sanitizedWords };
-        } catch (err) {
-            console.error("requestTableFormat failed:", err);
-            return null;
+            return { csvContent, provenanceCells, sanitizedWords, truncated };
         } finally {
+            // Always reset UI + free the model, then let any error propagate to the
+            // caller so it can be shown in the Session pane (no longer swallowed).
             setIsExtracting(false);
             await context.stopServer();
         }

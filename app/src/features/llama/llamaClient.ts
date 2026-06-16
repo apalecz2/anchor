@@ -78,7 +78,6 @@ export const startLlamaServer = async () => {
     }
 
     llamaServerStartPromise = (async () => {
-        const llamaServerPath = readSetting('llamaServerPath') || await invoke<string>("resolve_llama_server_path");
         const modelPath = readSetting('modelPath');
         const mmprojPath = readSetting('mmprojPath');
         const backend = readSetting('hardwareBackend');
@@ -87,10 +86,11 @@ export const startLlamaServer = async () => {
             throw new Error("Model paths not configured — run the setup wizard.");
         }
 
+        // The server binary path is resolved in Rust from AppData (not passed from
+        // here) so a compromised webview can't point it at an arbitrary executable.
         const pid = await invoke<number>("start_llama_server", {
             modelPath,
             mmprojPath,
-            llamaServerPath,
             backend,
         });
 
@@ -144,7 +144,7 @@ export const extractTableFromImage = async ({
     maxTokens,
     onContentDelta,
     signal,
-}: ExtractionStreamOptions): Promise<{ content: string; logprobs: TokenLogprob[] }> => {
+}: ExtractionStreamOptions): Promise<{ content: string; logprobs: TokenLogprob[]; finishReason: string | null }> => {
     const messagesWithSystem: ChatCompletionMessage[] = [
         { role: 'system', content: SYSTEM_PROMPT },
         ...messages,
@@ -182,6 +182,7 @@ export const extractTableFromImage = async ({
     let buffer = "";
     let content = "";
     let charOffset = 0;
+    let finishReason: string | null = null;
     const logprobs: TokenLogprob[] = [];
 
     while (true) {
@@ -203,6 +204,10 @@ export const extractTableFromImage = async ({
                 const token: string = choice?.delta?.content ?? "";
                 const logprobEntry = choice?.logprobs?.content?.[0];
 
+                // The terminating chunk carries finish_reason ("stop" | "length" | …)
+                // on a choice whose delta is usually empty — capture it regardless.
+                if (choice?.finish_reason) finishReason = choice.finish_reason;
+
                 if (token) {
                     logprobs.push({
                         token,
@@ -219,7 +224,7 @@ export const extractTableFromImage = async ({
         }
     }
 
-    return { content, logprobs };
+    return { content, logprobs, finishReason };
 };
 
 export const streamChatCompletion = async ({ messages, onThinkingDelta, onContentDelta, onThinkingEnd, signal }: StreamChatCompletionOptions) => {

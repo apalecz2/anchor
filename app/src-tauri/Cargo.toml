@@ -32,8 +32,8 @@ pdfium-render = "0.8.10"
 
 # Tesseract OCR wrapper
 rusty-tesseract = "1.1.9"
+# Pre-OCR preprocessing: grayscale + Lanczos upscale (see ocr.rs::preprocess_for_ocr)
 image = "0.25.10"
-imageproc = "0.25"
 
 # Setup / dependency download
 reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls"] }

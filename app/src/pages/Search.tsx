@@ -13,6 +13,23 @@ interface Session {
 
 const ITEMS_PER_PAGE = 10;
 
+// SQLite's CURRENT_TIMESTAMP is UTC with no timezone marker ('YYYY-MM-DD HH:MM:SS').
+// `new Date()` would parse that as *local* time, skewing "Last updated" by the UTC
+// offset. Tag it as UTC (ISO 'T...Z') so it's interpreted correctly.
+function formatSqliteTimestamp(ts: string): string {
+    const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(ts)
+        ? `${ts.replace(' ', 'T')}Z`
+        : ts;
+    const date = new Date(normalized);
+    return isNaN(date.getTime()) ? ts : date.toLocaleDateString();
+}
+
+// Escape LIKE metacharacters so a query such as "100%" or "a_b" matches literally
+// instead of acting as wildcards. Paired with `ESCAPE '\'` in the query.
+function escapeLike(value: string): string {
+    return value.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
+
 export default function Search(): React.ReactElement {
     const [query, setQuery] = useState('');
     const [debouncedQuery, setDebouncedQuery] = useState('');
@@ -40,11 +57,11 @@ export default function Search(): React.ReactElement {
             setIsLoading(true);
             try {
                 const db = await getDb();
-                const searchTerm = `%${debouncedQuery}%`;
+                const searchTerm = `%${escapeLike(debouncedQuery)}%`;
 
                 // Fetch total count for pagination
                 const countRes = await db.select<{ count: number }[]>(
-                    `SELECT COUNT(*) as count FROM sessions WHERE title LIKE $1`,
+                    `SELECT COUNT(*) as count FROM sessions WHERE title LIKE $1 ESCAPE '\\'`,
                     [searchTerm]
                 );
                 
@@ -63,7 +80,7 @@ export default function Search(): React.ReactElement {
                 
                 // Fetch paginated results
                 const items = await db.select<Session[]>(
-                    `SELECT * FROM sessions WHERE title LIKE $1 ORDER BY updated_at DESC LIMIT $2 OFFSET $3`,
+                    `SELECT * FROM sessions WHERE title LIKE $1 ESCAPE '\\' ORDER BY updated_at DESC LIMIT $2 OFFSET $3`,
                     [searchTerm, ITEMS_PER_PAGE, offset]
                 );
 
@@ -148,7 +165,7 @@ export default function Search(): React.ReactElement {
                                             {session.title}
                                         </span>
                                         <span className="mt-1 text-sm text-on-surface-variant">
-                                            Last updated: {new Date(session.updated_at).toLocaleDateString()}
+                                            Last updated: {formatSqliteTimestamp(session.updated_at)}
                                         </span>
                                     </Link>
 

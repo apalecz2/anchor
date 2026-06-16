@@ -9,56 +9,6 @@
         "core:default",
         "opener:default",
         "shell:default",
-        {
-            "identifier": "shell:allow-spawn",
-            "allow": [
-                {
-                    "name": "$RESOURCE/binaries/llama-server.exe",
-                    "cmd": "$RESOURCE/binaries/llama-server.exe",
-                    "args": true
-                },
-                {
-                    "name": "$RESOURCE/binaries/windows/llama-server.exe",
-                    "cmd": "$RESOURCE/binaries/windows/llama-server.exe",
-                    "args": true
-                },
-                {
-                    "name": "$RESOURCE/binaries/llama-server-aarch64-apple-darwin",
-                    "cmd": "$RESOURCE/binaries/llama-server-aarch64-apple-darwin",
-                    "args": true
-                },
-                {
-                    "name": "$RESOURCE/binaries/macos/llama-server-aarch64-apple-darwin",
-                    "cmd": "$RESOURCE/binaries/macos/llama-server-aarch64-apple-darwin",
-                    "args": true
-                }
-            ]
-        },
-        {
-            "identifier": "shell:allow-execute",
-            "allow": [
-                {
-                    "name": "$RESOURCE/binaries/llama-server.exe",
-                    "cmd": "$RESOURCE/binaries/llama-server.exe",
-                    "args": true
-                },
-                {
-                    "name": "$RESOURCE/binaries/windows/llama-server.exe",
-                    "cmd": "$RESOURCE/binaries/windows/llama-server.exe",
-                    "args": true
-                },
-                {
-                    "name": "$RESOURCE/binaries/llama-server-aarch64-apple-darwin",
-                    "cmd": "$RESOURCE/binaries/llama-server-aarch64-apple-darwin",
-                    "args": true
-                },
-                {
-                    "name": "$RESOURCE/binaries/macos/llama-server-aarch64-apple-darwin",
-                    "cmd": "$RESOURCE/binaries/macos/llama-server-aarch64-apple-darwin",
-                    "args": true
-                }
-            ]
-        },
         "dialog:allow-save",
         "fs:default",
         "fs:allow-appdata-read-recursive",
