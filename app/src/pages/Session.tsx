@@ -52,6 +52,10 @@ function SessionContent(): React.ReactElement {
     const [extractionError, setExtractionError] = useState<string | null>(null);
     const [truncated, setTruncated] = useState(false);
     const [highlightedWordId, setHighlightedWordId] = useState<string | null>(null);
+    // Persistent (click) word selection that links the raw-text view and the image:
+    // the selected word is bolded in the text and outlined on the image.
+    const [selectedWordId, setSelectedWordId] = useState<string | null>(null);
+    const selectedWordRef = useRef<HTMLSpanElement | null>(null);
     const [editingState, setEditingState] = useState<{ box?: BoundingBox | null, id?: string, text?: string } | null>(null);
 
     const [activeTool, setActiveTool] = useState<'draw' | 'pan'>('draw');
@@ -66,6 +70,12 @@ function SessionContent(): React.ReactElement {
     useEffect(() => {
         setPageInputValue((activePageIndex + 1).toString());
     }, [activePageIndex]);
+
+    // Reveal the selected word in the raw-text view when the selection comes from
+    // clicking its box on the image (it may be scrolled out of the text viewport).
+    useEffect(() => {
+        selectedWordRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }, [selectedWordId]);
 
     // Load source filename once per session for descriptive export names
     useEffect(() => {
@@ -96,6 +106,7 @@ function SessionContent(): React.ReactElement {
             setSavedCsv(csv);
             setProvenanceCells(mappingsJson ? JSON.parse(mappingsJson) as ProvenanceCell[][] : null);
             setSelectedCell(null);
+            setSelectedWordId(null);
             setProvenanceHighlightBox(null);
             setExtractionError(null);
             setTruncated(false);
@@ -110,6 +121,7 @@ function SessionContent(): React.ReactElement {
         setHighlightedWordId(null);
         setEditingState(null);
         setSelectedCell(null);
+        setSelectedWordId(null);
         setProvenanceHighlightBox(null);
         setViewTransform({ scale: 1, x: 0, y: 0 });
     };
@@ -128,6 +140,7 @@ function SessionContent(): React.ReactElement {
         if (!fileUrl || !activePage?.words.length || !id) return;
         setOutputView('table');
         setSelectedCell(null);
+        setSelectedWordId(null);
         setProvenanceHighlightBox(null);
         setExtractionError(null);
         setTruncated(false);
@@ -151,11 +164,41 @@ function SessionContent(): React.ReactElement {
 
     const handleCellClick = (cell: ProvenanceCell) => {
         if (!activePage) return;
+        setSelectedWordId(null);
         setSelectedCell({ rowIndex: cell.rowIndex, colIndex: cell.colIndex });
         // Compute source bbox on the fly — sanitization is deterministic and cheap
         const sanitized = sanitizeWordsForProvenance(activePage.words, activePage.natural_height);
         const box = getCellSourceBox(cell, sanitized);
         setProvenanceHighlightBox(box);
+    };
+
+    // Word-level selection links the raw-text view and the image 1:1: bold the
+    // word in the text, outline that single word's box on the image.
+    const selectWord = (wordId: string) => {
+        const word = activePage?.words.find(w => w.id === wordId);
+        if (!word) return;
+        setSelectedCell(null);
+        setSelectedWordId(wordId);
+        setProvenanceHighlightBox(word.box_coords);
+    };
+
+    // Clicking a word on the image links back to whichever right-pane view is
+    // showing: in raw mode it selects the matching word, in table mode it selects
+    // the cell the word feeds (wordIds are stable UUIDs, so a membership test finds
+    // it; routing through handleCellClick keeps highlight box and selection in sync).
+    const handleWordClick = (wordId: string) => {
+        if (outputView === 'raw') {
+            selectWord(wordId);
+            return;
+        }
+        if (!provenanceCells) return;
+        for (const row of provenanceCells) {
+            const cell = row.find(c => c.wordIds.includes(wordId));
+            if (cell) {
+                handleCellClick(cell);
+                return;
+            }
+        }
     };
 
     const handleSaveWord = (text: string) => {
@@ -203,6 +246,7 @@ function SessionContent(): React.ReactElement {
                             onDeleteRequest={deleteWord}
                             highlightedWordId={highlightedWordId}
                             setHighlightedWordId={setHighlightedWordId}
+                            onWordClick={handleWordClick}
                             activeTool={activeTool}
                             transform={viewTransform}
                             setTransform={setViewTransform}
@@ -370,23 +414,40 @@ function SessionContent(): React.ReactElement {
                     ) : !activePage?.words ? (
                         <div className="flex h-full items-center justify-center">No readable text found.</div>
                     ) : outputView === 'raw' ? (
-                        <div className="space-y-2 font-body-md text-on-surface leading-relaxed select-none">
+                        <div className="space-y-2 font-body-md text-on-surface leading-relaxed">
                             {generateLinesFromWords(activePage.words, activePage.natural_height).map((line, lineIndex) => (
                                 <p key={lineIndex} className="min-h-[1.5rem]">
-                                    {line.map((word, wordIndex) => (
-                                        <span
-                                            key={`${lineIndex}-${word.wordId}`}
-                                            className="mr-2 inline-block cursor-pointer"
-                                            onMouseEnter={() => setHighlightedWordId(word.wordId)}
-                                            onMouseLeave={() => setHighlightedWordId(null)}
-                                            onFocus={() => setHighlightedWordId(word.wordId)}
-                                            onBlur={() => setHighlightedWordId(null)}
-                                            tabIndex={0}
-                                        >
-                                            {word.text}
-                                            {wordIndex < line.length - 1 ? ' ' : ''}
-                                        </span>
-                                    ))}
+                                    {line.map((word, wordIndex) => {
+                                        const isWordSelected = selectedWordId === word.wordId;
+                                        const isWordHovered = highlightedWordId === word.wordId;
+                                        return (
+                                            <span
+                                                key={`${lineIndex}-${word.wordId}`}
+                                                ref={isWordSelected ? selectedWordRef : undefined}
+                                                className={`mr-2 inline-block cursor-pointer rounded transition-colors ${
+                                                    isWordSelected
+                                                        ? 'font-bold bg-surface-variant'
+                                                        : isWordHovered
+                                                            ? 'bg-surface-variant/60'
+                                                            : ''
+                                                }`}
+                                                onMouseEnter={() => setHighlightedWordId(word.wordId)}
+                                                onMouseLeave={() => setHighlightedWordId(null)}
+                                                onFocus={() => setHighlightedWordId(word.wordId)}
+                                                onBlur={() => setHighlightedWordId(null)}
+                                                onClick={() => {
+                                                    // Don't hijack a drag-to-copy text selection into a word click.
+                                                    const sel = window.getSelection();
+                                                    if (sel && !sel.isCollapsed) return;
+                                                    selectWord(word.wordId);
+                                                }}
+                                                tabIndex={0}
+                                            >
+                                                {word.text}
+                                                {wordIndex < line.length - 1 ? ' ' : ''}
+                                            </span>
+                                        );
+                                    })}
                                 </p>
                             ))}
                         </div>

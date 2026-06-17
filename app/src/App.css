@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+/* Dark mode is toggled by adding `.dark` to <html> (see AppLayout / Settings),
+   so map Tailwind's `dark:` variant to that class instead of the default
+   prefers-color-scheme media query. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
 	--color-background: var(--background);
 	--color-on-background: var(--on-background);

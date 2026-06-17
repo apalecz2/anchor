@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import type { ProvenanceCell, TrustLevel } from '../features/extraction/types';
 
 export type SelectedCell = { rowIndex: number; colIndex: number } | null;
@@ -8,16 +9,19 @@ interface ProvenanceTableProps {
     selectedCell: SelectedCell;
 }
 
+// Light mode uses pale pastels with dark text; dark mode uses a translucent deep
+// tint over the dark surface with light text, so cells read as subtle tinted
+// rows rather than glaring bright blocks.
 const TRUST_BG: Record<TrustLevel, string> = {
-    high:   'bg-green-100 hover:bg-green-200',
-    medium: 'bg-amber-100 hover:bg-amber-200',
-    low:    'bg-red-100 hover:bg-red-200',
+    high:   'bg-green-100 hover:bg-green-200 dark:bg-green-500/15 dark:hover:bg-green-500/25',
+    medium: 'bg-amber-100 hover:bg-amber-200 dark:bg-amber-500/15 dark:hover:bg-amber-500/25',
+    low:    'bg-red-100 hover:bg-red-200 dark:bg-red-500/15 dark:hover:bg-red-500/25',
 };
 
 const TRUST_TEXT: Record<TrustLevel, string> = {
-    high:   'text-green-900',
-    medium: 'text-amber-900',
-    low:    'text-red-900',
+    high:   'text-green-900 dark:text-green-200',
+    medium: 'text-amber-900 dark:text-amber-200',
+    low:    'text-red-900 dark:text-red-200',
 };
 
 function cellTooltip(cell: ProvenanceCell): string {
@@ -36,9 +40,13 @@ function trustColor(cell: ProvenanceCell): string {
         : `${TRUST_BG[cell.confidence.trust]} ${TRUST_TEXT[cell.confidence.trust]}`;
 }
 
+// Black ring on the light cells, white on the dark-mode cells — either way it
+// contrasts with the trust background it sits on.
+const SELECTION_RING = ' ring-2 ring-black dark:ring-white ring-inset';
+
 function cellClasses(cell: ProvenanceCell, isSelected: boolean): string {
     const base = 'border border-outline-variant px-3 py-2 text-sm cursor-pointer transition-colors';
-    const ring = isSelected ? ' ring-2 ring-primary ring-inset' : '';
+    const ring = isSelected ? SELECTION_RING : '';
     return `${base} ${trustColor(cell)}${ring}`;
 }
 
@@ -48,7 +56,7 @@ function cellClasses(cell: ProvenanceCell, isSelected: boolean): string {
 // and bolder text keep the header row visually distinct from the data it labels.
 function headerClasses(cell: ProvenanceCell, isSelected: boolean): string {
     const base = 'border border-outline-variant border-b-2 border-b-on-surface/30 px-3 py-2 text-left text-sm font-semibold cursor-pointer transition-colors';
-    const ring = isSelected ? ' ring-2 ring-primary ring-inset' : '';
+    const ring = isSelected ? SELECTION_RING : '';
     return `${base} ${trustColor(cell)}${ring}`;
 }
 
@@ -86,6 +94,15 @@ export default function ProvenanceTable({ rows, onCellClick, selectedCell }: Pro
     const isSelected = (r: number, c: number) =>
         selectedCell?.rowIndex === r && selectedCell?.colIndex === c;
 
+    // Bring the selected cell into view when selection changes — needed when the
+    // selection comes from clicking a word on the image (e.g. the cell may be
+    // scrolled out of the table's viewport). `nearest` keeps movement minimal so a
+    // direct cell click that's already visible doesn't jump.
+    const selectedRef = useRef<HTMLTableCellElement | null>(null);
+    useEffect(() => {
+        selectedRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }, [selectedCell?.rowIndex, selectedCell?.colIndex]);
+
     return (
         <div className="overflow-x-auto">
             <table className="w-full border-collapse text-sm">
@@ -94,6 +111,7 @@ export default function ProvenanceTable({ rows, onCellClick, selectedCell }: Pro
                         {headerRow.map((cell, c) => (
                             <th
                                 key={c}
+                                ref={isSelected(0, c) ? selectedRef : undefined}
                                 className={headerClasses(cell, isSelected(0, c))}
                                 onClick={() => onCellClick(cell)}
                                 title={cellTooltip(cell)}
@@ -110,6 +128,7 @@ export default function ProvenanceTable({ rows, onCellClick, selectedCell }: Pro
                             {row.map((cell, c) => (
                                 <td
                                     key={c}
+                                    ref={isSelected(ri + 1, c) ? selectedRef : undefined}
                                     className={cellClasses(cell, isSelected(ri + 1, c))}
                                     onClick={() => onCellClick(cell)}
                                     title={cellTooltip(cell)}

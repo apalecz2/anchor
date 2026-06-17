@@ -21,6 +21,7 @@ interface DocumentViewerProps {
     onDeleteRequest: (id: string) => void;
     highlightedWordId: string | null;
     setHighlightedWordId: (id: string | null) => void;
+    onWordClick?: (wordId: string) => void;
     activeTool: 'draw' | 'pan';
     transform: { scale: number; x: number; y: number };
     setTransform: React.Dispatch<React.SetStateAction<{ scale: number; x: number; y: number }>>;
@@ -34,6 +35,32 @@ const getConfidenceColor = (confidence: number) => {
     return `hsl(${hue}, 80%, 45%)`;
 };
 
+// Estimate whether the document image is predominantly dark by averaging the
+// perceived luminance of a downscaled copy. Used to pick a highlight color that
+// contrasts with the image itself rather than the app's light/dark theme — a
+// dark scan needs a light highlight, a light scan a dark one. Returns false if
+// the canvas can't be read (e.g. a tainted cross-origin image).
+function estimateImageDarkness(img: HTMLImageElement): boolean {
+    try {
+        const w = 32;
+        const h = 32;
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        if (!ctx) return false;
+        ctx.drawImage(img, 0, 0, w, h);
+        const { data } = ctx.getImageData(0, 0, w, h);
+        let total = 0;
+        for (let i = 0; i < data.length; i += 4) {
+            total += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        }
+        return total / (data.length / 4) < 128;
+    } catch {
+        return false;
+    }
+}
+
 const DocumentViewer = forwardRef<DocumentViewerHandle, DocumentViewerProps>(function DocumentViewer({
     fileUrl,
     words,
@@ -42,6 +69,7 @@ const DocumentViewer = forwardRef<DocumentViewerHandle, DocumentViewerProps>(fun
     onDeleteRequest,
     highlightedWordId,
     setHighlightedWordId,
+    onWordClick,
     activeTool,
     transform,
     setTransform,
@@ -49,6 +77,8 @@ const DocumentViewer = forwardRef<DocumentViewerHandle, DocumentViewerProps>(fun
     onMinScaleChange,
 }: DocumentViewerProps, ref) {
     const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
+    // Whether the loaded document is dark overall, so highlights contrast with it.
+    const [isImageDark, setIsImageDark] = useState(false);
     const svgRef = useRef<SVGSVGElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const imgRef = useRef<HTMLImageElement>(null);
@@ -215,6 +245,7 @@ const DocumentViewer = forwardRef<DocumentViewerHandle, DocumentViewerProps>(fun
     const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
         const { naturalWidth, naturalHeight } = e.currentTarget;
         setNaturalSize({ width: naturalWidth, height: naturalHeight });
+        setIsImageDark(estimateImageDarkness(e.currentTarget));
         fitToScreen();
     };
 
@@ -315,7 +346,12 @@ const DocumentViewer = forwardRef<DocumentViewerHandle, DocumentViewerProps>(fun
                     className="block max-h-[80vh] w-auto max-w-none pointer-events-none select-none"
                 />
 
-                {naturalSize.width > 0 && (
+                {naturalSize.width > 0 && (() => {
+                // Highlight color contrasts with the document, not the app theme:
+                // white over dark scans, black over light scans.
+                const highlightFill = isImageDark ? 'fill-white/25' : 'fill-black/20';
+                const highlightStroke = isImageDark ? 'stroke-white' : 'stroke-black';
+                return (
                     <svg
                         ref={svgRef}
                         className={`absolute left-0 top-0 h-full w-full touch-none ${activeTool === 'pan' || isDragging ? 'pointer-events-none' : 'cursor-crosshair'}`}
@@ -348,7 +384,7 @@ const DocumentViewer = forwardRef<DocumentViewerHandle, DocumentViewerProps>(fun
                                         }`}
                                     onMouseEnter={() => setHighlightedWordId(word.id)}
                                     onMouseLeave={() => setHighlightedWordId(null)}
-                                    onClick={(e) => e.stopPropagation()}
+                                    onClick={(e) => { e.stopPropagation(); onWordClick?.(word.id); }}
                                     onContextMenu={(e) => {
                                         e.preventDefault();
                                         e.stopPropagation();
@@ -366,8 +402,8 @@ const DocumentViewer = forwardRef<DocumentViewerHandle, DocumentViewerProps>(fun
                                 y={provenanceHighlightBox.top - 2}
                                 width={provenanceHighlightBox.width + 4}
                                 height={provenanceHighlightBox.height + 4}
-                                className="fill-primary/25 stroke-primary stroke-[4px]"
-                                style={{ pointerEvents: 'none' }}
+                                className={`${highlightFill} ${highlightStroke} stroke-[2px]`}
+                                style={{ pointerEvents: 'none', vectorEffect: 'non-scaling-stroke' }}
                             />
                         )}
 
@@ -377,11 +413,12 @@ const DocumentViewer = forwardRef<DocumentViewerHandle, DocumentViewerProps>(fun
                                 y={currentBox.top}
                                 width={currentBox.width}
                                 height={currentBox.height}
-                                className="fill-primary/20 stroke-primary stroke-[3px]"
+                                className={`${highlightFill} ${highlightStroke} stroke-[3px]`}
                             />
                         )}
                     </svg>
-                )}
+                );
+                })()}
             </div>
         </div>
     );
