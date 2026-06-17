@@ -9,6 +9,10 @@ type LlamaChatContextValue = {
     isServerStarting: boolean;
     isLoading: boolean;
     serverError: string | null;
+    // --- Conversational chat path (no UI caller yet) -------------------------
+    // Reserved for the planned chat / "ask the model to fix columns" feature
+    // (design §8 generative edits). Intentionally retained, not dead code; keep in
+    // sync with the chat helpers in llamaClient.ts when that feature lands.
     messages: ChatMessage[];
     pendingAttachment: FileAttachment | null;
     attachImage: (file: File) => Promise<boolean>;
@@ -164,6 +168,12 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
         }, IDLE_UNLOAD_MS);
     };
 
+    // -------------------------------------------------------------------------
+    // Conversational chat path: attachImage / removePendingAttachment / sendMessage.
+    // No UI currently calls these — they are intentionally retained for the planned
+    // chat feature (design §8), not accidental dead code. The extraction flow uses
+    // requestTableFormat (useLlamaChat.ts) instead.
+    // -------------------------------------------------------------------------
     const attachImage = async (file: File) => {
         if (!file.type.startsWith("image/")) {
             return false;

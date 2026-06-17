@@ -74,6 +74,9 @@ export const getLlamaServerStatus = async (): Promise<string> => {
     }
 };
 
+// buildChatCompletionMessages + streamChatCompletion (below) form the conversational
+// chat path. No UI calls them yet — they are intentionally retained for the planned
+// chat feature (design §8), not dead code. Table extraction uses extractTableFromImage.
 export const buildChatCompletionMessages = (messages: ChatMessage[]): ChatCompletionMessage[] => {
     return messages.map(message => {
         const contentParts: ChatCompletionContentPart[] = [];

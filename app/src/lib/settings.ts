@@ -1,5 +1,11 @@
-export type Theme = 'light' | 'dark';
-export type HardwareBackend = 'cpu' | 'cuda' | 'rocm' | 'metal';
+// Allowed values for the constrained (non-free-text) settings. The union types are
+// derived from these arrays so the type and its runtime validator can never drift
+// apart — add a value in one place and both the type and validation pick it up.
+export const THEMES = ['light', 'dark'] as const;
+export type Theme = (typeof THEMES)[number];
+
+export const HARDWARE_BACKENDS = ['cpu', 'cuda', 'rocm', 'metal'] as const;
+export type HardwareBackend = (typeof HARDWARE_BACKENDS)[number];
 
 interface SettingsSchema {
     theme: Theme;
@@ -29,9 +35,22 @@ const DEFAULTS: SettingsSchema = {
     hardwareBackend: 'cpu',
 };
 
+// Runtime validators for keys whose value set is constrained. A stored value that
+// fails validation — corrupt, hand-edited, or left over from an incompatible build
+// — falls back to the default instead of flowing through as a bogusly-typed union
+// member (e.g. a stray `hardware_backend` that no llama build matches). Free-text
+// keys (paths, language) accept any string, so they need no validator.
+const VALIDATORS: Partial<Record<keyof SettingsSchema, (value: string) => boolean>> = {
+    theme: (value) => (THEMES as readonly string[]).includes(value),
+    hardwareBackend: (value) => (HARDWARE_BACKENDS as readonly string[]).includes(value),
+};
+
 export function readSetting<K extends keyof SettingsSchema>(key: K): SettingsSchema[K] {
     const value = localStorage.getItem(STORAGE_KEYS[key]);
-    return (value !== null ? value : DEFAULTS[key]) as SettingsSchema[K];
+    if (value === null) return DEFAULTS[key];
+    const validate = VALIDATORS[key];
+    if (validate && !validate(value)) return DEFAULTS[key];
+    return value as SettingsSchema[K];
 }
 
 export function writeSetting<K extends keyof SettingsSchema>(key: K, value: SettingsSchema[K]): void {

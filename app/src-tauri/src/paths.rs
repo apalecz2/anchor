@@ -12,10 +12,14 @@ use tauri::Manager;
 pub const MODEL_FILENAME: &str = "Qwen3.5-4B-Q4_K_M.gguf";
 pub const MMPROJ_FILENAME: &str = "mmproj-F16.gguf";
 
-pub fn resolve_data_dir(app: &tauri::AppHandle) -> PathBuf {
+/// Resolve the app's AppData directory. Returns an error string (surfaced to the
+/// caller as a command error) instead of panicking, so the rare case where the OS
+/// can't hand back a data directory fails gracefully rather than taking down the
+/// backend.
+pub fn resolve_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
-        .expect("failed to resolve AppData directory")
+        .map_err(|error| format!("failed to resolve AppData directory: {error}"))
 }
 
 pub fn llama_exe_name() -> &'static str {

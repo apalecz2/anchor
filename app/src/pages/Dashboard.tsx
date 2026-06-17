@@ -6,8 +6,35 @@ import { deleteSession } from '../features/sessions/sessionActions';
 import { writeFile, mkdir, BaseDirectory } from '@tauri-apps/plugin-fs';
 import { join, appDataDir } from '@tauri-apps/api/path';
 
-const ALLOWED_MIME_TYPES = new Set(['application/pdf', 'image/png', 'image/jpeg']);
 const MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024; // 500 MB
+
+// Supported uploads, keyed by MIME type. `ext` is the canonical extension used for
+// the stored copy — derived from the verified type, never the user-supplied
+// filename, so a missing extension (no-dot name) or a spoofed one can't produce a
+// malformed path. `matchesMagic` sniffs the file's leading bytes so a mislabeled
+// file (forged/wrong MIME, or a renamed binary) is rejected before we copy it into
+// AppData and hand it to the renderer/OCR.
+type FileTypeSpec = {
+    ext: string;
+    matchesMagic: (bytes: Uint8Array) => boolean;
+};
+
+const SUPPORTED_FILE_TYPES: Record<string, FileTypeSpec> = {
+    'application/pdf': {
+        ext: 'pdf',
+        matchesMagic: (b) => b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46, // "%PDF"
+    },
+    'image/png': {
+        ext: 'png',
+        matchesMagic: (b) =>
+            b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 &&
+            b[4] === 0x0d && b[5] === 0x0a && b[6] === 0x1a && b[7] === 0x0a, // \x89PNG\r\n\x1a\n
+    },
+    'image/jpeg': {
+        ext: 'jpg',
+        matchesMagic: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff, // SOI + marker
+    },
+};
 
 export default function Dashboard(): React.ReactElement {
     const [isDragging, setIsDragging] = useState(false);
@@ -29,7 +56,8 @@ export default function Dashboard(): React.ReactElement {
         }
 
         const file = files[0];
-        if (!ALLOWED_MIME_TYPES.has(file.type)) {
+        const fileType = SUPPORTED_FILE_TYPES[file.type];
+        if (!fileType) {
             setFileError(`"${file.name}" is not a supported file type. Please upload PDF, PNG, or JPEG files.`);
             return;
         }
@@ -45,23 +73,30 @@ export default function Dashboard(): React.ReactElement {
         try {
             const db = await getDb();
 
-            // 1. Ensure the app's data directory has a 'sessions' folder
+            // 1. Read the bytes and verify the magic number matches the declared
+            //    type before creating any records, so a corrupt/mislabeled file is
+            //    rejected without leaving an orphan session behind.
+            const arrayBuffer = await file.arrayBuffer();
+            const uint8Array = new Uint8Array(arrayBuffer);
+            if (!fileType.matchesMagic(uint8Array)) {
+                setFileError(`"${file.name}" doesn't look like a valid ${fileType.ext.toUpperCase()} file. It may be corrupted or mislabeled.`);
+                return;
+            }
+
+            // 2. Ensure the app's data directory has a 'sessions' folder
             await mkdir('sessions', { baseDir: BaseDirectory.AppData, recursive: true });
 
-            // 2. Create the session record
+            // 3. Create the session record
             await db.execute(
                 'INSERT INTO sessions (id, title) VALUES ($1, $2)',
                 [newSessionId, file.name]
             );
             sessionCreated = true;
 
-            // 3. Copy the file into AppData and record it
+            // 4. Copy the file into AppData and record it. The extension comes from
+            //    the verified type, not the user-supplied filename.
             const fileId = crypto.randomUUID();
-            const arrayBuffer = await file.arrayBuffer();
-            const uint8Array = new Uint8Array(arrayBuffer);
-
-            const extension = file.name.split('.').pop();
-            const safeFileName = `${fileId}.${extension}`;
+            const safeFileName = `${fileId}.${fileType.ext}`;
             const relativePath = await join('sessions', safeFileName);
 
             const appData = await appDataDir();

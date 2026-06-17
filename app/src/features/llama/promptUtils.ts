@@ -1,3 +1,6 @@
+// readFileAsBase64, compactOcrText, and buildOcrExcerpt support the conversational
+// chat path and have no caller yet — intentionally retained for the planned chat
+// feature (design §8), not dead code. parseCSV/parseFields below are live.
 export const readFileAsBase64 = (file: File) =>
     new Promise<string>((resolve, reject) => {
         const reader = new FileReader();

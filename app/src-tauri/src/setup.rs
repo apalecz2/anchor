@@ -73,8 +73,8 @@ fn asset_installed(asset_id: &str, data_dir: &Path) -> bool {
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub fn check_setup_complete(app_handle: tauri::AppHandle) -> bool {
-    let data_dir = resolve_data_dir(&app_handle);
+pub fn check_setup_complete(app_handle: tauri::AppHandle) -> Result<bool, String> {
+    let data_dir = resolve_data_dir(&app_handle)?;
     // cudart is intentionally excluded: it's only needed for the CUDA backend,
     // so requiring it would wrongly block CPU/Metal users.
     let mut required = vec!["llama_server", "tesseract", "mmproj_gguf", "model_gguf"];
@@ -84,7 +84,7 @@ pub fn check_setup_complete(app_handle: tauri::AppHandle) -> bool {
     if pdfium_spec().is_some() {
         required.push("pdfium");
     }
-    required.iter().all(|id| asset_installed(id, &data_dir))
+    Ok(required.iter().all(|id| asset_installed(id, &data_dir)))
 }
 
 // ---------------------------------------------------------------------------
@@ -645,13 +645,13 @@ pub struct SetupPaths {
 }
 
 #[tauri::command]
-pub fn get_setup_paths(app_handle: tauri::AppHandle) -> SetupPaths {
-    let d = resolve_data_dir(&app_handle);
-    SetupPaths {
+pub fn get_setup_paths(app_handle: tauri::AppHandle) -> Result<SetupPaths, String> {
+    let d = resolve_data_dir(&app_handle)?;
+    Ok(SetupPaths {
         llama_server: d.join("binaries").join(llama_exe_name()).to_string_lossy().into_owned(),
         model_path:   d.join("models").join(MODEL_FILENAME).to_string_lossy().into_owned(),
         mmproj_path:  d.join("models").join(MMPROJ_FILENAME).to_string_lossy().into_owned(),
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -743,8 +743,11 @@ fn get_tesseract_spec(data_dir: &Path) -> AssetManifestEntry {
 }
 
 #[tauri::command]
-pub fn get_asset_manifest(app_handle: tauri::AppHandle, backend: String) -> Vec<AssetManifestEntry> {
-    let data_dir = resolve_data_dir(&app_handle);
+pub fn get_asset_manifest(
+    app_handle: tauri::AppHandle,
+    backend: String,
+) -> Result<Vec<AssetManifestEntry>, String> {
+    let data_dir = resolve_data_dir(&app_handle)?;
     let binaries_dir = data_dir.join("binaries").to_string_lossy().into_owned();
     let (label, size_bytes, r2_key, llama_sha) = get_llama_server_spec(&backend);
 
@@ -836,7 +839,7 @@ pub fn get_asset_manifest(app_handle: tauri::AppHandle, backend: String) -> Vec<
     for asset in &mut assets {
         asset.installed = asset_installed(&asset.asset_id, &data_dir);
     }
-    assets
+    Ok(assets)
 }
 
 #[cfg(test)]

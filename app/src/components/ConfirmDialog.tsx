@@ -1,3 +1,5 @@
+import { useDialogA11y } from '../hooks/useDialogA11y';
+
 interface ConfirmDialogProps {
     open: boolean;
     title: string;
@@ -17,6 +19,10 @@ export default function ConfirmDialog({
     onConfirm,
     onCancel,
 }: ConfirmDialogProps) {
+    // Escape-to-close, focus trap, and focus restore. Must be called before the
+    // early return so the hook order stays stable across renders.
+    const dialogRef = useDialogA11y<HTMLDivElement>({ active: open, onClose: onCancel });
+
     if (!open) {
         return null;
     }
@@ -28,7 +34,9 @@ export default function ConfirmDialog({
             onClick={onCancel}
         >
             <div
-                className="w-full max-w-sm rounded-[20px] border border-outline-variant bg-surface-bright p-6 text-on-surface shadow-2xl"
+                ref={dialogRef}
+                tabIndex={-1}
+                className="w-full max-w-sm rounded-[20px] border border-outline-variant bg-surface-bright p-6 text-on-surface shadow-2xl focus:outline-none"
                 role="alertdialog"
                 aria-modal="true"
                 aria-labelledby="confirm-dialog-title"
