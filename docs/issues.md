@@ -8,6 +8,7 @@
 2. Column names are always shown as gray which implies unverified source. Should be green to match their confidence etc. but also show some indication that they are the column names
 
 3. Window size, specifically height messes with the side bar. Squishing the height squishes the side bar items
+    - Resolved
 
 ## Provenance / Matching
 

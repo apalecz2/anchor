@@ -26,6 +26,8 @@ tauri-plugin-shell = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-sql = { version = "2.4.0", features = ["sqlite"] }
 tauri-plugin-dialog = "2"
+# Persist & restore window size/position across launches
+tauri-plugin-window-state = "2"
 
 # PDF to Image conversion (Requires downloading the pdfium binaries)
 pdfium-render = "0.8.10" 

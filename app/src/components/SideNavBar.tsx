@@ -137,9 +137,14 @@ const SideNavBar: FC<SideNavBarProps> = ({
                 </Link>
 
                 <nav
-                    className="mt-20 flex flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto px-3 pb-4"
+                    className="mt-20 flex min-h-0 flex-1 flex-col overflow-hidden px-3 pb-4"
                     aria-label="Main navigation"
                 >
+                    {/*
+                     * Main items never shrink (shrink-0): they always keep their full
+                     * height even when the window is squished vertically.
+                     */}
+                    <div className="flex shrink-0 flex-col gap-2">
                     {navItems.map((item) => {
                         const isActive = item.id === activeId;
 
@@ -181,7 +186,7 @@ const SideNavBar: FC<SideNavBarProps> = ({
                         );
 
                         const sharedClassName = `
-                            flex h-10 w-full cursor-pointer items-center rounded-[10px]
+                            flex h-10 w-full shrink-0 cursor-pointer items-center rounded-[10px]
                             transition-all duration-300 ease-out overflow-hidden
                             ${collapsed ? 'md:px-2 px-3' : 'px-3'}
                             ${isActive
@@ -218,21 +223,29 @@ const SideNavBar: FC<SideNavBarProps> = ({
                             </button>
                         );
                     })}
+                    </div>
 
+                    {/*
+                     * Recent sessions live in their own flex region (min-h-0 flex-1) so
+                     * the list scrolls instead of squashing the rows. The whole region
+                     * collapses when there's too little vertical room, sacrificing the
+                     * recent list to preserve the main items above.
+                     */}
                     {recentItems.length > 0 && !collapsed && (
-                        <>
+                        <div className="mt-2 flex min-h-0 flex-1 flex-col">
                             <div className={`
-                            my-2 border-t border-surface-variant transition-opacity duration-300
+                            my-2 shrink-0 border-t border-surface-variant transition-opacity duration-300
                             ${collapsed ? 'mx-2 opacity-50' : 'mx-4 opacity-100'}
                         `} />
 
                             <div className={`
-                            mb-1 min-w-56 whitespace-nowrap text-sm font-semibold text-on-surface-variant transition-all duration-300
+                            mb-1 min-w-56 shrink-0 whitespace-nowrap text-sm font-semibold text-on-surface-variant transition-all duration-300
                             ${collapsed ? 'w-0 overflow-hidden opacity-0' : 'ml-3 opacity-100'}
                         `}>
                                 Recent Sessions
                             </div>
 
+                            <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto">
                             {recentItems.map((item) => {
                                 const isActive = item.id === activeId;
 
@@ -243,7 +256,7 @@ const SideNavBar: FC<SideNavBarProps> = ({
                                 );
 
                                 const sharedClassName = `
-                                    flex h-10 w-full cursor-pointer items-center rounded-[10px]
+                                    flex h-10 w-full shrink-0 cursor-pointer items-center rounded-[10px]
                                     transition-all duration-300 ease-out overflow-hidden
                                     ${collapsed ? 'md:px-2 px-3' : 'px-3'}
                                     ${isActive
@@ -287,7 +300,8 @@ const SideNavBar: FC<SideNavBarProps> = ({
                                     </button>
                                 );
                             })}
-                        </>
+                            </div>
+                        </div>
                     )}
 
                 </nav>
