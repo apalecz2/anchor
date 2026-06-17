@@ -17,7 +17,7 @@ use pdfium_render::prelude::*;
 
 use image::{DynamicImage, GenericImageView, GrayImage};
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use crate::paths::pdfium_lib_name;
 
@@ -45,6 +45,22 @@ pub struct DocumentPageResult {
     pub natural_height: i32,
     pub words: Vec<OcrWord>,
     pub text: String,
+    /// Set when this individual page failed to render or OCR. Document processing
+    /// is per-page fault-tolerant: one bad page in a long PDF is recorded here and
+    /// skipped rather than aborting the whole document, so the pages that did
+    /// succeed are still usable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Progress for a multi-page document, emitted on the `process:progress` channel
+/// after each page so the UI can show "Processing page x of y" instead of a static
+/// spinner for minutes on a long PDF.
+#[derive(Serialize, Clone)]
+struct ProcessProgress {
+    session_id: String,
+    current_page: usize,
+    total_pages: usize,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -138,6 +154,7 @@ fn ocr_image_to_page(
         natural_height,
         words,
         text: ocr_output.output,
+        error: None,
     })
 }
 
@@ -231,34 +248,62 @@ pub async fn process_document(
             .set_target_width(2000)
             .use_print_quality(true);
 
-        let page_count = document.pages().len();
+        let page_count = document.pages().len() as usize;
 
         for i in 0..page_count {
-            let page = document
-                .pages()
-                .get(i)
-                .map_err(|error| format!("failed to read page {}: {error}", i + 1))?;
+            // Render + OCR a single page. Any failure here is captured as a per-page
+            // error below rather than aborting the document, so one corrupt page in a
+            // 100-page PDF doesn't discard the 99 that processed fine.
+            let render_and_ocr = || -> Result<DocumentPageResult, String> {
+                let page = document
+                    .pages()
+                    .get(i as u16)
+                    .map_err(|error| format!("failed to read page {}: {error}", i + 1))?;
 
-            let bitmap = page
-                .render_with_config(&render_config)
-                .map_err(|error| format!("failed to render page {}: {error}", i + 1))?;
+                let bitmap = page
+                    .render_with_config(&render_config)
+                    .map_err(|error| format!("failed to render page {}: {error}", i + 1))?;
 
-            let natural_width = bitmap.width() as i32;
-            let natural_height = bitmap.height() as i32;
+                let natural_width = bitmap.width() as i32;
+                let natural_height = bitmap.height() as i32;
 
-            let generated_path = session_dir.join(format!("{}_page_{}_{}.png", session_id, i + 1, timestamp));
-            bitmap
-                .as_image()
-                .save(&generated_path)
-                .map_err(|error| format!("failed to save page {}: {error}", i + 1))?;
+                let generated_path =
+                    session_dir.join(format!("{}_page_{}_{}.png", session_id, i + 1, timestamp));
+                bitmap
+                    .as_image()
+                    .save(&generated_path)
+                    .map_err(|error| format!("failed to save page {}: {error}", i + 1))?;
 
-            pages.push(ocr_image_to_page(
-                &generated_path,
-                natural_width,
-                natural_height,
-                &session_dir,
-                false, // already high-res from pdfium; do not upscale
-            )?);
+                ocr_image_to_page(
+                    &generated_path,
+                    natural_width,
+                    natural_height,
+                    &session_dir,
+                    false, // already high-res from pdfium; do not upscale
+                )
+            };
+
+            match render_and_ocr() {
+                Ok(page) => pages.push(page),
+                Err(message) => pages.push(DocumentPageResult {
+                    image_path: String::new(),
+                    natural_width: 0,
+                    natural_height: 0,
+                    words: Vec::new(),
+                    text: String::new(),
+                    error: Some(message),
+                }),
+            }
+
+            // Let the UI advance its progress indicator as each page completes.
+            let _ = app_handle.emit(
+                "process:progress",
+                ProcessProgress {
+                    session_id: session_id.clone(),
+                    current_page: i + 1,
+                    total_pages: page_count,
+                },
+            );
         }
 
     } else if ["png", "jpg", "jpeg"].contains(&extension.as_str()) {

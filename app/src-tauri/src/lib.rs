@@ -6,24 +6,33 @@ mod setup;
 
 use tauri::{Manager, WindowEvent};
 
-use llama::{stop_llama_server_process, AppState};
+use llama::{stop_llama_server_process, sweep_orphan_server, AppState};
+
+/// Label of the primary window (Tauri's default when none is configured). The
+/// close handler only kills the shared llama-server for *this* window, so a future
+/// secondary window (e.g. a viewer popout) closing can't tear down an in-flight
+/// extraction.
+const MAIN_WINDOW_LABEL: &str = "main";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            // Best-effort at startup; process_document re-runs this so OCR also
-            // works when Tesseract is installed by the wizard mid-session.
             if let Ok(data_dir) = app.path().app_data_dir() {
+                // Best-effort at startup; process_document re-runs this so OCR also
+                // works when Tesseract is installed by the wizard mid-session.
                 ocr::configure_tesseract_env(&data_dir);
+                // Reap a llama-server orphaned by a previous crash/taskkill before
+                // it lingers holding multi-GB of RAM.
+                sweep_orphan_server(&data_dir);
             }
             Ok(())
         })
-        .manage(AppState {
-            llama_server: std::sync::Mutex::new(None),
-        })
+        .manage(AppState::new())
         .on_window_event(|window, event| {
-            if matches!(event, WindowEvent::CloseRequested { .. }) {
+            if matches!(event, WindowEvent::CloseRequested { .. })
+                && window.label() == MAIN_WINDOW_LABEL
+            {
                 if let Some(state) = window.app_handle().try_state::<AppState>() {
                     let _ = stop_llama_server_process(&state);
                 }
@@ -41,6 +50,8 @@ pub fn run() {
             llama::resolve_llama_server_path,
             llama::start_llama_server,
             llama::stop_llama_server,
+            llama::get_llama_server_port,
+            llama::llama_server_status,
             // Setup wizard
             setup::check_setup_complete,
             hardware::detect_hardware,

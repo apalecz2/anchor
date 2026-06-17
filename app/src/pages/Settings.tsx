@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { readSetting, writeSetting, type HardwareMode, type Theme } from '../lib/settings';
+import { readSetting, writeSetting, type Theme } from '../lib/settings';
+import { requestSetupRerun } from '../features/setup/useSetupCheck';
 
 function Section({ title, description, children }: {
     title: string;
@@ -54,7 +55,7 @@ function PathField({ label, hint, value, onChange, onBrowse, disabled = false }:
                     type="text"
                     value={value}
                     onChange={(e) => onChange(e.target.value)}
-                    placeholder="Leave blank to use bundled default"
+                    placeholder="Leave blank to use the model installed by setup"
                     disabled={disabled}
                     className="flex-1 rounded-lg border border-outline-variant bg-surface px-3 py-2 font-body-md text-body-md text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/50 transition-colors"
                 />
@@ -72,21 +73,6 @@ function PathField({ label, hint, value, onChange, onBrowse, disabled = false }:
     );
 }
 
-const HARDWARE_OPTIONS: { value: HardwareMode; label: string; heading: string; body: string }[] = [
-    {
-        value: 'low-end',
-        label: 'Low-end mode',
-        heading: '8 GB RAM minimum',
-        body: 'Vision models are disabled. A lightweight ~2B LLM handles formatting and cleanup, paired with Tesseract for text extraction.',
-    },
-    {
-        value: 'high-end',
-        label: 'High-end mode',
-        heading: 'Full pipeline',
-        body: 'Full vision models with larger context windows for complex tables, mixed layouts, and handwritten content.',
-    },
-];
-
 export default function Settings(): React.ReactElement {
     const [theme, setTheme] = useState<Theme>(() => {
         const stored = localStorage.getItem('theme');
@@ -94,7 +80,6 @@ export default function Settings(): React.ReactElement {
         return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
     });
 
-    const [hardwareMode, setHardwareMode] = useState<HardwareMode>(() => readSetting('hardwareMode'));
     const [modelPath, setModelPath] = useState(() => readSetting('modelPath'));
     const [mmprojPath, setMmprojPath] = useState(() => readSetting('mmprojPath'));
     const [pathsSaved, setPathsSaved] = useState(false);
@@ -103,11 +88,6 @@ export default function Settings(): React.ReactElement {
         setTheme(next);
         writeSetting('theme', next);
         document.documentElement.classList.toggle('dark', next === 'dark');
-    };
-
-    const applyHardwareMode = (next: HardwareMode) => {
-        setHardwareMode(next);
-        writeSetting('hardwareMode', next);
     };
 
     const browseForGguf = async (setter: (path: string) => void) => {
@@ -138,7 +118,7 @@ export default function Settings(): React.ReactElement {
                 <section>
                     <h1 className="font-display-lg text-display-lg text-primary tracking-tight">Settings</h1>
                     <p className="font-body-lg text-body-lg text-on-surface-variant mt-3 max-w-xl">
-                        Configure Artifact's appearance, hardware mode, and AI model paths.
+                        Configure Artifact's appearance, AI model paths, and setup.
                     </p>
                 </section>
 
@@ -169,45 +149,10 @@ export default function Settings(): React.ReactElement {
                     </div>
                 </Section>
 
-                {/* ── Hardware Mode ── */}
-                <Section
-                    title="Hardware mode"
-                    description="Controls which AI models are loaded. Takes effect on next server start."
-                >
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        {HARDWARE_OPTIONS.map(({ value, label, heading, body }) => (
-                            <button
-                                key={value}
-                                type="button"
-                                onClick={() => applyHardwareMode(value)}
-                                className={`text-left rounded-[10px] border p-6 flex flex-col gap-3 transition-colors ${
-                                    hardwareMode === value
-                                        ? 'border-primary bg-primary/5'
-                                        : 'border-outline-variant bg-surface-container hover:bg-surface-container-high'
-                                }`}
-                            >
-                                <div className="flex items-center justify-between">
-                                    <p className="font-label-md text-label-md text-on-surface-variant uppercase tracking-wider">{label}</p>
-                                    {hardwareMode === value && (
-                                        <span
-                                            className="material-symbols-outlined text-primary"
-                                            style={{ fontSize: '20px', fontVariationSettings: "'FILL' 1" }}
-                                        >
-                                            check_circle
-                                        </span>
-                                    )}
-                                </div>
-                                <h3 className="font-headline-md text-headline-md text-on-surface">{heading}</h3>
-                                <p className="font-body-md text-body-md text-on-surface-variant">{body}</p>
-                            </button>
-                        ))}
-                    </div>
-                </Section>
-
                 {/* ── AI Model ── */}
                 <Section
                     title="AI model"
-                    description="Override the default bundled model paths. Leave blank to use bundled defaults. Saved paths take effect on next server start."
+                    description="Override the model paths installed by setup. Leave blank to use the downloaded model. Saved paths take effect on next server start."
                 >
                     <div className="rounded-[10px] border border-outline-variant bg-surface-container p-6 flex flex-col gap-6">
                         <PathField
@@ -219,11 +164,10 @@ export default function Settings(): React.ReactElement {
                         />
                         <PathField
                             label="Multimodal projector path"
-                            hint="mmproj GGUF file — only used in High-end mode"
+                            hint="mmproj GGUF file — required for the vision pipeline"
                             value={mmprojPath}
                             onChange={(v) => { setMmprojPath(v); setPathsSaved(false); }}
                             onBrowse={() => browseForGguf(setMmprojPath)}
-                            disabled={hardwareMode === 'low-end'}
                         />
                         <div className="flex items-center gap-3 pt-1 border-t border-outline-variant">
                             <button
@@ -259,6 +203,28 @@ export default function Settings(): React.ReactElement {
                                 <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>translate</span>
                                 English (eng)
                             </span>
+                        </SettingRow>
+                    </div>
+                </Section>
+
+                {/* ── Setup ── */}
+                <Section
+                    title="Setup"
+                    description="Re-run the first-run wizard to re-verify or repair the downloaded engine, model, and libraries. Assets you already have are skipped, so this is safe to run any time something seems missing."
+                >
+                    <div className="rounded-[10px] border border-outline-variant bg-surface-container divide-y divide-outline-variant">
+                        <SettingRow
+                            label="Re-run setup wizard"
+                            description="Re-checks every component and reinstalls anything missing or corrupt."
+                        >
+                            <button
+                                type="button"
+                                onClick={requestSetupRerun}
+                                className="flex items-center gap-1.5 px-4 py-2 rounded-lg border border-outline-variant bg-surface-container hover:bg-surface-container-high font-label-md text-label-md text-on-surface transition-colors"
+                            >
+                                <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>restart_alt</span>
+                                Re-run setup
+                            </button>
                         </SettingRow>
                     </div>
                 </Section>

@@ -1,6 +1,6 @@
 import { createContext, useEffect, useRef, useState, type ReactNode } from "react";
 
-import { buildChatCompletionMessages, checkLlamaServerHealth, startLlamaServer, stopLlamaServer, streamChatCompletion } from "./llamaClient.ts";
+import { buildChatCompletionMessages, checkLlamaServerHealth, getLlamaServerStatus, startLlamaServer, stopLlamaServer, streamChatCompletion } from "./llamaClient.ts";
 
 import type { ChatMessage, FileAttachment } from "../extraction/types";
 
@@ -101,6 +101,11 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
         };
     }, []);
 
+    // Loading a multi-GB GGUF from cold disk on the 8 GB minimum spec can take well
+    // over a minute, so the old fixed 60 s budget failed setup-correct installs. We
+    // poll up to this long but bail early the moment the process is seen to have died.
+    const READINESS_TIMEOUT_MS = 180_000;
+
     const startServer = async (): Promise<boolean> => {
         // A new job cancels any pending idle unload, whether or not the server is up.
         cancelIdleUnload();
@@ -113,17 +118,25 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
         try {
             await startLlamaServer();
 
-            for (let attempt = 0; attempt < 60; attempt += 1) {
+            const deadline = Date.now() + READINESS_TIMEOUT_MS;
+            while (Date.now() < deadline) {
                 if (await checkLlamaServerHealth()) {
                     setIsServerReady(true);
                     startWatchdog();
                     return true;
                 }
 
+                // Fail fast on a crashed process (bad GGUF, OOM) rather than waiting
+                // out the full timeout for a server that will never report healthy.
+                if (await getLlamaServerStatus() === 'exited') {
+                    setServerError('The model server exited while loading — the model file may be corrupt or there may not be enough free RAM. See logs/llama-server.log in the app data folder for details.');
+                    return false;
+                }
+
                 await new Promise(resolve => setTimeout(resolve, 1000));
             }
 
-            setServerError('Server did not become ready within 60 seconds. Check that the model file exists and you have enough RAM.');
+            setServerError('The model server did not finish loading in time. A large model on a slow disk can take a while — retry, or free up RAM and try again.');
             return false;
         } catch (err) {
             setServerError(err instanceof Error ? err.message : 'Failed to start server.');

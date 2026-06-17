@@ -1,10 +1,8 @@
-export type HardwareMode = 'low-end' | 'high-end';
 export type Theme = 'light' | 'dark';
 export type HardwareBackend = 'cpu' | 'cuda' | 'rocm' | 'metal';
 
 interface SettingsSchema {
     theme: Theme;
-    hardwareMode: HardwareMode;
     modelPath: string;
     mmprojPath: string;
     ocrLanguage: string;
@@ -15,7 +13,6 @@ interface SettingsSchema {
 // 'theme' key is shared with AppLayout.tsx's dark-mode toggle
 const STORAGE_KEYS: Record<keyof SettingsSchema, string> = {
     theme: 'theme',
-    hardwareMode: 'hardware_mode',
     modelPath: 'model_path',
     mmprojPath: 'mmproj_path',
     ocrLanguage: 'ocr_language',
@@ -25,7 +22,6 @@ const STORAGE_KEYS: Record<keyof SettingsSchema, string> = {
 
 const DEFAULTS: SettingsSchema = {
     theme: 'dark',
-    hardwareMode: 'high-end',
     modelPath: '',
     mmprojPath: '',
     ocrLanguage: 'eng',

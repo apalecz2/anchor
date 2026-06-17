@@ -30,13 +30,51 @@ function cellTooltip(cell: ProvenanceCell): string {
     return `${prefix}LLM confidence: ${llmPct}% | OCR confidence: ${ocrPct}%`;
 }
 
-function cellClasses(cell: ProvenanceCell, isSelected: boolean): string {
-    const base = 'border border-outline-variant px-3 py-2 text-sm cursor-pointer transition-colors';
-    const color = cell.confidence.agreement === 'image_only'
+function trustColor(cell: ProvenanceCell): string {
+    return cell.confidence.agreement === 'image_only'
         ? 'bg-surface-variant/60 text-on-surface-variant hover:bg-surface-variant'
         : `${TRUST_BG[cell.confidence.trust]} ${TRUST_TEXT[cell.confidence.trust]}`;
+}
+
+function cellClasses(cell: ProvenanceCell, isSelected: boolean): string {
+    const base = 'border border-outline-variant px-3 py-2 text-sm cursor-pointer transition-colors';
     const ring = isSelected ? ' ring-2 ring-primary ring-inset' : '';
-    return `${base} ${color}${ring}`;
+    return `${base} ${trustColor(cell)}${ring}`;
+}
+
+// Header cells carry real provenance/confidence too, so they get the same trust
+// colors as data cells (previously they were always flat gray, implying
+// "unverified" regardless of actual trust — review M14). A heavier bottom border
+// and bolder text keep the header row visually distinct from the data it labels.
+function headerClasses(cell: ProvenanceCell, isSelected: boolean): string {
+    const base = 'border border-outline-variant border-b-2 border-b-on-surface/30 px-3 py-2 text-left text-sm font-semibold cursor-pointer transition-colors';
+    const ring = isSelected ? ' ring-2 ring-primary ring-inset' : '';
+    return `${base} ${trustColor(cell)}${ring}`;
+}
+
+// The "?" (no OCR source) and "≈" (approximate match) indicators, shared by header
+// and data cells.
+function CellBadges({ cell }: { cell: ProvenanceCell }) {
+    return (
+        <>
+            {cell.confidence.agreement === 'image_only' && (
+                <span
+                    className="ml-1 inline-block rounded-full bg-surface-variant px-1 text-[10px] font-medium text-on-surface-variant leading-tight"
+                    title="No OCR match — source unverified"
+                >
+                    ?
+                </span>
+            )}
+            {cell.matchStatus === 'fuzzy' && (
+                <span
+                    className="ml-1 inline-block rounded-full bg-surface-variant px-1 text-[10px] font-medium text-on-surface-variant leading-tight"
+                    title="Approximate OCR match — value differs slightly from OCR"
+                >
+                    ≈
+                </span>
+            )}
+        </>
+    );
 }
 
 export default function ProvenanceTable({ rows, onCellClick, selectedCell }: ProvenanceTableProps) {
@@ -56,11 +94,12 @@ export default function ProvenanceTable({ rows, onCellClick, selectedCell }: Pro
                         {headerRow.map((cell, c) => (
                             <th
                                 key={c}
-                                className={`border border-outline-variant bg-surface-variant px-3 py-2 text-left font-medium text-on-surface cursor-pointer hover:bg-surface-container-high transition-colors${isSelected(0, c) ? ' ring-2 ring-primary ring-inset' : ''}`}
+                                className={headerClasses(cell, isSelected(0, c))}
                                 onClick={() => onCellClick(cell)}
                                 title={cellTooltip(cell)}
                             >
-                                {cell.value}
+                                <span>{cell.value}</span>
+                                <CellBadges cell={cell} />
                             </th>
                         ))}
                     </tr>
@@ -76,22 +115,7 @@ export default function ProvenanceTable({ rows, onCellClick, selectedCell }: Pro
                                     title={cellTooltip(cell)}
                                 >
                                     <span>{cell.value}</span>
-                                    {cell.confidence.agreement === 'image_only' && (
-                                        <span
-                                            className="ml-1 inline-block rounded-full bg-surface-variant px-1 text-[10px] font-medium text-on-surface-variant leading-tight"
-                                            title="No OCR match — source unverified"
-                                        >
-                                            ?
-                                        </span>
-                                    )}
-                                    {cell.matchStatus === 'fuzzy' && (
-                                        <span
-                                            className="ml-1 inline-block rounded-full bg-surface-variant px-1 text-[10px] font-medium text-on-surface-variant leading-tight"
-                                            title="Approximate OCR match — value differs slightly from OCR"
-                                        >
-                                            ≈
-                                        </span>
-                                    )}
+                                    <CellBadges cell={cell} />
                                 </td>
                             ))}
                         </tr>

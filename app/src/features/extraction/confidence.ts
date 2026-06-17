@@ -131,7 +131,12 @@ export const computeProvenanceCells = (
     return cellProvenance.map((row, r) =>
         row.map((cell, c): ProvenanceCell => {
             const indices = tokenIndicesMap[r]?.[c] ?? [];
-            const tokenLogprobs = indices.map(i => logprobs[i].logprob);
+            // Exclude tokens that arrived without a logprob — averaging them in as 0
+            // (probability 1.0) would falsely inflate confidence. A cell with no
+            // usable logprobs falls through to llmMean/llmMin = 0 below.
+            const tokenLogprobs = indices
+                .map(i => logprobs[i].logprob)
+                .filter((lp): lp is number => lp != null);
 
             // Geometric mean of per-token probabilities
             const llmMean = tokenLogprobs.length > 0

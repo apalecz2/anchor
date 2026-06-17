@@ -1,17 +1,26 @@
 import { useState, useEffect, useRef } from 'react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { getDb } from '../../lib/db';
 import { ExtractionResult, DocumentPageResult } from './types';
 import type { BoundingBox } from '../ocr/types';
 import { sortWords, generateLinesFromWords } from '../../utils/ocrTransforms';
 
+export type ProcessProgress = { current: number; total: number };
+
 export function useDocumentExtraction(sessionId: string | undefined, activePageIndex: number = 0) {
     const [extractionResult, setExtractionResult] = useState<ExtractionResult | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [progress, setProgress] = useState<ProcessProgress | null>(null);
+    const [retryToken, setRetryToken] = useState(0);
     const hasProcessed = useRef(false);
+    // Set by retry() to bypass the page cache and re-run OCR from the source file.
+    const forceReprocess = useRef(false);
 
     useEffect(() => {
+        let unlistenProgress: (() => void) | undefined;
+
         async function processDocument() {
             if (!sessionId || hasProcessed.current) return;
             hasProcessed.current = true;
@@ -20,6 +29,13 @@ export function useDocumentExtraction(sessionId: string | undefined, activePageI
                 setError(null);
                 setIsLoading(true);
                 const db = await getDb();
+
+                // On an explicit retry, drop any cached pages so the source file is
+                // actually re-rendered (e.g. after a transient per-page failure).
+                if (forceReprocess.current) {
+                    await db.execute('DELETE FROM document_pages WHERE session_id = $1', [sessionId]);
+                    forceReprocess.current = false;
+                }
 
                 const cachedPages = await db.select<any[]>(
                     'SELECT image_path, natural_width, natural_height, full_text, words_json FROM document_pages WHERE session_id = $1 ORDER BY page_index ASC',
@@ -41,6 +57,17 @@ export function useDocumentExtraction(sessionId: string | undefined, activePageI
                 const dbResult = await db.select<{ file_path: string }[]>('SELECT file_path FROM files WHERE session_id = $1 LIMIT 1', [sessionId]);
                 if (!dbResult || dbResult.length === 0) throw new Error('No document attached to this session.');
 
+                // Surface per-page progress emitted by the backend so a long PDF
+                // shows "Processing page x of y" instead of a static spinner.
+                unlistenProgress = await listen<{ session_id: string; current_page: number; total_pages: number }>(
+                    'process:progress',
+                    event => {
+                        if (event.payload.session_id === sessionId) {
+                            setProgress({ current: event.payload.current_page, total: event.payload.total_pages });
+                        }
+                    }
+                );
+
                 const rustResult = await invoke<ExtractionResult>('process_document', {
                     sessionId,
                     filePath: dbResult[0].file_path
@@ -50,6 +77,9 @@ export function useDocumentExtraction(sessionId: string | undefined, activePageI
                     const page = rustResult.pages[i];
                     page.words = sortWords(page.words.map(w => ({ ...w, id: crypto.randomUUID() })), page.natural_height);
 
+                    // Persist successful and failed pages alike so the page count and
+                    // indices stay consistent; an errored page has no words/image and
+                    // simply renders as empty until the user retries.
                     await db.execute(
                         `INSERT OR IGNORE INTO document_pages (id, session_id, page_index, image_path, natural_width, natural_height, full_text, words_json) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
                         [crypto.randomUUID(), sessionId, i, page.image_path, page.natural_width, page.natural_height, page.text, JSON.stringify(page.words)]
@@ -69,19 +99,35 @@ export function useDocumentExtraction(sessionId: string | undefined, activePageI
                 hasProcessed.current = false;
             } finally {
                 setIsLoading(false);
+                setProgress(null);
             }
         }
         processDocument();
-    }, [sessionId]);
+
+        return () => { unlistenProgress?.(); };
+        // retryToken bump re-runs processing after retry() resets hasProcessed.
+    }, [sessionId, retryToken]);
+
+    // Re-run document processing after a failure (document- or page-level). Resets
+    // the one-shot guard and re-triggers the effect via the retry token.
+    const retry = () => {
+        if (!sessionId) return;
+        hasProcessed.current = false;
+        forceReprocess.current = true;
+        setError(null);
+        setRetryToken(token => token + 1);
+    };
 
     const updateDb = async (updatedPage: DocumentPageResult) => {
         if (!sessionId || !extractionResult) return;
         const lines = generateLinesFromWords(updatedPage.words, updatedPage.natural_height);
         updatedPage.text = lines.map(line => line.map(w => w.text).join(' ')).join('\n');
 
-        const newResult = { ...extractionResult };
-        newResult.pages[activePageIndex] = updatedPage;
-        setExtractionResult(newResult);
+        // Copy the pages array rather than mutating the existing state object in
+        // place, so React sees a new reference and dependent memos/effects re-run.
+        const newPages = [...extractionResult.pages];
+        newPages[activePageIndex] = updatedPage;
+        setExtractionResult({ ...extractionResult, pages: newPages });
 
         try {
             const db = await getDb();
@@ -136,5 +182,5 @@ export function useDocumentExtraction(sessionId: string | undefined, activePageI
         ? convertFileSrc(extractionResult.pages[activePageIndex].image_path)
         : null;
 
-    return { extractionResult, fileUrl, isLoading, error, addWord, editWord, deleteWord };
+    return { extractionResult, fileUrl, isLoading, error, progress, retry, addWord, editWord, deleteWord };
 }

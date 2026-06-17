@@ -26,6 +26,9 @@ export interface DocumentPageResult {
     natural_height: number;
     words: OcrWord[];
     text: string;
+    /** Set when this page failed to render/OCR; the rest of the document still
+     *  processed. Absent on successful pages. */
+    error?: string | null;
 }
 
 export interface ExtractionResult {
@@ -48,7 +51,11 @@ export type CellProvenance = {
 
 export type TokenLogprob = {
     token: string;
-    logprob: number;
+    // null when llama.cpp returned a token without a logprob (e.g. logprobs absent
+    // for that delta). Confidence scoring excludes nulls from the mean rather than
+    // treating them as logprob 0 (= probability 1.0), which would silently inflate
+    // trust to maximum for the very tokens we have no confidence signal for.
+    logprob: number | null;
     charOffset: number;     // cumulative char offset in the raw streamed content
 };
 

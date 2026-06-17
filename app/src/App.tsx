@@ -7,7 +7,7 @@ import Settings from './pages/Settings';
 import About from './pages/About';
 import Search from './pages/Search';
 import SetupWizard from './features/setup/SetupWizard';
-import { useSetupCheck } from './features/setup/useSetupCheck';
+import { useSetupCheck, clearSetupRerun } from './features/setup/useSetupCheck';
 
 function AppRouter() {
     return (
@@ -39,7 +39,7 @@ export default function App() {
     }
 
     if (!isComplete) {
-        return <SetupWizard onComplete={() => window.location.reload()} />;
+        return <SetupWizard onComplete={() => { clearSetupRerun(); window.location.reload(); }} />;
     }
 
     return <AppRouter />;

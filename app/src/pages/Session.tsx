@@ -30,6 +30,8 @@ function SessionContent(): React.ReactElement {
         fileUrl,
         isLoading: isDbLoading,
         error: dbError,
+        progress: processProgress,
+        retry: retryProcessing,
         addWord,
         editWord,
         deleteWord
@@ -177,9 +179,20 @@ function SessionContent(): React.ReactElement {
                 </div>
                 <div className="relative flex-1 overflow-hidden rounded-2xl border border-outline-variant bg-surface-bright shadow-sm">
                     {isDbLoading ? (
-                        <div className="flex w-full items-center justify-center h-full">Processing...</div>
+                        <div className="flex w-full flex-col items-center justify-center gap-3 h-full text-on-surface-variant">
+                            <span className="material-symbols-outlined animate-spin" style={{ fontSize: '28px' }}>progress_activity</span>
+                            <span className="text-sm">
+                                {processProgress
+                                    ? `Processing page ${processProgress.current} of ${processProgress.total}…`
+                                    : 'Processing…'}
+                            </span>
+                        </div>
                     ) : dbError ? (
-                        <div className="flex w-full items-center justify-center text-error h-full">{dbError}</div>
+                        <div className="flex w-full flex-col items-center justify-center gap-3 text-error h-full">
+                            <span className="material-symbols-outlined" style={{ fontSize: '28px' }} aria-hidden="true">error</span>
+                            <p className="text-sm text-center max-w-sm">{dbError}</p>
+                            <button onClick={retryProcessing} className="px-4 py-1 text-sm bg-primary text-on-primary rounded-lg hover:bg-primary/90">Retry</button>
+                        </div>
                     ) : fileUrl && activePage ? (
                         <DocumentViewer
                             ref={viewerRef}
@@ -196,6 +209,12 @@ function SessionContent(): React.ReactElement {
                             onMinScaleChange={setMinZoom}
                             provenanceHighlightBox={provenanceHighlightBox}
                         />
+                    ) : activePage?.error ? (
+                        <div className="flex w-full flex-col items-center justify-center gap-3 text-error h-full">
+                            <span className="material-symbols-outlined" style={{ fontSize: '28px' }} aria-hidden="true">broken_image</span>
+                            <p className="text-sm text-center max-w-sm">This page could not be processed: {activePage.error}</p>
+                            <button onClick={retryProcessing} className="px-4 py-1 text-sm bg-primary text-on-primary rounded-lg hover:bg-primary/90">Retry document</button>
+                        </div>
                     ) : null}
 
                     {editingState && (
@@ -206,8 +225,10 @@ function SessionContent(): React.ReactElement {
                         />
                     )}
 
-                    {/* Floating document toolbar */}
-                    {fileUrl && activePage && (
+                    {/* Floating document toolbar — shown whenever a page is loaded
+                        (even an errored one) so page navigation stays available; the
+                        draw/zoom controls simply no-op without a rendered viewer. */}
+                    {activePage && !isDbLoading && (
                         <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20 flex justify-center px-4">
                             <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-outline-variant bg-surface/95 px-3 py-2 shadow-lg backdrop-blur-sm">
                             {/* Draw/Pan Tool Toggle */}

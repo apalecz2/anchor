@@ -43,6 +43,37 @@ type StreamChatCompletionOptions = {
 
 let llamaServerStartPromise: Promise<number | null> | null = null;
 
+// The server binds a fresh ephemeral port each start (chosen in Rust, never a
+// hardcoded 8080), so every request must target the port we were handed rather than
+// a fixed one. Cached here and refreshed from the backend on demand; cleared on stop.
+let cachedPort: number | null = null;
+
+const resolveServerPort = async (): Promise<number | null> => {
+    if (cachedPort !== null) return cachedPort;
+    try {
+        cachedPort = (await invoke<number | null>("get_llama_server_port")) ?? null;
+    } catch {
+        cachedPort = null;
+    }
+    return cachedPort;
+};
+
+/** Base URL of the running server, or null if no server/port is known. */
+const serverBaseUrl = async (): Promise<string | null> => {
+    const port = await resolveServerPort();
+    return port === null ? null : `http://127.0.0.1:${port}`;
+};
+
+/** Process-liveness as reported by Rust: "running" | "exited" | "stopped". Lets the
+ *  startup poll fail fast when the spawned server crashes (e.g. bad GGUF / OOM). */
+export const getLlamaServerStatus = async (): Promise<string> => {
+    try {
+        return await invoke<string>("llama_server_status");
+    } catch {
+        return "stopped";
+    }
+};
+
 export const buildChatCompletionMessages = (messages: ChatMessage[]): ChatCompletionMessage[] => {
     return messages.map(message => {
         const contentParts: ChatCompletionContentPart[] = [];
@@ -78,9 +109,24 @@ export const startLlamaServer = async () => {
     }
 
     llamaServerStartPromise = (async () => {
-        const modelPath = readSetting('modelPath');
-        const mmprojPath = readSetting('mmprojPath');
+        // Prefer explicit overrides from Settings, but fall back to the canonical
+        // AppData locations resolved in Rust. This makes the on-disk install — not
+        // webview localStorage — the source of truth, so clearing browser storage
+        // (or switching WebView2 profiles) can't strand a fully-installed app with
+        // empty paths and no way to recover (see docs/design.md §7.5 / review F5).
+        let modelPath = readSetting('modelPath');
+        let mmprojPath = readSetting('mmprojPath');
         const backend = readSetting('hardwareBackend');
+
+        if (!modelPath || !mmprojPath) {
+            try {
+                const paths = await invoke<{ model_path: string; mmproj_path: string }>("get_setup_paths");
+                modelPath = modelPath || paths.model_path;
+                mmprojPath = mmprojPath || paths.mmproj_path;
+            } catch {
+                /* fall through to the error below */
+            }
+        }
 
         if (!modelPath || !mmprojPath) {
             throw new Error("Model paths not configured — run the setup wizard.");
@@ -88,17 +134,20 @@ export const startLlamaServer = async () => {
 
         // The server binary path is resolved in Rust from AppData (not passed from
         // here) so a compromised webview can't point it at an arbitrary executable.
-        const pid = await invoke<number>("start_llama_server", {
+        const handle = await invoke<{ pid: number; port: number }>("start_llama_server", {
             modelPath,
             mmprojPath,
             backend,
         });
 
-        return pid;
+        cachedPort = handle.port;
+        return handle.pid;
     })()
         .catch(err => {
             console.error("Failed to spawn llama server:", err);
-            return null;
+            // Re-throw so the caller surfaces the real reason (missing files, etc.)
+            // instead of silently treating a failed spawn as a started server.
+            throw err instanceof Error ? err : new Error(String(err));
         })
         .finally(() => {
             llamaServerStartPromise = null;
@@ -112,12 +161,16 @@ export const stopLlamaServer = async () => {
         await invoke("stop_llama_server");
     } catch (err) {
         console.error("Failed to stop llama server:", err);
+    } finally {
+        cachedPort = null;
     }
 };
 
 export const checkLlamaServerHealth = async () => {
+    const base = await serverBaseUrl();
+    if (!base) return false;
     try {
-        const response = await fetch("http://127.0.0.1:8080/health");
+        const response = await fetch(`${base}/health`);
         return response.status === 200;
     } catch {
         return false;
@@ -164,7 +217,10 @@ export const extractTableFromImage = async ({
         top_logprobs: 0,
     };
 
-    const response = await fetch("http://127.0.0.1:8080/v1/chat/completions", {
+    const base = await serverBaseUrl();
+    if (!base) throw new Error("The local model server is not running.");
+
+    const response = await fetch(`${base}/v1/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestBody),
@@ -201,22 +257,36 @@ export const extractTableFromImage = async ({
             try {
                 const parsed = JSON.parse(data);
                 const choice = parsed.choices?.[0];
-                const token: string = choice?.delta?.content ?? "";
-                const logprobEntry = choice?.logprobs?.content?.[0];
 
                 // The terminating chunk carries finish_reason ("stop" | "length" | …)
                 // on a choice whose delta is usually empty — capture it regardless.
                 if (choice?.finish_reason) finishReason = choice.finish_reason;
 
-                if (token) {
-                    logprobs.push({
-                        token,
-                        logprob: logprobEntry?.logprob ?? 0,
-                        charOffset,
-                    });
-                    charOffset += token.length;
-                    content += token;
+                // A single delta can carry multiple tokens, each with its own logprob.
+                // Iterate the full logprobs.content array (not just [0]) so per-token
+                // offsets line up with the content we accumulate; a token without a
+                // logprob is recorded as null so confidence scoring can exclude it
+                // rather than defaulting it to 0 (= probability 1.0).
+                const contentLogprobs = choice?.logprobs?.content;
+                if (Array.isArray(contentLogprobs) && contentLogprobs.length > 0) {
+                    for (const entry of contentLogprobs) {
+                        const tok: string = entry?.token ?? "";
+                        if (!tok) continue;
+                        logprobs.push({ token: tok, logprob: entry?.logprob ?? null, charOffset });
+                        charOffset += tok.length;
+                        content += tok;
+                    }
                     onContentDelta(content);
+                } else {
+                    // No logprobs for this delta (e.g. logprobs disabled mid-stream).
+                    // Still surface the visible text, recording a null logprob.
+                    const tok: string = choice?.delta?.content ?? "";
+                    if (tok) {
+                        logprobs.push({ token: tok, logprob: null, charOffset });
+                        charOffset += tok.length;
+                        content += tok;
+                        onContentDelta(content);
+                    }
                 }
             } catch (err) {
                 console.error("Stream parse error:", err, data);
@@ -245,7 +315,10 @@ export const streamChatCompletion = async ({ messages, onThinkingDelta, onConten
         chat_template_kwargs: { enable_thinking: false },
     };
 
-    const response = await fetch("http://127.0.0.1:8080/v1/chat/completions", {
+    const base = await serverBaseUrl();
+    if (!base) throw new Error("The local model server is not running.");
+
+    const response = await fetch(`${base}/v1/chat/completions`, {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
