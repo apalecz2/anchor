@@ -7,6 +7,7 @@ mod setup;
 use tauri::{Manager, WindowEvent};
 
 use llama::{stop_llama_server_process, sweep_orphan_server, AppState};
+use ocr::ProcessState;
 
 /// Label of the primary window (Tauri's default when none is configured). The
 /// close handler only kills the shared llama-server for *this* window, so a future
@@ -57,6 +58,7 @@ pub fn run() {
             Ok(())
         })
         .manage(AppState::new())
+        .manage(ProcessState::new())
         .on_window_event(|window, event| {
             if matches!(event, WindowEvent::CloseRequested { .. })
                 && window.label() == MAIN_WINDOW_LABEL
@@ -75,6 +77,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // Document processing
             ocr::process_document,
+            ocr::cancel_process_document,
             // Llama server
             llama::resolve_llama_server_path,
             llama::start_llama_server,

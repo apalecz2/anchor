@@ -1,7 +1,6 @@
 import { FC, useEffect, useState } from 'react';
 import { Link } from 'react-router';
-import ConfirmDialog from './ConfirmDialog';
-import { deleteSession } from '../features/sessions/sessionActions';
+import { DeleteSessionDialog } from '../features/sessions/DeleteSessionDialog';
 
 // ─── Nav Item Definition ───────────────────────────────────────────────────────
 // Add, remove, or reorder items here to change the sidebar contents.
@@ -67,22 +66,6 @@ const SideNavBar: FC<SideNavBarProps> = ({
             window.removeEventListener('scroll', closeMenu, true);
         };
     }, [recentContextMenu]);
-
-    const handleDeleteRecentSession = async () => {
-        if (!sessionToDelete?.href) {
-            return;
-        }
-
-        const sessionId = sessionToDelete.href.replace('/session/', '');
-
-        try {
-            await deleteSession(sessionId);
-        } catch (error) {
-            console.error('Failed to delete recent session:', error);
-        } finally {
-            setSessionToDelete(null);
-        }
-    };
 
     return (
         <>
@@ -334,17 +317,13 @@ const SideNavBar: FC<SideNavBarProps> = ({
                 )}
             </aside>
 
-            <ConfirmDialog
-                open={sessionToDelete !== null}
-                title="Delete session?"
-                description={
-                    sessionToDelete
-                        ? `This will permanently delete "${sessionToDelete.label}" and all related files, outputs, and OCR data.`
-                        : ''
+            <DeleteSessionDialog
+                session={
+                    sessionToDelete?.href
+                        ? { id: sessionToDelete.href.replace('/session/', ''), name: sessionToDelete.label }
+                        : null
                 }
-                confirmLabel="Delete"
-                onConfirm={handleDeleteRecentSession}
-                onCancel={() => setSessionToDelete(null)}
+                onClose={() => setSessionToDelete(null)}
             />
         </>
     );

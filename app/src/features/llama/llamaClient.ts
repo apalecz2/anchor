@@ -174,7 +174,14 @@ export const checkLlamaServerHealth = async () => {
     if (!base) return false;
     try {
         const response = await fetch(`${base}/health`);
-        return response.status === 200;
+        if (response.status !== 200) return false;
+        // The port is private/ephemeral, but a 200 alone doesn't prove the responder
+        // is *our* llama-server rather than some unrelated local service that grabbed
+        // the port in the sub-millisecond gap between pick_free_port and the spawn.
+        // llama.cpp's /health answers `{"status":"ok"}`; assert that shape so we don't
+        // start streaming completions at an impostor.
+        const body = await response.json().catch(() => null);
+        return body?.status === 'ok';
     } catch {
         return false;
     }
@@ -243,6 +250,12 @@ export const extractTableFromImage = async ({
     let charOffset = 0;
     let finishReason: string | null = null;
     const logprobs: TokenLogprob[] = [];
+    // Track whether the server ever emitted a real (non-null) logprob. Confidence
+    // scoring depends on llama.cpp's `choices[].logprobs.content[]` shape; if a future
+    // server build changes or drops it, we still produce a table but every cell scores
+    // as low/grey with no obvious cause. Surface that as a loud diagnostic (F7) rather
+    // than letting the heatmap silently lie.
+    let sawUsableLogprob = false;
 
     while (true) {
         const { done, value } = await reader.read();
@@ -275,7 +288,9 @@ export const extractTableFromImage = async ({
                     for (const entry of contentLogprobs) {
                         const tok: string = entry?.token ?? "";
                         if (!tok) continue;
-                        logprobs.push({ token: tok, logprob: entry?.logprob ?? null, charOffset });
+                        const logprob = typeof entry?.logprob === "number" ? entry.logprob : null;
+                        if (logprob !== null) sawUsableLogprob = true;
+                        logprobs.push({ token: tok, logprob, charOffset });
                         charOffset += tok.length;
                         content += tok;
                     }
@@ -295,6 +310,18 @@ export const extractTableFromImage = async ({
                 console.error("Stream parse error:", err, data);
             }
         }
+    }
+
+    // Response-shape assertion: the model produced text but not one usable logprob.
+    // That means the logprobs contract this server build speaks no longer matches what
+    // confidence scoring expects — warn loudly so the cause is diagnosable instead of
+    // surfacing as a mysteriously all-grey heatmap.
+    if (content.length > 0 && !sawUsableLogprob) {
+        console.warn(
+            "llama-server returned no usable token logprobs — confidence scoring will be " +
+            "degraded. The server's logprobs response shape may have changed; verify the " +
+            "pinned llama.cpp build.",
+        );
     }
 
     return { content, logprobs, finishReason };

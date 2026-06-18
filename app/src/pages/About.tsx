@@ -115,19 +115,9 @@ export default function About(): React.ReactElement {
                             body="Every extracted cell is color-coded green, yellow, or red based on a blend of AI token log-probability and Tesseract OCR word confidence. The minimum token probability is tracked separately to catch a single shaky digit hiding inside an otherwise confident number."
                         />
                         <FeatureCard
-                            icon="auto_awesome"
-                            title="Smart routing"
-                            body="Machine-readable PDFs skip OCR entirely and are processed directly by the AI. Image-based or handwritten documents are routed through the full pipeline automatically."
-                        />
-                        <FeatureCard
-                            icon="memory"
-                            title="Stateful multi-page extraction"
-                            body="Column names, data types, and extraction context are carried forward across pages. Long documents are processed coherently, not as isolated snippets."
-                        />
-                        <FeatureCard
-                            icon="speed"
-                            title="Background queue processing"
-                            body="Submit a batch and keep working. The extraction pipeline runs in the background, queuing jobs intelligently so the UI stays responsive even during heavy processing."
+                            icon="account_tree"
+                            title="Deterministic source matching"
+                            body="A code-based reading-order walk links each extracted cell back to the OCR words it came from — no extra model tokens, no latency. A fuzzy second pass recovers single-character OCR misreads and flags them as approximate so you know exactly what to double-check."
                         />
                     </div>
                 </section>
@@ -146,13 +136,13 @@ export default function About(): React.ReactElement {
                         />
                         <StepRow
                             number="2"
-                            title="Smart OCR"
-                            body="Non-machine-readable files are rendered to high-resolution images (PDFs at 2000 px wide via PDFium; direct image uploads as-is) and then passed through Tesseract. Machine-readable PDFs skip both this step and preprocessing."
+                            title="OCR"
+                            body="Files are rendered to high-resolution images (PDFs at 2000 px wide via PDFium; direct image uploads as-is) and then passed through Tesseract for word-level text and bounding boxes."
                         />
                         <StepRow
                             number="3"
                             title="OCR image preprocessing"
-                            body="Before Tesseract runs, the image is processed through a dedicated pipeline — upscale if low-res, grayscale, mild denoise, adaptive binarization, then rule-line removal. The binarized copy is Tesseract's input only; the original image is what the AI and the UI see. If the image was upscaled, every returned bounding box is divided back by the scale factor so click-to-highlight boxes always land on the right spot in the original image."
+                            body="A separate copy is prepared just for Tesseract — converted to grayscale and, for small image uploads, upscaled with Lanczos resampling. Binarization is left to Tesseract's own thresholding, which handles thin antialiased glyphs better than a hard threshold. The original image is untouched and is what the AI and the UI see. When a copy is upscaled, every returned bounding box is divided back by the scale factor so click-to-highlight boxes always land on the right spot in the original image."
                         />
                         <StepRow
                             number="4"
@@ -228,7 +218,7 @@ export default function About(): React.ReactElement {
                             <p className="font-label-md text-label-md text-on-surface-variant mb-3 uppercase tracking-wider">Output</p>
                             <div className="flex flex-wrap gap-2">
                                 <FormatBadge icon="table_chart" label="CSV" />
-                                <FormatBadge icon="grid_on" label="Excel (XLSX)" />
+                                <FormatBadge icon="code" label="HTML" />
                                 <FormatBadge icon="notes" label="Markdown" />
                                 <FormatBadge icon="article" label="Plain text" />
                             </div>
@@ -259,7 +249,7 @@ export default function About(): React.ReactElement {
                     </div>
                     <p className="font-body-md text-body-md text-on-surface-variant">
                         Artifact dynamically caps and prioritizes threads to keep the UI responsive and leave
-                        headroom for your OS and other applications. Cross-platform on macOS, Windows, and Linux.
+                        headroom for your OS and other applications. Runs natively on macOS and Windows.
                     </p>
                 </section>
 

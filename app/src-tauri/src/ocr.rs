@@ -8,6 +8,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -22,6 +23,39 @@ use tauri::{Emitter, Manager};
 use crate::paths::pdfium_lib_name;
 
 const MAX_FILE_SIZE_BYTES: u64 = 500 * 1024 * 1024; // 500 MB
+
+/// Cancellation state for document processing. A long PDF can take minutes; without
+/// this the user has no way to abort a 100-page job once it starts (design review
+/// M13, and a prerequisite for the design's background queue, §6).
+///
+/// Cancellation uses a monotonic generation counter rather than a plain bool — the
+/// same pattern the setup-download cancel uses (design §7.4). `process_document`
+/// reads the generation once at entry and aborts the moment it changes between
+/// pages, so a cancel can never accidentally apply to a *later* run that started
+/// after the cancel was requested.
+pub struct ProcessState {
+    generation: AtomicU64,
+}
+
+impl ProcessState {
+    pub fn new() -> Self {
+        ProcessState { generation: AtomicU64::new(0) }
+    }
+}
+
+impl Default for ProcessState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Request cancellation of any in-flight `process_document`. Bumping the generation
+/// is enough: the running job notices the change between pages and stops. A no-op
+/// when nothing is running (the next job reads the already-advanced value at entry).
+#[tauri::command]
+pub fn cancel_process_document(state: tauri::State<'_, ProcessState>) {
+    state.generation.fetch_add(1, Ordering::SeqCst);
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct BoundingBox {
@@ -167,12 +201,23 @@ fn ocr_image_to_page(
     result
 }
 
+/// User-facing error returned when a job is aborted via `cancel_process_document`.
+/// The frontend matches on this to show a neutral "cancelled" state instead of a
+/// red failure.
+pub const CANCELLED_MESSAGE: &str = "Document processing was cancelled.";
+
 #[tauri::command]
 pub async fn process_document(
     app_handle: tauri::AppHandle,
+    state: tauri::State<'_, ProcessState>,
     session_id: String,
     file_path: String
 ) -> Result<ExtractionResult, String> {
+    // Snapshot the cancellation generation at entry. If `cancel_process_document`
+    // bumps it while we're working, the per-page check below aborts this run.
+    let start_generation = state.generation.load(Ordering::SeqCst);
+    let is_cancelled = || state.generation.load(Ordering::SeqCst) != start_generation;
+
     let source_path = Path::new(&file_path);
 
     if !source_path.exists() {
@@ -271,6 +316,13 @@ pub async fn process_document(
         let page_count = document.pages().len() as usize;
 
         for i in 0..page_count {
+            // Stop promptly between pages if the user cancelled. Checked before
+            // rendering the next page so a cancel on a long PDF takes effect within
+            // one page rather than running to completion.
+            if is_cancelled() {
+                return Err(CANCELLED_MESSAGE.to_string());
+            }
+
             // Render + OCR a single page. Any failure here is captured as a per-page
             // error below rather than aborting the document, so one corrupt page in a
             // 100-page PDF doesn't discard the 99 that processed fine.

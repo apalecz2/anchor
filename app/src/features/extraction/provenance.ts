@@ -176,6 +176,108 @@ function fuzzyMatchPass(result: WorkingCell[][], ocrWords: OcrWord[]): void {
     }
 }
 
+// Inclusive 1-D interval. Used to bound a cell to a column's x-span and a row's
+// y-span derived from cells the earlier passes already placed.
+type Span = { lo: number; hi: number };
+
+// y-span (top→bottom) covering every OCR word the given cells matched, or null if
+// none of them matched. Used as a row band.
+function verticalSpan(cells: WorkingCell[], ocrWords: OcrWord[]): Span | null {
+    let lo = Infinity, hi = -Infinity;
+    for (const cell of cells) {
+        for (const i of cell.wordIdx) {
+            const b = ocrWords[i].box_coords;
+            lo = Math.min(lo, b.top);
+            hi = Math.max(hi, b.top + b.height);
+        }
+    }
+    return lo <= hi ? { lo, hi } : null;
+}
+
+// x-span (left→right) covering every OCR word the given cells matched, or null.
+// Used as a column band.
+function horizontalSpan(cells: WorkingCell[], ocrWords: OcrWord[]): Span | null {
+    let lo = Infinity, hi = -Infinity;
+    for (const cell of cells) {
+        for (const i of cell.wordIdx) {
+            const b = ocrWords[i].box_coords;
+            lo = Math.min(lo, b.left);
+            hi = Math.max(hi, b.left + b.width);
+        }
+    }
+    return lo <= hi ? { lo, hi } : null;
+}
+
+const within = (v: number, s: Span): boolean => v >= s.lo && v <= s.hi;
+
+// Third pass — grid cross-check (design review F2). The reading-order walk and the
+// fuzzy gap search both assume CSV order tracks visual reading order. When a column
+// is reordered relative to the image, or a row leaves a column empty, that assumption
+// breaks and a cell is left `unmatched`. This pass triangulates such a cell spatially:
+// its row band comes from the OCR words its already-matched *row siblings* occupy, and
+// its column band from the words this *column* occupies in other rows. Only OCR words
+// whose center falls inside both bands — and that no other cell has claimed — are
+// considered, so the grid never steals a confidently-placed word. Requiring both a row
+// and a column anchor keeps the pass conservative: it fires only when the surrounding
+// grid is solid enough to locate the gap unambiguously.
+function gridMatchPass(result: WorkingCell[][], ocrWords: OcrWord[]): void {
+    const claimed = new Set<number>();
+    for (const row of result) for (const cell of row) for (const i of cell.wordIdx) claimed.add(i);
+
+    for (let r = 0; r < result.length; r++) {
+        for (let c = 0; c < result[r].length; c++) {
+            const cell = result[r][c];
+            if (cell.matchStatus !== "unmatched") continue;
+            const target = normalize(cell.value);
+            if (!target) continue;
+
+            const rowBand = verticalSpan(result[r].filter((_, ci) => ci !== c), ocrWords);
+            const colBand = horizontalSpan(
+                result.map(row => row[c]).filter((rowCell, ri) => ri !== r && rowCell !== undefined),
+                ocrWords,
+            );
+            if (!rowBand || !colBand) continue;
+
+            // OCR words centered in the row∩column cell region, in reading order,
+            // excluding any already claimed by another cell.
+            const candidates: number[] = [];
+            for (let i = 0; i < ocrWords.length; i++) {
+                if (claimed.has(i)) continue;
+                const b = ocrWords[i].box_coords;
+                const cx = b.left + b.width / 2;
+                const cy = b.top + b.height / 2;
+                if (within(cy, rowBand) && within(cx, colBand)) candidates.push(i);
+            }
+            if (candidates.length === 0) continue;
+
+            // Best contiguous run of candidates (by similarity) that clears the fuzzy
+            // threshold — same acceptance bar the gap search uses.
+            const maxConcat = Math.ceil(target.length * 1.5) + 2;
+            let best: { ids: number[]; similarity: number } | null = null;
+            for (let start = 0; start < candidates.length; start++) {
+                let concat = "";
+                for (let last = start; last < candidates.length; last++) {
+                    concat += normalize(ocrWords[candidates[last]].text);
+                    if (concat.length > maxConcat) break;
+                    const sim = similarity(concat, target);
+                    if (sim >= FUZZY_THRESHOLD && (!best || sim > best.similarity)) {
+                        best = { ids: candidates.slice(start, last + 1), similarity: sim };
+                    }
+                }
+            }
+            if (!best) continue;
+
+            cell.wordIdx = best.ids;
+            // A perfect spatial hit is a real match; an approximate one stays fuzzy so
+            // confidence is lowered, exactly like the gap-based fuzzy pass.
+            cell.matchStatus = best.similarity >= 1
+                ? (best.ids.length > 1 ? "multi_word" : "matched")
+                : "fuzzy";
+            for (const i of best.ids) claimed.add(i);
+        }
+    }
+}
+
 // Walk CSV rows and OCR words in parallel reading order.
 // Cursor advances only on a match, so one unmatched cell cannot desync the rest.
 export const matchCellsToOcr = (
@@ -208,6 +310,10 @@ export const matchCellsToOcr = (
 
     // Second pass — fuzzy-match whatever the exact walk could not place.
     fuzzyMatchPass(working, ocrWords);
+
+    // Third pass — grid cross-check: place cells the linear passes desynced on
+    // (reordered/empty columns) using the surrounding matched grid.
+    gridMatchPass(working, ocrWords);
 
     // Convert positional indices to stable UUIDs for storage/resolution.
     return working.map(row =>

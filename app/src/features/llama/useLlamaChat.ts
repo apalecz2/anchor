@@ -2,6 +2,7 @@ import { useContext, useState } from "react";
 import { LlamaChatContext } from "./LlamaChatContext";
 import { readFileAsBase64 } from './promptUtils';
 import { extractTableFromImage } from './llamaClient';
+import { estimateExtractionBudget, MIN_OUTPUT_TOKENS } from './contextBudget';
 import { getDb } from '../../lib/db';
 import { buildTableText } from '../../utils/ocrTransforms';
 import { sanitizeWordsForProvenance } from '../extraction/provenance';
@@ -18,6 +19,10 @@ type TableFormatResult = {
     /** True when the model hit its token budget (`finish_reason: "length"`) and
      *  the table is likely missing trailing rows/cells. */
     truncated: boolean;
+    /** True when the prompt (image + spatial OCR text) is estimated to leave too
+     *  little of the context window for a complete table — a dense page that can't
+     *  reliably fit in one pass. Surfaced so the user understands a partial result. */
+    contextOverflow: boolean;
 };
 
 /** Coarse stage of an in-flight extraction, surfaced so the UI can show the user
@@ -64,17 +69,6 @@ export const useLlamaChat = () => {
             const sanitizedWords = sanitizeWordsForProvenance(ocrWords, naturalHeight);
             const spatialText = buildTableText(sanitizedWords, naturalHeight);
 
-            // Budget ~4 tokens per cell; word count is a proxy for table density
-            const TOKENS_PER_CELL = 4;
-            const maxTokens = Math.max(256, sanitizedWords.length * TOKENS_PER_CELL);
-
-            // Load image as base64
-            const response = await fetch(fileUrl);
-            const blob = await response.blob();
-            const imageData = await readFileAsBase64(
-                new File([blob], "page.png", { type: blob.type || 'image/png' })
-            );
-
             const prompt = [
                 'Return only TSV (tab-separated values).',
                 'First row must be the column headers.',
@@ -86,6 +80,22 @@ export const useLlamaChat = () => {
                 'OCR text:',
                 spatialText,
             ].join('\n');
+
+            // Budget ~4 tokens per cell; word count is a proxy for table density. Then
+            // clamp to the context room the prompt actually leaves — asking for more
+            // output than fits just guarantees a `length` truncation (design review F3).
+            const TOKENS_PER_CELL = 4;
+            const desiredTokens = Math.max(MIN_OUTPUT_TOKENS, sanitizedWords.length * TOKENS_PER_CELL);
+            const budget = estimateExtractionBudget(prompt);
+            const maxTokens = Math.max(MIN_OUTPUT_TOKENS, Math.min(desiredTokens, budget.availableOutputTokens));
+            const contextOverflow = budget.overflow;
+
+            // Load image as base64
+            const response = await fetch(fileUrl);
+            const blob = await response.blob();
+            const imageData = await readFileAsBase64(
+                new File([blob], "page.png", { type: blob.type || 'image/png' })
+            );
 
             const messages = [{
                 role: 'user' as const,
@@ -128,17 +138,22 @@ export const useLlamaChat = () => {
             const csvContent = toCsv(csvRows);
 
             const db = await getDb();
+            // `created_at` is the row's first-write time and must NOT be rewritten on
+            // re-extract — otherwise it tracks the latest extraction, not creation.
+            // Last-activity tracking lives on sessions.updated_at, bumped below.
             await db.execute(
                 `INSERT INTO csv_outputs (id, session_id, page_index, csv_content, cell_mappings_json)
                  VALUES ($1, $2, $3, $4, $5)
                  ON CONFLICT(session_id, page_index) DO UPDATE SET
                    csv_content = excluded.csv_content,
-                   cell_mappings_json = excluded.cell_mappings_json,
-                   created_at = CURRENT_TIMESTAMP`,
+                   cell_mappings_json = excluded.cell_mappings_json`,
                 [crypto.randomUUID(), sessionId, pageIndex, csvContent, JSON.stringify(provenanceCells)]
             );
+            // A completed extraction is the clearest "activity" signal, so surface it
+            // in the session's last-updated time that "Recent" and Search order by.
+            await db.execute('UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = $1', [sessionId]);
 
-            return { csvContent, provenanceCells, sanitizedWords, truncated };
+            return { csvContent, provenanceCells, sanitizedWords, truncated, contextOverflow };
         } finally {
             // Reset UI, then release the server with a short warm window instead of
             // unloading immediately: a re-extract or next page within that window

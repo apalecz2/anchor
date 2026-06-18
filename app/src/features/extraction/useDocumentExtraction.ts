@@ -8,10 +8,15 @@ import { sortWords, generateLinesFromWords } from '../../utils/ocrTransforms';
 
 export type ProcessProgress = { current: number; total: number };
 
+// Must match CANCELLED_MESSAGE in src-tauri/src/ocr.rs — the backend rejects a
+// cancelled job with this exact string so we can show a neutral state, not a failure.
+const CANCELLED_MESSAGE = 'Document processing was cancelled.';
+
 export function useDocumentExtraction(sessionId: string | undefined, activePageIndex: number = 0) {
     const [extractionResult, setExtractionResult] = useState<ExtractionResult | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [cancelled, setCancelled] = useState(false);
     const [progress, setProgress] = useState<ProcessProgress | null>(null);
     const [retryToken, setRetryToken] = useState(0);
     const hasProcessed = useRef(false);
@@ -27,6 +32,7 @@ export function useDocumentExtraction(sessionId: string | undefined, activePageI
 
             try {
                 setError(null);
+                setCancelled(false);
                 setIsLoading(true);
                 const db = await getDb();
 
@@ -95,7 +101,13 @@ export function useDocumentExtraction(sessionId: string | undefined, activePageI
                     err instanceof Error ? err.message
                     : typeof err === 'string' ? err
                     : 'Failed to process document.';
-                setError(message);
+                // A user-initiated cancel is not a failure — show a neutral state with
+                // a retry rather than a red error banner.
+                if (message === CANCELLED_MESSAGE) {
+                    setCancelled(true);
+                } else {
+                    setError(message);
+                }
                 hasProcessed.current = false;
             } finally {
                 setIsLoading(false);
@@ -108,14 +120,21 @@ export function useDocumentExtraction(sessionId: string | undefined, activePageI
         // retryToken bump re-runs processing after retry() resets hasProcessed.
     }, [sessionId, retryToken]);
 
-    // Re-run document processing after a failure (document- or page-level). Resets
-    // the one-shot guard and re-triggers the effect via the retry token.
+    // Re-run document processing after a failure or cancellation (document- or
+    // page-level). Resets the one-shot guard and re-triggers the effect via the token.
     const retry = () => {
         if (!sessionId) return;
         hasProcessed.current = false;
         forceReprocess.current = true;
         setError(null);
+        setCancelled(false);
         setRetryToken(token => token + 1);
+    };
+
+    // Ask the backend to abort an in-flight process_document. The running invoke()
+    // then rejects with CANCELLED_MESSAGE, which the catch above turns into `cancelled`.
+    const cancel = () => {
+        invoke('cancel_process_document').catch(err => console.error('Failed to cancel processing:', err));
     };
 
     const updateDb = async (updatedPage: DocumentPageResult) => {
@@ -135,6 +154,9 @@ export function useDocumentExtraction(sessionId: string | undefined, activePageI
                 `UPDATE document_pages SET words_json = $1, full_text = $2 WHERE session_id = $3 AND page_index = $4`,
                 [JSON.stringify(updatedPage.words), updatedPage.text, sessionId, activePageIndex]
             );
+            // Editing OCR words is meaningful activity — keep the session's last-updated
+            // time (used by "Recent"/Search ordering) in sync with the edit.
+            await db.execute('UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = $1', [sessionId]);
         } catch (err) {
             console.error("Failed to update db:", err);
         }
@@ -182,5 +204,5 @@ export function useDocumentExtraction(sessionId: string | undefined, activePageI
         ? convertFileSrc(extractionResult.pages[activePageIndex].image_path)
         : null;
 
-    return { extractionResult, fileUrl, isLoading, error, progress, retry, addWord, editWord, deleteWord };
+    return { extractionResult, fileUrl, isLoading, error, cancelled, progress, retry, cancel, addWord, editWord, deleteWord };
 }

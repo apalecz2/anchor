@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router';
-import ConfirmDialog from '../components/ConfirmDialog';
-import { deleteSession } from '../features/sessions/sessionActions';
+import { DeleteSessionDialog } from '../features/sessions/DeleteSessionDialog';
 import { getDb } from '../lib/db';
 
 interface Session {
@@ -101,21 +100,6 @@ export default function Search(): React.ReactElement {
             isMounted = false;
         };
     }, [debouncedQuery, page, refreshToken]);
-
-    const handleDeleteSession = async () => {
-        if (!sessionToDelete) {
-            return;
-        }
-
-        try {
-            await deleteSession(sessionToDelete.id);
-            setRefreshToken((current) => current + 1);
-        } catch (error) {
-            console.error('Failed to delete session:', error);
-        } finally {
-            setSessionToDelete(null);
-        }
-    };
 
     return (
         <main className="relative flex h-full flex-col overflow-hidden bg-background px-6 pb-10 pt-18 md:px-10">
@@ -218,17 +202,10 @@ export default function Search(): React.ReactElement {
                 )}
             </div>
 
-            <ConfirmDialog
-                open={sessionToDelete !== null}
-                title="Delete session?"
-                description={
-                    sessionToDelete
-                        ? `This will permanently delete "${sessionToDelete.title}" and all related files, outputs, and OCR data.`
-                        : ''
-                }
-                confirmLabel="Delete"
-                onConfirm={handleDeleteSession}
-                onCancel={() => setSessionToDelete(null)}
+            <DeleteSessionDialog
+                session={sessionToDelete ? { id: sessionToDelete.id, name: sessionToDelete.title } : null}
+                onClose={() => setSessionToDelete(null)}
+                onDeleted={() => setRefreshToken((current) => current + 1)}
             />
         </main>
     );

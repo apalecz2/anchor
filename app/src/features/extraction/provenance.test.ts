@@ -90,6 +90,59 @@ describe('matchCellsToOcr — fuzzy second pass', () => {
     });
 });
 
+describe('matchCellsToOcr — grid cross-check pass (F2)', () => {
+    // The OCR words for the last row arrive in the array in swapped reading order
+    // (Y before B), so the linear cursor walk grabs B for the first column and then
+    // has nothing left in-window for the second column — Y is left unmatched, and the
+    // fuzzy gap search (bounded above by B's word, with no following match) can't place
+    // it either. Only the grid pass, anchoring Y's column from the header/row-1 cells
+    // above it and its row band from the matched B beside it, recovers it.
+    it('recovers a reading-order-desynced cell from its row and column anchors', () => {
+        const H1 = word('H1', 0, 0);
+        const H2 = word('H2', 100, 0);
+        const A  = word('A', 0, 20);
+        const X  = word('X', 100, 20);
+        const Y  = word('Y', 100, 40);
+        const B  = word('B', 0, 40);
+        const w = [H1, H2, A, X, Y, B]; // reading order as the walk sees it
+        const csv = [['H1', 'H2'], ['A', 'X'], ['B', 'Y']];
+
+        const prov = matchCellsToOcr(csv, w);
+
+        expect(prov[2][0].wordIds).toEqual([B.id]);      // exact walk
+        expect(prov[2][1].wordIds).toEqual([Y.id]);       // grid recovered
+        expect(prov[2][1].matchStatus).toBe('matched');
+    });
+
+    it('does not fire when a whole column is unmatched (no column anchor)', () => {
+        // Both data values in column 1 are absent from OCR, so the column never gets
+        // an anchor and the grid pass must leave these cells unmatched rather than
+        // guessing.
+        const w = [word('Name', 0, 0), word('Alice', 0, 20), word('Bob', 0, 40)];
+        const csv = [['Name', 'Score'], ['Alice', '90'], ['Bob', '85']];
+        const prov = matchCellsToOcr(csv, w);
+        expect(prov[1][1].matchStatus).toBe('unmatched');
+        expect(prov[2][1].matchStatus).toBe('unmatched');
+    });
+
+    it('leaves a cell unmatched when nothing in its row∩column region matches', () => {
+        // Grid bands exist (column 1 is anchored by H2/X, row 3 by B), but the only
+        // free word in the intersection is unrelated, so the cell stays unmatched
+        // rather than being force-fit to a non-match below the similarity threshold.
+        const H1 = word('H1', 0, 0);
+        const H2 = word('H2', 100, 0);
+        const A  = word('A', 0, 20);
+        const X  = word('X', 100, 20);
+        const Q  = word('zzzzzz', 100, 40); // sits in column 1 / row 3 but is unrelated
+        const B  = word('B', 0, 40);
+        const w = [H1, H2, A, X, Q, B];
+        const csv = [['H1', 'H2'], ['A', 'X'], ['B', 'Y']];
+        const prov = matchCellsToOcr(csv, w);
+        expect(prov[2][1].matchStatus).toBe('unmatched');
+        expect(prov[2][1].wordIds).toEqual([]);
+    });
+});
+
 describe('getCellSourceBox — UUID resolution (H2)', () => {
     const w = [word('Math', 0, 0), word('101', 40, 0), word('3.0', 100, 0)];
     const csv = [['Math 101', '3.0']];

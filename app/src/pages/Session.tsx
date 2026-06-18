@@ -300,8 +300,10 @@ function SessionContent(): React.ReactElement {
         fileUrl,
         isLoading: isDbLoading,
         error: dbError,
+        cancelled: processingCancelled,
         progress: processProgress,
         retry: retryProcessing,
+        cancel: cancelProcessing,
         addWord,
         editWord,
         deleteWord
@@ -328,6 +330,8 @@ function SessionContent(): React.ReactElement {
     const [provenanceHighlightBox, setProvenanceHighlightBox] = useState<BoundingBox | null>(null);
     const [extractionError, setExtractionError] = useState<string | null>(null);
     const [truncated, setTruncated] = useState(false);
+    // The page's prompt is estimated too dense to fit the model's context in one pass.
+    const [contextOverflow, setContextOverflow] = useState(false);
     const [highlightedWordId, setHighlightedWordId] = useState<string | null>(null);
     // Persistent (click) word selection that links the raw-text view and the image:
     // the selected word is bolded in the text and outlined on the image.
@@ -419,6 +423,7 @@ function SessionContent(): React.ReactElement {
             setProvenanceHighlightBox(null);
             setExtractionError(null);
             setTruncated(false);
+            setContextOverflow(false);
             if (csv) setOutputView('table');
         }
         load();
@@ -453,6 +458,7 @@ function SessionContent(): React.ReactElement {
         setProvenanceHighlightBox(null);
         setExtractionError(null);
         setTruncated(false);
+        setContextOverflow(false);
 
         try {
             const result = await requestTableFormat(
@@ -465,6 +471,7 @@ function SessionContent(): React.ReactElement {
             setSavedCsv(result.csvContent);
             setProvenanceCells(result.provenanceCells);
             setTruncated(result.truncated);
+            setContextOverflow(result.contextOverflow);
         } catch (err) {
             // Surface the failure instead of leaving the pane on a stale prompt.
             setExtractionError(err instanceof Error ? err.message : 'Extraction failed. Please try again.');
@@ -539,8 +546,20 @@ function SessionContent(): React.ReactElement {
                                         ? `Processing page ${processProgress.current} of ${processProgress.total}…`
                                         : 'Processing…'}
                                 </span>
+                                <button
+                                    onClick={cancelProcessing}
+                                    className="mt-1 rounded-lg border border-outline-variant px-4 py-1 text-sm text-on-surface-variant transition-colors hover:bg-surface-variant hover:text-on-surface"
+                                >
+                                    Cancel
+                                </button>
                             </div>
                         ) : null
+                    ) : processingCancelled ? (
+                        <div className="flex w-full flex-col items-center justify-center gap-3 text-on-surface-variant h-full">
+                            <span className="material-symbols-outlined" style={{ fontSize: '28px' }} aria-hidden="true">cancel</span>
+                            <p className="text-sm text-center max-w-sm">Processing was cancelled.</p>
+                            <button onClick={retryProcessing} className="px-4 py-1 text-sm bg-primary text-on-primary rounded-lg hover:bg-primary/90">Process document</button>
+                        </div>
                     ) : dbError ? (
                         <div className="flex w-full flex-col items-center justify-center gap-3 text-error h-full">
                             <span className="material-symbols-outlined" style={{ fontSize: '28px' }} aria-hidden="true">error</span>
@@ -801,11 +820,14 @@ function SessionContent(): React.ReactElement {
                         <div className="w-full h-full">
                             {/* When a table is already shown, surface a failed re-extract or a
                                 truncation warning as a banner above it (rather than replacing it). */}
-                            {!isExtracting && ((provenanceCells?.length ?? 0) > 0 || !!savedCsv) && (extractionError || truncated) && (
+                            {!isExtracting && ((provenanceCells?.length ?? 0) > 0 || !!savedCsv) && (extractionError || truncated || contextOverflow) && (
                                 <div className={`mb-3 flex items-start gap-2 rounded-lg border px-3 py-2 text-sm ${extractionError ? 'border-error/40 bg-error/5 text-error' : 'border-amber-400 bg-amber-50 text-amber-900'}`}>
                                     <span className="material-symbols-outlined text-[18px] shrink-0" aria-hidden="true">{extractionError ? 'error' : 'warning'}</span>
                                     <span className="flex-1">
-                                        {extractionError ?? 'The model reached its output limit, so this table may be missing trailing rows. Re-extract if any rows look cut off.'}
+                                        {extractionError
+                                            ?? (contextOverflow
+                                                ? 'This page is dense enough that it may not fit the model in a single pass, so some rows or columns could be missing. Consider splitting the page if the table looks incomplete.'
+                                                : 'The model reached its output limit, so this table may be missing trailing rows. Re-extract if any rows look cut off.')}
                                     </span>
                                     <button onClick={handleFormatTable} className="shrink-0 font-medium underline hover:no-underline">Retry</button>
                                 </div>
