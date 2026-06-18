@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
 import { readSetting, writeSetting, type Theme } from '../lib/settings';
+import { useTheme } from '../hooks/useTheme';
 import { requestSetupRerun } from '../features/setup/useSetupCheck';
+import { deleteAllSessions } from '../features/sessions/sessionActions';
+import ConfirmDialog from '../components/ConfirmDialog';
 
 function Section({ title, description, children }: {
     title: string;
@@ -74,21 +77,15 @@ function PathField({ label, hint, value, onChange, onBrowse, disabled = false }:
 }
 
 export default function Settings(): React.ReactElement {
-    const [theme, setTheme] = useState<Theme>(() => {
-        const stored = localStorage.getItem('theme');
-        if (stored === 'dark' || stored === 'light') return stored;
-        return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-    });
+    const [theme, setTheme] = useTheme();
 
     const [modelPath, setModelPath] = useState(() => readSetting('modelPath'));
     const [mmprojPath, setMmprojPath] = useState(() => readSetting('mmprojPath'));
     const [pathsSaved, setPathsSaved] = useState(false);
 
-    const applyTheme = (next: Theme) => {
-        setTheme(next);
-        writeSetting('theme', next);
-        document.documentElement.classList.toggle('dark', next === 'dark');
-    };
+    const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
+    const [deleting, setDeleting] = useState(false);
+    const [deleteResult, setDeleteResult] = useState<string | null>(null);
 
     const browseForGguf = async (setter: (path: string) => void) => {
         const { open } = await import('@tauri-apps/plugin-dialog');
@@ -106,6 +103,25 @@ export default function Settings(): React.ReactElement {
         writeSetting('modelPath', modelPath);
         writeSetting('mmprojPath', mmprojPath);
         setPathsSaved(true);
+    };
+
+    const handleDeleteAllSessions = async () => {
+        setConfirmDeleteAll(false);
+        setDeleting(true);
+        setDeleteResult(null);
+        try {
+            const count = await deleteAllSessions();
+            setDeleteResult(
+                count === 0
+                    ? 'No sessions to delete.'
+                    : `Deleted ${count} session${count === 1 ? '' : 's'}.`,
+            );
+        } catch (error) {
+            console.error('Failed to delete all sessions:', error);
+            setDeleteResult('Something went wrong while deleting sessions.');
+        } finally {
+            setDeleting(false);
+        }
     };
 
     return (
@@ -131,7 +147,7 @@ export default function Settings(): React.ReactElement {
                                     <button
                                         key={t}
                                         type="button"
-                                        onClick={() => applyTheme(t)}
+                                        onClick={() => setTheme(t)}
                                         className={`flex items-center gap-1.5 px-4 py-2 font-label-md text-label-md transition-colors ${
                                             theme === t
                                                 ? 'bg-primary text-on-primary'
@@ -229,7 +245,46 @@ export default function Settings(): React.ReactElement {
                     </div>
                 </Section>
 
+                {/* ── Data ── */}
+                <Section
+                    title="Data"
+                    description="Manage the extraction data stored on this device."
+                >
+                    <div className="rounded-[10px] border border-error/40 bg-surface-container divide-y divide-outline-variant">
+                        <SettingRow
+                            label="Delete all sessions"
+                            description="Permanently removes every session and related data from this device. Your original attached files and any outputs you saved elsewhere are left untouched. This cannot be undone."
+                        >
+                            <div className="flex items-center gap-3">
+                                {deleteResult && (
+                                    <span className="font-body-sm text-body-sm text-on-surface-variant">
+                                        {deleteResult}
+                                    </span>
+                                )}
+                                <button
+                                    type="button"
+                                    onClick={() => { setDeleteResult(null); setConfirmDeleteAll(true); }}
+                                    disabled={deleting}
+                                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-error text-on-error font-label-md text-label-md hover:bg-error/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                                >
+                                    <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>delete_forever</span>
+                                    {deleting ? 'Deleting…' : 'Delete all'}
+                                </button>
+                            </div>
+                        </SettingRow>
+                    </div>
+                </Section>
+
             </div>
+
+            <ConfirmDialog
+                open={confirmDeleteAll}
+                title="Delete all sessions?"
+                description="This permanently deletes every session and the data Artifact has copied for itself. It only touches the app's own data — your original attached files and any outputs you saved elsewhere are left untouched. This cannot be undone."
+                confirmLabel="Delete all"
+                onConfirm={handleDeleteAllSessions}
+                onCancel={() => setConfirmDeleteAll(false)}
+            />
         </main>
     );
 }

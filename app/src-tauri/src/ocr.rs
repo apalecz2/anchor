@@ -116,46 +116,55 @@ fn ocr_image_to_page(
     image_path: &Path,
     natural_width: i32,
     natural_height: i32,
-    out_dir: &Path,
+    work_dir: &Path,
     allow_upscale: bool,
 ) -> Result<DocumentPageResult, String> {
-    let (ocr_path, scale) = preprocess_for_ocr(image_path, out_dir, allow_upscale)?;
+    let (ocr_path, scale) = preprocess_for_ocr(image_path, work_dir, allow_upscale)?;
 
-    let mut args = rusty_tesseract::Args::default();
-    args.lang = "eng".to_string();
-    args.psm = Some(6);  // single uniform block — better for tabular layouts
-    args.dpi = None;     // let Tesseract estimate from image; the default 150 misrepresents upscaled content
+    // The preprocessed copy is a throwaway OCR working file. Run OCR, then delete
+    // it regardless of outcome so these copies never accumulate (they used to be
+    // written into the persistent sessions/ folder, untracked, and pile up forever).
+    let result = (|| -> Result<DocumentPageResult, String> {
+        let mut args = rusty_tesseract::Args::default();
+        args.lang = "eng".to_string();
+        args.psm = Some(6);  // single uniform block — better for tabular layouts
+        args.dpi = None;     // let Tesseract estimate from image; the default 150 misrepresents upscaled content
 
-    let tesseract_image = rusty_tesseract::tesseract::input::Image::from_path(&ocr_path)
-        .map_err(|error| format!("failed to load image for ocr: {error}"))?;
+        let tesseract_image = rusty_tesseract::tesseract::input::Image::from_path(&ocr_path)
+            .map_err(|error| format!("failed to load image for ocr: {error}"))?;
 
-    let ocr_output = rusty_tesseract::tesseract::output_data::image_to_data(&tesseract_image, &args)
-        .map_err(|error| format!("ocr failed: {error}"))?;
+        let ocr_output = rusty_tesseract::tesseract::output_data::image_to_data(&tesseract_image, &args)
+            .map_err(|error| format!("ocr failed: {error}"))?;
 
-    let words = ocr_output
-        .data
-        .into_iter()
-        .filter(|item| item.level == 5 && !item.text.trim().is_empty())
-        .map(|item| OcrWord {
-            text: item.text,
-            confidence: item.conf,
-            box_coords: BoundingBox {
-                left:   (item.left   as f32 / scale).round() as i32,
-                top:    (item.top    as f32 / scale).round() as i32,
-                width:  (item.width  as f32 / scale).round() as i32,
-                height: (item.height as f32 / scale).round() as i32,
-            },
+        let words = ocr_output
+            .data
+            .into_iter()
+            .filter(|item| item.level == 5 && !item.text.trim().is_empty())
+            .map(|item| OcrWord {
+                text: item.text,
+                confidence: item.conf,
+                box_coords: BoundingBox {
+                    left:   (item.left   as f32 / scale).round() as i32,
+                    top:    (item.top    as f32 / scale).round() as i32,
+                    width:  (item.width  as f32 / scale).round() as i32,
+                    height: (item.height as f32 / scale).round() as i32,
+                },
+            })
+            .collect::<Vec<_>>();
+
+        Ok(DocumentPageResult {
+            image_path: image_path.to_string_lossy().into_owned(),
+            natural_width,
+            natural_height,
+            words,
+            text: ocr_output.output,
+            error: None,
         })
-        .collect::<Vec<_>>();
+    })();
 
-    Ok(DocumentPageResult {
-        image_path: image_path.to_string_lossy().into_owned(),
-        natural_width,
-        natural_height,
-        words,
-        text: ocr_output.output,
-        error: None,
-    })
+    let _ = fs::remove_file(&ocr_path);
+
+    result
 }
 
 #[tauri::command]
@@ -215,6 +224,17 @@ pub async fn process_document(
 
     std::fs::create_dir_all(&session_dir)
         .map_err(|error| format!("failed to create output directory: {error}"))?;
+
+    // Scratch space for preprocessed OCR copies. These are transient working files
+    // (deleted right after each page is OCR'd), so they live in the app cache dir
+    // rather than the persistent sessions/ folder.
+    let ocr_work_dir = app_handle
+        .path()
+        .app_cache_dir()
+        .map_err(|error| format!("failed to resolve cache directory: {error}"))?
+        .join("ocr");
+    std::fs::create_dir_all(&ocr_work_dir)
+        .map_err(|error| format!("failed to create ocr work directory: {error}"))?;
 
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -278,7 +298,7 @@ pub async fn process_document(
                     &generated_path,
                     natural_width,
                     natural_height,
-                    &session_dir,
+                    &ocr_work_dir,
                     false, // already high-res from pdfium; do not upscale
                 )
             };
@@ -315,7 +335,7 @@ pub async fn process_document(
             source_path,
             natural_width,
             natural_height,
-            &session_dir,
+            &ocr_work_dir,
             true, // arbitrary resolution; upscale if small
         )?);
 

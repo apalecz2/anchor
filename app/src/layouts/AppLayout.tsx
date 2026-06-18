@@ -4,6 +4,7 @@ import SideNavBar, { NavItem } from '../components/SideNavBar';
 import { useLocation, useNavigate } from 'react-router';
 import { getDb } from '../lib/db';
 import { subscribeToSessionChanges } from '../features/sessions/sessionEvents';
+import { useTheme } from '../hooks/useTheme';
 
 interface SessionRow {
     id: string;
@@ -36,28 +37,8 @@ export default function AppLayout() {
         ? 'dashboard'
         : location.pathname.split('/').pop();
 
-    const [isDarkMode, setIsDarkMode] = useState(() => {
-        if (typeof window === 'undefined') {
-            return false;
-        }
-
-        const storedTheme = window.localStorage.getItem('theme');
-
-        if (storedTheme === 'dark') {
-            return true;
-        }
-
-        if (storedTheme === 'light') {
-            return false;
-        }
-
-        return window.matchMedia('(prefers-color-scheme: dark)').matches;
-    });
-
-    useEffect(() => {
-        document.documentElement.classList.toggle('dark', isDarkMode);
-        window.localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
-    }, [isDarkMode]);
+    const [theme, setTheme] = useTheme();
+    const isDarkMode = theme === 'dark';
 
     useEffect(() => {
         let isActive = true;
@@ -82,7 +63,7 @@ export default function AppLayout() {
     }, [location.pathname]);
 
     useEffect(() => {
-        return subscribeToSessionChanges(({ deletedSessionId }) => {
+        return subscribeToSessionChanges(({ deletedSessionId, allDeleted }) => {
             void (async () => {
                 try {
                     const sessions = await loadRecentSessions();
@@ -92,7 +73,10 @@ export default function AppLayout() {
                 }
             })();
 
-            if (deletedSessionId && location.pathname === `/session/${deletedSessionId}`) {
+            const onDeletedSession =
+                deletedSessionId && location.pathname === `/session/${deletedSessionId}`;
+            const onAnySession = allDeleted && location.pathname.startsWith('/session/');
+            if (onDeletedSession || onAnySession) {
                 navigate('/search', { replace: true });
             }
         });
@@ -119,7 +103,7 @@ export default function AppLayout() {
                     <button
                         aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
                         className="flex h-10 w-10 items-center justify-center rounded-[10px] bg-surface-variant text-on-surface transition-colors shadow-md hover:bg-surface-container-high focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
-                        onClick={() => setIsDarkMode((current) => !current)}
+                        onClick={() => setTheme(isDarkMode ? 'light' : 'dark')}
                         type="button"
                     >
                         <span className="material-symbols-outlined text-[20px]" style={{ fontVariationSettings: "'FILL' 0" }}>

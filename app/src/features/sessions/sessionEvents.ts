@@ -1,5 +1,7 @@
 export interface SessionChangeDetail {
     deletedSessionId?: string;
+    // Set when every session was removed (e.g. "Delete all sessions" in Settings).
+    allDeleted?: boolean;
 }
 
 const SESSION_CHANGE_EVENT = 'dataextractionai:sessions-changed';

@@ -37,3 +37,35 @@ export async function deleteSession(sessionId: string): Promise<void> {
     // Best-effort -> a file that is already missing must not surface as an error.
     await Promise.allSettled([...uniquePaths].map(p => remove(p)));
 }
+
+// Deletes every session and its associated rows and files. Returns the number of
+// sessions removed so callers can give feedback. Mirrors deleteSession's ordering
+// (children before parents, DB before filesystem) but clears the tables wholesale.
+export async function deleteAllSessions(): Promise<number> {
+    const db = await getDb();
+
+    // Collect every on-disk path before the rows are deleted.
+    const [uploadedFiles, generatedImages, sessions] = await Promise.all([
+        db.select<{ file_path: string }[]>('SELECT file_path FROM files'),
+        db.select<{ image_path: string }[]>('SELECT image_path FROM document_pages'),
+        db.select<{ id: string }[]>('SELECT id FROM sessions'),
+    ]);
+
+    // Children first, then parents — same reasoning as deleteSession: we don't
+    // trust ON DELETE CASCADE because the FK pragma is per-connection.
+    for (const table of SESSION_CHILD_TABLES) {
+        await db.execute(`DELETE FROM ${table}`);
+    }
+    await db.execute('DELETE FROM sessions');
+    emitSessionChange({ allDeleted: true });
+
+    const uniquePaths = new Set([
+        ...uploadedFiles.map(f => f.file_path),
+        ...generatedImages.map(p => p.image_path),
+    ]);
+
+    // Best-effort -> a file that is already missing must not surface as an error.
+    await Promise.allSettled([...uniquePaths].map(p => remove(p)));
+
+    return sessions.length;
+}
