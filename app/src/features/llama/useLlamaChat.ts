@@ -20,6 +20,10 @@ type TableFormatResult = {
     truncated: boolean;
 };
 
+/** Coarse stage of an in-flight extraction, surfaced so the UI can show the user
+ *  exactly what is happening (model load can take a while on first run). */
+export type ExtractionPhase = 'idle' | 'starting' | 'preparing' | 'generating' | 'finalizing';
+
 export const useLlamaChat = () => {
     const context = useContext(LlamaChatContext);
 
@@ -29,6 +33,7 @@ export const useLlamaChat = () => {
 
     const [streamingContent, setStreamingContent] = useState<string>('');
     const [isExtracting, setIsExtracting] = useState(false);
+    const [extractionPhase, setExtractionPhase] = useState<ExtractionPhase>('idle');
 
     const requestTableFormat = async (
         fileUrl: string,
@@ -37,19 +42,24 @@ export const useLlamaChat = () => {
         sessionId: string,
         pageIndex: number,
     ): Promise<TableFormatResult> => {
-        // Always go through startServer: it returns immediately when the server is
-        // already warm (and cancels any pending idle unload from a prior extraction).
-        const ready = await context.startServer();
-        if (!ready) {
-            // startServer surfaces the specific reason via `serverError`; throw a
-            // fallback so the caller still gets a message even on a stale read.
-            throw new Error('The local model server failed to start. Check that the model files exist and you have enough free RAM, then retry.');
-        }
-
+        // Flip the in-flight flags up front (before any await) so the click responds
+        // instantly and the UI can show progress while the model server loads — which
+        // can take well over a minute on a cold first run.
         setIsExtracting(true);
         setStreamingContent('');
+        setExtractionPhase('starting');
 
         try {
+            // Always go through startServer: it returns immediately when the server is
+            // already warm (and cancels any pending idle unload from a prior extraction).
+            const ready = await context.startServer();
+            if (!ready) {
+                // startServer surfaces the specific reason via `serverError`; throw a
+                // fallback so the caller still gets a message even on a stale read.
+                throw new Error('The local model server failed to start. Check that the model files exist and you have enough free RAM, then retry.');
+            }
+
+            setExtractionPhase('preparing');
             // Stage 1 setup — sanitize words, build spatial layout text for the prompt
             const sanitizedWords = sanitizeWordsForProvenance(ocrWords, naturalHeight);
             const spatialText = buildTableText(sanitizedWords, naturalHeight);
@@ -86,6 +96,7 @@ export const useLlamaChat = () => {
             }];
 
             // Stage 1 — LLM extracts CSV from image + spatial OCR text
+            setExtractionPhase('generating');
             const { content: rawContent, logprobs, finishReason } = await extractTableFromImage({
                 messages,
                 maxTokens,
@@ -95,6 +106,9 @@ export const useLlamaChat = () => {
             // `finish_reason: "length"` means the model ran out of token budget before
             // emitting the full table — surface it so the user knows rows may be missing.
             const truncated = finishReason === 'length';
+
+            // Stage 2 — parse, match to OCR, score confidence, persist.
+            setExtractionPhase('finalizing');
 
             // Parse the raw output while preserving char offsets for logprob mapping
             const { rows: csvRows } = parseTSVWithOffsets(rawContent);
@@ -132,6 +146,7 @@ export const useLlamaChat = () => {
             // (design §6). The model is unloaded outright on Session unmount.
             // Any error still propagates to the caller for display in the pane.
             setIsExtracting(false);
+            setExtractionPhase('idle');
             context.releaseServer();
         }
     };
@@ -141,5 +156,6 @@ export const useLlamaChat = () => {
         requestTableFormat,
         streamingContent,
         isExtracting,
+        extractionPhase,
     };
 };

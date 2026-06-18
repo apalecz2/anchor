@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams } from 'react-router';
 import DocumentViewer from '../components/DocumentViewer';
 import type { DocumentViewerHandle } from '../components/DocumentViewer';
@@ -9,6 +10,7 @@ import { getDb } from '../lib/db';
 
 import { useDocumentExtraction } from '../features/extraction/useDocumentExtraction';
 import { useLlamaChat } from '../features/llama/useLlamaChat';
+import type { ExtractionPhase } from '../features/llama/useLlamaChat';
 import { LlamaChatProvider } from '../features/llama/LlamaChatContext';
 import { SplitLayout } from '../layouts/SplitLayout';
 import { WordEditModal } from '../features/extraction/WordEditModal';
@@ -19,11 +21,279 @@ import type { BoundingBox } from '../features/ocr/types';
 import type { ProvenanceCell } from '../features/extraction/types';
 import { ExportMenu } from '../features/export/ExportMenu';
 import { buildFileStem } from '../features/export/exportUtils';
+import { useDialogA11y } from '../hooks/useDialogA11y';
+
+// Ordered stages shown in the table-extraction progress stepper. The order matches
+// the phase transitions in requestTableFormat (useLlamaChat).
+const EXTRACTION_STEPS: { key: Exclude<ExtractionPhase, 'idle'>; label: string; hint?: string }[] = [
+    { key: 'starting', label: 'Loading AI model', hint: 'First run can take a minute while the model loads into memory.' },
+    { key: 'preparing', label: 'Reading page image' },
+    { key: 'generating', label: 'Generating table' },
+    { key: 'finalizing', label: 'Matching to source & saving' },
+];
+
+function ExtractionProgress({ phase }: { phase: ExtractionPhase }): React.ReactElement {
+    const currentStep = EXTRACTION_STEPS.findIndex(s => s.key === phase);
+    return (
+        <ol className="space-y-3">
+            {EXTRACTION_STEPS.map((step, i) => {
+                const status = i < currentStep ? 'done' : i === currentStep ? 'active' : 'pending';
+                return (
+                    <li key={step.key} className="flex items-start gap-3">
+                        <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center">
+                            {status === 'done' ? (
+                                <span className="material-symbols-outlined text-[20px] text-primary" aria-hidden="true">check_circle</span>
+                            ) : status === 'active' ? (
+                                <span className="material-symbols-outlined animate-spin text-[20px] text-primary" aria-hidden="true">progress_activity</span>
+                            ) : (
+                                <span className="h-3 w-3 rounded-full border-2 border-outline-variant" />
+                            )}
+                        </span>
+                        <div className="flex flex-col">
+                            <span className={`text-sm ${
+                                status === 'pending'
+                                    ? 'text-on-surface-variant/50'
+                                    : status === 'active'
+                                        ? 'font-medium text-on-surface'
+                                        : 'text-on-surface-variant'
+                            }`}>
+                                {step.label}
+                            </span>
+                            {status === 'active' && step.hint && (
+                                <span className="text-xs text-on-surface-variant/70">{step.hint}</span>
+                            )}
+                        </div>
+                    </li>
+                );
+            })}
+        </ol>
+    );
+}
+
+// A single help tip: a leading icon (mirroring the matching toolbar control) with a
+// short title and description.
+function HelpItem({ icon, title, children }: { icon: string; title: string; children: React.ReactNode }): React.ReactElement {
+    return (
+        <div className="flex gap-3">
+            <span className="material-symbols-outlined mt-0.5 shrink-0 text-[20px] text-primary" aria-hidden="true">{icon}</span>
+            <div>
+                <p className="font-medium text-on-surface">{title}</p>
+                <p className="text-on-surface-variant">{children}</p>
+            </div>
+        </div>
+    );
+}
+
+// Modal help overlay. Covers the viewport (fixed) so it isn't clipped by the panes'
+// overflow-hidden; closes on backdrop click or Escape via useDialogA11y.
+function HelpOverlay({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }): React.ReactElement {
+    const dialogRef = useDialogA11y<HTMLDivElement>({ active: true, onClose });
+    // Portal to <body>: a `container-type` ancestor (the @container panes) would
+    // otherwise become the containing block for this fixed overlay and clip it to
+    // one pane instead of the whole window.
+    return createPortal(
+        <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+            role="presentation"
+            onClick={onClose}
+        >
+            <div
+                ref={dialogRef}
+                tabIndex={-1}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="help-overlay-title"
+                className="flex max-h-[80vh] w-full max-w-lg flex-col rounded-2xl border border-outline-variant bg-surface-bright shadow-xl focus:outline-none"
+                onClick={e => e.stopPropagation()}
+            >
+                <div className="flex items-center justify-between border-b border-outline-variant px-6 py-4">
+                    <h2 id="help-overlay-title" className="flex items-center gap-2 text-lg font-bold text-primary">
+                        <span className="material-symbols-outlined text-[22px]" aria-hidden="true">info</span>
+                        {title}
+                    </h2>
+                    <button
+                        onClick={onClose}
+                        aria-label="Close help"
+                        className="flex h-8 w-8 items-center justify-center rounded-lg text-on-surface-variant transition-colors hover:bg-surface-variant hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+                    >
+                        <span className="material-symbols-outlined text-[20px]" aria-hidden="true">close</span>
+                    </button>
+                </div>
+                <div className="space-y-4 overflow-y-auto px-6 py-5 text-sm">
+                    {children}
+                </div>
+            </div>
+        </div>,
+        document.body
+    );
+}
+
+function SourceHelp(): React.ReactElement {
+    return (
+        <>
+            <p className="text-on-surface-variant">
+                This pane shows your source document with the text the app detected (OCR)
+                overlaid on the image. Use it to check and correct what was read before
+                formatting a table.
+            </p>
+            <HelpItem icon="draw" title="Edit tool">
+                Draw a box over missing text to add a word, or click an existing word's box
+                to edit or delete it.
+            </HelpItem>
+            <HelpItem icon="pan_tool" title="Pan tool">
+                Switch to Pan to drag the page around without drawing. You can also scroll
+                to pan and pinch/scroll to zoom.
+            </HelpItem>
+            <HelpItem icon="ads_click" title="Click a word">
+                Clicking a detected word highlights it in the Extracted Text pane (and
+                vice-versa) so you can line up the image with the text.
+            </HelpItem>
+            <HelpItem icon="zoom_in" title="Zoom & fit">
+                Use the zoom buttons or slider to get a closer look; the fit button resets
+                the view to the whole page.
+            </HelpItem>
+            <HelpItem icon="description" title="Multi-page documents">
+                For PDFs, use the page controls to move between pages. Each page is
+                processed and formatted independently.
+            </HelpItem>
+        </>
+    );
+}
+
+function OutputHelp(): React.ReactElement {
+    return (
+        <>
+            <p className="text-on-surface-variant">
+                This pane shows the extracted content two ways: the raw detected text, and a
+                structured table the AI builds from it.
+            </p>
+            <HelpItem icon="notes" title="Raw Text">
+                The detected text in reading order. Hover or click a word to highlight it on
+                the document image.
+            </HelpItem>
+            <HelpItem icon="content_copy" title="Copy">
+                The Copy button copies all of the extracted text with clean spacing and line
+                breaks.
+            </HelpItem>
+            <HelpItem icon="table" title="Format as Table">
+                Sends the page to the local AI model, which organizes the text into rows and
+                columns. The first run loads the model and can take a minute.
+            </HelpItem>
+            <HelpItem icon="ads_click" title="Source highlighting">
+                Click any table cell to highlight the words it came from on the document.
+                Cell colors show how confident the match is — green (high), amber (medium),
+                red (low), and grey for cells with no verified source.
+            </HelpItem>
+            <HelpItem icon="download" title="Export & re-extract">
+                Export the finished table (e.g. CSV), or re-extract if the result looks off
+                or a warning says rows may be missing.
+            </HelpItem>
+        </>
+    );
+}
+
+// Copy tabular data to the clipboard the way a spreadsheet (or Claude's chat) does:
+// TSV as text/plain (pastes into a text editor) plus an HTML <table> (pastes as a real
+// grid into Excel / Google Sheets / docs). Cells containing tabs, newlines, or quotes
+// are quoted like Excel's TSV so the row/column structure survives a plain-text paste.
+async function copyTableToClipboard(rows: string[][]): Promise<void> {
+    if (rows.length === 0) return;
+
+    const tsvCell = (s: string) => (/[\t\n\r"]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
+    const tsv = rows.map(r => r.map(tsvCell).join('\t')).join('\n');
+
+    const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const [head, ...body] = rows;
+    const html =
+        '<table>' +
+        (head ? `<thead><tr>${head.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>` : '') +
+        `<tbody>${body.map(r => `<tr>${r.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody>` +
+        '</table>';
+
+    if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+        await navigator.clipboard.write([new ClipboardItem({
+            'text/plain': new Blob([tsv], { type: 'text/plain' }),
+            'text/html': new Blob([html], { type: 'text/html' }),
+        })]);
+    } else {
+        // Older webviews without ClipboardItem: TSV-only still pastes cleanly into a grid.
+        await navigator.clipboard.writeText(tsv);
+    }
+}
+
+// Copy action with a transient "Copied" confirmation. `onCopy` does the clipboard
+// write (and may throw); the button only shows success when it resolves.
+function CopyButton({ onCopy, label = 'Copy' }: { onCopy: () => Promise<void> | void; label?: string }): React.ReactElement {
+    const [copied, setCopied] = useState(false);
+    const resetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    useEffect(() => () => { if (resetRef.current) clearTimeout(resetRef.current); }, []);
+
+    const handle = async () => {
+        try {
+            await onCopy();
+            setCopied(true);
+            if (resetRef.current) clearTimeout(resetRef.current);
+            resetRef.current = setTimeout(() => setCopied(false), 2000);
+        } catch {
+            /* clipboard unavailable — nothing actionable to surface */
+        }
+    };
+
+    return (
+        <button
+            onClick={handle}
+            aria-label={copied ? 'Copied to clipboard' : `${label} (copies to clipboard)`}
+            className="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-sm font-medium text-on-surface-variant transition-colors hover:bg-surface-variant hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+        >
+            <span className={`material-symbols-outlined text-[18px] ${copied ? 'text-green-600' : ''}`} aria-hidden="true">
+                {copied ? 'check' : 'content_copy'}
+            </span>
+            {copied ? 'Copied' : label}
+        </button>
+    );
+}
+
+// Shared shell for an extraction output (raw text, formatted table): a bordered
+// surface with a labeled header and an optional header action, so each output reads
+// as a deliberate result rather than loose content on the pane.
+function OutputCard({ icon, title, action, subheader, bodyClassName = 'px-5 py-4', children }: {
+    icon: string;
+    title: string;
+    action?: React.ReactNode;
+    /** Secondary header content (e.g. a legend), rendered below the title row. */
+    subheader?: React.ReactNode;
+    bodyClassName?: string;
+    children: React.ReactNode;
+}): React.ReactElement {
+    return (
+        <div className="overflow-hidden rounded-xl border border-outline-variant">
+            <div className="border-b border-outline-variant bg-surface-variant/40">
+                <div className="flex items-center justify-between gap-2 px-4 py-2">
+                    <div className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-on-surface-variant">
+                        <span className="material-symbols-outlined text-[18px]" aria-hidden="true">{icon}</span>
+                        <span className="truncate">{title}</span>
+                    </div>
+                    {action}
+                </div>
+                {subheader && (
+                    <div className="border-t border-outline-variant/60 px-4 py-2">
+                        {subheader}
+                    </div>
+                )}
+            </div>
+            <div className={bodyClassName}>
+                {children}
+            </div>
+        </div>
+    );
+}
 
 function SessionContent(): React.ReactElement {
     const { id } = useParams<{ id: string }>();
     const [activePageIndex, setActivePageIndex] = useState(0);
     const [sourceFileName, setSourceFileName] = useState<string | null>(null);
+    // Which side's help overlay is open, if any.
+    const [helpOpen, setHelpOpen] = useState<null | 'source' | 'output'>(null);
 
     const {
         extractionResult,
@@ -41,6 +311,7 @@ function SessionContent(): React.ReactElement {
         requestTableFormat,
         streamingContent,
         isExtracting,
+        extractionPhase,
         serverError: llamaError,
     } = useLlamaChat();
 
@@ -66,6 +337,27 @@ function SessionContent(): React.ReactElement {
 
     const totalPages = extractionResult?.pages.length ?? 1;
     const activePage = extractionResult?.pages[activePageIndex];
+
+    // Reconstruct the reading-ordered lines once; reused for both the rendered
+    // text and the copy-to-clipboard payload so they always match.
+    const rawLines = useMemo(
+        () => (activePage?.words ? generateLinesFromWords(activePage.words, activePage.natural_height) : []),
+        [activePage]
+    );
+    const rawText = useMemo(
+        () => rawLines.map(line => line.map(w => w.text).join(' ')).join('\n'),
+        [rawLines]
+    );
+
+    // Whether a table has been produced for this page yet. Drives the table-tab
+    // empty state (centered "Format" button) vs. the populated state (bottom
+    // toolbar with export / re-extract).
+    const hasTable = (provenanceCells?.length ?? 0) > 0 || !!savedCsv;
+
+    // Copy handlers throw on failure so CopyButton can keep its confirmation state
+    // accurate; CopyButton owns the transient "Copied" UI.
+    const handleCopyRawText = () => navigator.clipboard.writeText(rawText);
+    const handleCopyTable = () => copyTableToClipboard(parseCSV(savedCsv ?? ''));
 
     useEffect(() => {
         setPageInputValue((activePageIndex + 1).toString());
@@ -273,7 +565,7 @@ function SessionContent(): React.ReactElement {
                         (even an errored one) so page navigation stays available; the
                         draw/zoom controls simply no-op without a rendered viewer. */}
                     {activePage && !isDbLoading && (
-                        <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20 flex justify-center px-4">
+                        <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20 flex flex-wrap justify-center gap-2 px-4">
                             <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-outline-variant bg-surface/95 px-3 py-2 shadow-lg backdrop-blur-sm">
                             {/* Draw/Pan Tool Toggle */}
                             <div className="flex shrink-0 bg-surface-variant rounded-lg p-1">
@@ -375,6 +667,19 @@ function SessionContent(): React.ReactElement {
                                 </button>
                             </div>
                             </div>
+
+                            {/* Second island: help for the source-document side. */}
+                            <div className="pointer-events-auto flex items-center rounded-2xl border border-outline-variant bg-surface/95 px-3 py-2 shadow-lg backdrop-blur-sm">
+                                <button
+                                    onClick={() => setHelpOpen('source')}
+                                    aria-label="About the source document tools"
+                                    title="Help"
+                                    type="button"
+                                    className={iconBtnClass}
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">info</span>
+                                </button>
+                            </div>
                         </div>
                     )}
                 </div>
@@ -408,51 +713,71 @@ function SessionContent(): React.ReactElement {
                 </div>
 
                 <div className="relative flex-1 overflow-hidden rounded-2xl border border-outline-variant bg-surface-bright shadow-sm">
-                    <div className="h-full overflow-auto px-8 pt-10 pb-24">
+                    <div className="h-full overflow-auto px-4 pt-6 pb-24 @sm:px-8 @sm:pt-10">
                     {isDbLoading ? (
                         <div className="flex h-full items-center justify-center">Awaiting extraction...</div>
                     ) : !activePage?.words ? (
                         <div className="flex h-full items-center justify-center">No readable text found.</div>
                     ) : outputView === 'raw' ? (
-                        <div className="space-y-2 font-body-md text-on-surface leading-relaxed">
-                            {generateLinesFromWords(activePage.words, activePage.natural_height).map((line, lineIndex) => (
-                                <p key={lineIndex} className="min-h-[1.5rem]">
-                                    {line.map((word, wordIndex) => {
-                                        const isWordSelected = selectedWordId === word.wordId;
-                                        const isWordHovered = highlightedWordId === word.wordId;
-                                        return (
-                                            <span
-                                                key={`${lineIndex}-${word.wordId}`}
-                                                ref={isWordSelected ? selectedWordRef : undefined}
-                                                className={`mr-2 inline-block cursor-pointer rounded transition-colors ${
-                                                    isWordSelected
-                                                        ? 'font-bold bg-surface-variant'
-                                                        : isWordHovered
-                                                            ? 'bg-surface-variant/60'
-                                                            : ''
-                                                }`}
-                                                onMouseEnter={() => setHighlightedWordId(word.wordId)}
-                                                onMouseLeave={() => setHighlightedWordId(null)}
-                                                onFocus={() => setHighlightedWordId(word.wordId)}
-                                                onBlur={() => setHighlightedWordId(null)}
-                                                onClick={() => {
-                                                    // Don't hijack a drag-to-copy text selection into a word click.
-                                                    const sel = window.getSelection();
-                                                    if (sel && !sel.isCollapsed) return;
-                                                    selectWord(word.wordId);
-                                                }}
-                                                tabIndex={0}
-                                            >
-                                                {word.text}
-                                                {wordIndex < line.length - 1 ? ' ' : ''}
-                                            </span>
-                                        );
-                                    })}
-                                </p>
-                            ))}
-                        </div>
+                        <>
+                            <div className="mb-4 flex items-start gap-2 rounded-lg border border-outline-variant bg-surface-variant/40 px-3 py-2 text-sm text-on-surface-variant">
+                                <span className="material-symbols-outlined shrink-0 text-[18px]" aria-hidden="true">info</span>
+                                <span>
+                                    This is an intermediate result — a quick first-pass extraction that may
+                                    contain inaccuracies. Continue with
+                                    <span className="font-medium text-on-surface"> Format as Table </span>
+                                    to re-extract using AI for a more accurate, structured result.
+                                </span>
+                            </div>
+
+                            {/* Output card: a bordered surface with a labeled header makes
+                                clear this block is the extraction output, and gives the
+                                copy action a logical home next to the text it copies. */}
+                            <OutputCard
+                                icon="notes"
+                                title="Detected text"
+                                bodyClassName="space-y-2 px-5 py-4 font-body-md text-on-surface leading-relaxed"
+                                action={<CopyButton onCopy={handleCopyRawText} />}
+                            >
+                                {rawLines.map((line, lineIndex) => (
+                                    <p key={lineIndex} className="min-h-[1.5rem]">
+                                        {line.map((word, wordIndex) => {
+                                            const isWordSelected = selectedWordId === word.wordId;
+                                            const isWordHovered = highlightedWordId === word.wordId;
+                                            return (
+                                                <span
+                                                    key={`${lineIndex}-${word.wordId}`}
+                                                    ref={isWordSelected ? selectedWordRef : undefined}
+                                                    className={`mr-2 inline-block cursor-pointer rounded px-0.5 transition-colors ${
+                                                        isWordSelected
+                                                            ? 'font-bold bg-surface-variant dark:bg-surface-container-low'
+                                                            : isWordHovered
+                                                                ? 'bg-surface-variant/80 dark:bg-surface-container-high'
+                                                                : ''
+                                                    }`}
+                                                    onMouseEnter={() => setHighlightedWordId(word.wordId)}
+                                                    onMouseLeave={() => setHighlightedWordId(null)}
+                                                    onFocus={() => setHighlightedWordId(word.wordId)}
+                                                    onBlur={() => setHighlightedWordId(null)}
+                                                    onClick={() => {
+                                                        // Don't hijack a drag-to-copy text selection into a word click.
+                                                        const sel = window.getSelection();
+                                                        if (sel && !sel.isCollapsed) return;
+                                                        selectWord(word.wordId);
+                                                    }}
+                                                    tabIndex={0}
+                                                >
+                                                    {word.text}
+                                                    {wordIndex < line.length - 1 ? ' ' : ''}
+                                                </span>
+                                            );
+                                        })}
+                                    </p>
+                                ))}
+                            </OutputCard>
+                        </>
                     ) : (
-                        <div className="w-full">
+                        <div className="w-full h-full">
                             {/* When a table is already shown, surface a failed re-extract or a
                                 truncation warning as a banner above it (rather than replacing it). */}
                             {!isExtracting && ((provenanceCells?.length ?? 0) > 0 || !!savedCsv) && (extractionError || truncated) && (
@@ -465,79 +790,88 @@ function SessionContent(): React.ReactElement {
                                 </div>
                             )}
                             {isExtracting ? (
-                                /* Streaming progress */
-                                <div className="space-y-3">
-                                    <div className="flex items-center gap-2 text-sm text-on-surface-variant">
-                                        <span className="inline-block h-2 w-2 rounded-full bg-primary animate-pulse" />
-                                        <span>Generating table...</span>
-                                    </div>
+                                /* Live, stage-by-stage progress so the user always sees
+                                   what's happening — model load, image read, generation.
+                                   Centered in the pane both axes. */
+                                <div className="flex h-full flex-col items-center justify-center gap-5">
+                                    <ExtractionProgress phase={extractionPhase} />
                                     {streamingContent && (
-                                        <pre className="text-sm text-on-surface font-mono bg-surface-variant rounded p-3 whitespace-pre-wrap wrap-break-word max-h-96 overflow-y-auto">
+                                        <pre className="w-full max-w-2xl text-sm text-on-surface font-mono bg-surface-variant rounded p-3 whitespace-pre-wrap wrap-break-word max-h-96 overflow-y-auto">
                                             {streamingContent}
                                         </pre>
                                     )}
                                 </div>
                             ) : provenanceCells && provenanceCells.length > 0 ? (
                                 /* Provenance-annotated table */
-                                <>
-                                    <div className="mb-3 flex items-center gap-3 text-xs text-on-surface-variant">
-                                        <span className="flex items-center gap-1">
-                                            <span className="inline-block h-3 w-3 rounded-sm bg-green-200 border border-green-400"></span>
-                                            High confidence
-                                        </span>
-                                        <span className="flex items-center gap-1">
-                                            <span className="inline-block h-3 w-3 rounded-sm bg-amber-200 border border-amber-400"></span>
-                                            Medium
-                                        </span>
-                                        <span className="flex items-center gap-1">
-                                            <span className="inline-block h-3 w-3 rounded-sm bg-red-200 border border-red-400"></span>
-                                            Low
-                                        </span>
-                                        <span className="flex items-center gap-1">
-                                            <span className="inline-block h-3 w-3 rounded-sm bg-surface-variant border border-outline-variant"></span>
-                                            Unverified source
-                                        </span>
-                                        <span className="ml-auto text-on-surface-variant/60">Click a cell to highlight its source</span>
-                                    </div>
+                                <OutputCard
+                                    icon="table"
+                                    title="AI Output"
+                                    action={<CopyButton onCopy={handleCopyTable} />}
+                                    subheader={
+                                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-on-surface-variant">
+                                            <span className="flex items-center gap-1">
+                                                <span className="inline-block h-3 w-3 rounded-sm bg-green-200 border border-green-400"></span>
+                                                High confidence
+                                            </span>
+                                            <span className="flex items-center gap-1">
+                                                <span className="inline-block h-3 w-3 rounded-sm bg-amber-200 border border-amber-400"></span>
+                                                Medium
+                                            </span>
+                                            <span className="flex items-center gap-1">
+                                                <span className="inline-block h-3 w-3 rounded-sm bg-red-200 border border-red-400"></span>
+                                                Low
+                                            </span>
+                                            <span className="flex items-center gap-1">
+                                                <span className="inline-block h-3 w-3 rounded-sm bg-surface-variant border border-outline-variant"></span>
+                                                Unverified source
+                                            </span>
+                                            <span className="ml-auto text-on-surface-variant/60 @md:whitespace-nowrap">Click a cell to highlight its source</span>
+                                        </div>
+                                    }
+                                >
                                     <ProvenanceTable
                                         rows={provenanceCells}
                                         onCellClick={handleCellClick}
                                         selectedCell={selectedCell}
                                     />
-                                </>
+                                </OutputCard>
                             ) : savedCsv ? (
                                 /* Fallback: plain table for extractions without provenance data */
                                 (() => {
                                     const rows = parseCSV(savedCsv);
                                     const headers = rows[0] ?? [];
                                     const dataRows = rows.slice(1);
-                                    return rows.length > 1 ? (
-                                        <div className="overflow-x-auto">
-                                            <table className="w-full border-collapse text-sm">
-                                                <thead>
-                                                    <tr>
-                                                        {headers.map((h, i) => (
-                                                            <th key={i} className="border border-outline-variant bg-surface-variant px-3 py-2 text-left font-medium text-on-surface">
-                                                                {h}
-                                                            </th>
-                                                        ))}
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {dataRows.map((row, ri) => (
-                                                        <tr key={ri} className="even:bg-surface-variant/30">
-                                                            {row.map((cell, ci) => (
-                                                                <td key={ci} className="border border-outline-variant px-3 py-2 text-on-surface">
-                                                                    {cell}
-                                                                </td>
+                                    return (
+                                        <OutputCard icon="table" title="AI Output" action={<CopyButton onCopy={handleCopyTable} />}>
+                                            {rows.length > 1 ? (
+                                                <div className="overflow-x-auto">
+                                                    <table className="w-full border-collapse text-sm">
+                                                        <thead>
+                                                            <tr>
+                                                                {headers.map((h, i) => (
+                                                                    <th key={i} className="border border-outline-variant bg-surface-variant px-3 py-2 text-left font-medium text-on-surface">
+                                                                        {h}
+                                                                    </th>
+                                                                ))}
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {dataRows.map((row, ri) => (
+                                                                <tr key={ri} className="even:bg-surface-variant/30">
+                                                                    {row.map((cell, ci) => (
+                                                                        <td key={ci} className="border border-outline-variant px-3 py-2 text-on-surface">
+                                                                            {cell}
+                                                                        </td>
+                                                                    ))}
+                                                                </tr>
                                                             ))}
-                                                        </tr>
-                                                    ))}
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    ) : (
-                                        <pre className="text-sm text-on-surface-variant whitespace-pre-wrap wrap-break-word">{savedCsv}</pre>
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            ) : (
+                                                <pre className="text-sm text-on-surface-variant whitespace-pre-wrap wrap-break-word">{savedCsv}</pre>
+                                            )}
+                                        </OutputCard>
                                     );
                                 })()
                             ) : (extractionError || llamaError) ? (
@@ -552,48 +886,100 @@ function SessionContent(): React.ReactElement {
                                     </button>
                                 </div>
                             ) : (
-                                <div className="flex h-full items-center justify-center text-on-surface-variant">
-                                    Click "Format as Table" to organize the extracted text into rows and columns.
+                                <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
+                                    <p className="max-w-sm text-sm text-on-surface-variant">
+                                        Organize the extracted text into rows and columns.
+                                    </p>
+                                    <button
+                                        onClick={handleFormatTable}
+                                        disabled={isExtracting}
+                                        className="flex h-10 shrink-0 items-center gap-2 rounded-lg bg-primary px-5 text-sm text-on-primary shadow-sm transition-colors hover:bg-primary/90 disabled:opacity-50"
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]" aria-hidden="true">table</span>
+                                        {isExtracting ? 'Formatting...' : 'Format as Table'}
+                                    </button>
                                 </div>
                             )}
                         </div>
                     )}
                     </div>
 
-                    {/* Floating action toolbar */}
-                    {activePage && (outputView === 'raw' || !isExtracting) && (
-                        <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20 flex justify-center px-4">
-                            <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-outline-variant bg-surface/95 px-3 py-2 shadow-lg backdrop-blur-sm">
-                                {outputView === 'raw' && (
-                                    <button
-                                        onClick={handleFormatTable}
-                                        disabled={isExtracting}
-                                        className="flex h-9 shrink-0 items-center px-4 text-sm bg-primary text-on-primary rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-colors"
-                                    >
-                                        {isExtracting ? 'Formatting...' : 'Format as Table'}
-                                    </button>
-                                )}
-                                {outputView === 'table' && !isExtracting && (
-                                    <>
-                                        <ExportMenu
-                                            provenanceCells={provenanceCells}
-                                            savedCsv={savedCsv}
-                                            fileStem={buildFileStem(sourceFileName, activePageIndex, totalPages)}
-                                            openUp
-                                        />
-                                        <button
-                                            onClick={handleFormatTable}
-                                            disabled={isExtracting}
-                                            className="flex h-9 shrink-0 items-center px-4 text-sm bg-surface-variant text-on-surface-variant rounded-lg hover:bg-surface-container-high disabled:opacity-50 transition-colors"
-                                        >
-                                            Re-extract
-                                        </button>
-                                    </>
-                                )}
+                    {/* Floating action toolbar. The action island in the table tab only
+                        appears once a table exists (before that, the centered "Format as
+                        Table" button in the empty state is the sole entry point); the help
+                        island sits to its right and is always available. */}
+                    {activePage && (
+                        <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20 flex flex-wrap justify-center gap-2 px-4">
+                            {(outputView === 'raw' || (!isExtracting && hasTable)) && (
+                                <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-outline-variant bg-surface/95 px-3 py-2 shadow-lg backdrop-blur-sm">
+                                    {outputView === 'raw' && (
+                                        // Once a table exists, the raw view only navigates to it; the
+                                        // (re-)generate action lives solely in the table view.
+                                        hasTable ? (
+                                            <button
+                                                onClick={() => setOutputView('table')}
+                                                className="flex h-9 shrink-0 items-center gap-2 px-4 text-sm bg-primary text-on-primary rounded-lg hover:bg-primary/90 transition-colors"
+                                            >
+                                                <span className="material-symbols-outlined text-[18px]" aria-hidden="true">table</span>
+                                                Go to Table
+                                            </button>
+                                        ) : (
+                                            <button
+                                                onClick={handleFormatTable}
+                                                disabled={isExtracting}
+                                                className="flex h-9 shrink-0 items-center px-4 text-sm bg-primary text-on-primary rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                                            >
+                                                {isExtracting ? 'Formatting...' : 'Format as Table'}
+                                            </button>
+                                        )
+                                    )}
+                                    {outputView === 'table' && !isExtracting && (
+                                        <>
+                                            <ExportMenu
+                                                provenanceCells={provenanceCells}
+                                                savedCsv={savedCsv}
+                                                fileStem={buildFileStem(sourceFileName, activePageIndex, totalPages)}
+                                                openUp
+                                            />
+                                            <button
+                                                onClick={handleFormatTable}
+                                                disabled={isExtracting}
+                                                className="flex h-9 shrink-0 items-center px-4 text-sm bg-surface-variant text-on-surface-variant rounded-lg hover:bg-surface-container-high disabled:opacity-50 transition-colors"
+                                            >
+                                                Re-extract
+                                            </button>
+                                        </>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* Second island: help for the extracted-text / table side. */}
+                            <div className="pointer-events-auto flex items-center rounded-2xl border border-outline-variant bg-surface/95 px-3 py-2 shadow-lg backdrop-blur-sm">
+                                <button
+                                    onClick={() => setHelpOpen('output')}
+                                    aria-label="About the extracted text and table tools"
+                                    title="Help"
+                                    type="button"
+                                    className={iconBtnClass}
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">info</span>
+                                </button>
                             </div>
                         </div>
                     )}
                 </div>
+
+                {/* Help overlays — rendered fixed so they cover the whole window. */}
+                {helpOpen === 'source' && (
+                    <HelpOverlay title="Source Document" onClose={() => setHelpOpen(null)}>
+                        <SourceHelp />
+                    </HelpOverlay>
+                )}
+                {helpOpen === 'output' && (
+                    <HelpOverlay title="Extracted Text & Table" onClose={() => setHelpOpen(null)}>
+                        <OutputHelp />
+                    </HelpOverlay>
+                )}
             </>
         </SplitLayout>
     );
