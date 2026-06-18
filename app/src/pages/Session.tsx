@@ -315,6 +315,12 @@ function SessionContent(): React.ReactElement {
         serverError: llamaError,
     } = useLlamaChat();
 
+    // Defer the "Processing…" spinner: a cached session loads from the DB in well
+    // under this delay, so it should swap straight to content (faded in by the route
+    // transition) rather than flashing a spinner. The spinner only appears if loading
+    // genuinely runs long (e.g. first-time OCR of a fresh document).
+    const [showProcessing, setShowProcessing] = useState(false);
+
     const [outputView, setOutputView] = useState<'raw' | 'table'>('raw');
     const [savedCsv, setSavedCsv] = useState<string | null>(null);
     const [provenanceCells, setProvenanceCells] = useState<ProvenanceCell[][] | null>(null);
@@ -362,6 +368,17 @@ function SessionContent(): React.ReactElement {
     useEffect(() => {
         setPageInputValue((activePageIndex + 1).toString());
     }, [activePageIndex]);
+
+    // Only reveal the processing spinner if loading outlasts a short grace period,
+    // so fast cached loads don't flash it. Reset immediately once loading finishes.
+    useEffect(() => {
+        if (!isDbLoading) {
+            setShowProcessing(false);
+            return;
+        }
+        const timer = setTimeout(() => setShowProcessing(true), 250);
+        return () => clearTimeout(timer);
+    }, [isDbLoading]);
 
     // Reveal the selected word in the raw-text view when the selection comes from
     // clicking its box on the image (it may be scrolled out of the text viewport).
@@ -514,14 +531,16 @@ function SessionContent(): React.ReactElement {
                 </div>
                 <div className="relative flex-1 overflow-hidden rounded-2xl border border-outline-variant bg-surface-bright shadow-sm">
                     {isDbLoading ? (
-                        <div className="flex w-full flex-col items-center justify-center gap-3 h-full text-on-surface-variant">
-                            <span className="material-symbols-outlined animate-spin" style={{ fontSize: '28px' }}>progress_activity</span>
-                            <span className="text-sm">
-                                {processProgress
-                                    ? `Processing page ${processProgress.current} of ${processProgress.total}…`
-                                    : 'Processing…'}
-                            </span>
-                        </div>
+                        showProcessing ? (
+                            <div className="flex w-full flex-col items-center justify-center gap-3 h-full text-on-surface-variant">
+                                <span className="material-symbols-outlined animate-spin" style={{ fontSize: '28px' }}>progress_activity</span>
+                                <span className="text-sm">
+                                    {processProgress
+                                        ? `Processing page ${processProgress.current} of ${processProgress.total}…`
+                                        : 'Processing…'}
+                                </span>
+                            </div>
+                        ) : null
                     ) : dbError ? (
                         <div className="flex w-full flex-col items-center justify-center gap-3 text-error h-full">
                             <span className="material-symbols-outlined" style={{ fontSize: '28px' }} aria-hidden="true">error</span>
@@ -715,7 +734,9 @@ function SessionContent(): React.ReactElement {
                 <div className="relative flex-1 overflow-hidden rounded-2xl border border-outline-variant bg-surface-bright shadow-sm">
                     <div className="h-full overflow-auto px-4 pt-6 pb-24 @sm:px-8 @sm:pt-10">
                     {isDbLoading ? (
-                        <div className="flex h-full items-center justify-center">Awaiting extraction...</div>
+                        showProcessing ? (
+                            <div className="flex h-full items-center justify-center">Awaiting extraction...</div>
+                        ) : null
                     ) : !activePage?.words ? (
                         <div className="flex h-full items-center justify-center">No readable text found.</div>
                     ) : outputView === 'raw' ? (

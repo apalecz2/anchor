@@ -112,9 +112,11 @@ export default function AppLayout() {
                     </button>
                 </div>
 
-                {/* Dynamic Page Content injects here */}
-                <div className="flex-1 overflow-hidden">
-                    <Outlet key={location.pathname} />
+                {/* Dynamic Page Content injects here. Keying on the path remounts the
+                    page on navigation (resetting per-page/session state cleanly); the
+                    fade-in smooths that swap so it doesn't flash. */}
+                <div key={location.pathname} className="flex-1 overflow-hidden animate-fade-in">
+                    <Outlet />
                 </div>
             </main>
         </div>

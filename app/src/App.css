@@ -65,6 +65,15 @@
 	--text-label-md--line-height: 1.4;
 	--text-mono-data: 0.875rem;
 	--text-mono-data--line-height: 1.4;
+
+	--animate-fade-in: fade-in 0.2s ease-out both;
+}
+
+/* Used to fade routed content in on navigation so switching pages/sessions
+   doesn't flash an abrupt content swap. */
+@keyframes fade-in {
+	from { opacity: 0; }
+	to { opacity: 1; }
 }
 
 :root {

@@ -94,6 +94,12 @@ const DocumentViewer = forwardRef<DocumentViewerHandle, DocumentViewerProps>(fun
     // Track active panning drag
     const [isDragging, setIsDragging] = useState(false);
 
+    // Whether the initial fit-to-screen has been computed and committed for the
+    // current image. Until then the image is kept hidden (and un-transitioned) so
+    // the user never sees it pop in at scale 1 and then animate down to the fit
+    // scale — they only ever see it already fitted.
+    const [isReady, setIsReady] = useState(false);
+
     // Drawing State
     const [isDrawing, setIsDrawing] = useState(false);
     const [startPos, setStartPos] = useState<{ x: number; y: number } | null>(null);
@@ -232,6 +238,13 @@ const DocumentViewer = forwardRef<DocumentViewerHandle, DocumentViewerProps>(fun
 
     useImperativeHandle(ref, () => ({ fitToScreen, zoomTo }), [fitToScreen, zoomTo]);
 
+    // A new image (e.g. switching pages) must be re-fitted, so hide it again until
+    // its onLoad recomputes the fit. Resetting here — rather than in onLoad — avoids
+    // briefly showing the stale, already-fitted previous image under the new src.
+    useEffect(() => {
+        setIsReady(false);
+    }, [fileUrl]);
+
     // Keep the zoom range in sync with the pane size as the split divider moves.
     useEffect(() => {
         const container = containerRef.current;
@@ -247,6 +260,12 @@ const DocumentViewer = forwardRef<DocumentViewerHandle, DocumentViewerProps>(fun
         setNaturalSize({ width: naturalWidth, height: naturalHeight });
         setIsImageDark(estimateImageDarkness(e.currentTarget));
         fitToScreen();
+        // Reveal only after the fit transform has been committed and painted, so
+        // the first frame the user sees is already at the fit scale. Flipping
+        // isReady in a rAF (rather than synchronously here) guarantees the transform
+        // doesn't change in the same render that turns transitions back on, so the
+        // reveal is a clean fade — never an animated zoom from scale 1.
+        requestAnimationFrame(() => setIsReady(true));
     };
 
     const getSvgPoint = (e: React.MouseEvent | MouseEvent) => {
@@ -335,7 +354,12 @@ const DocumentViewer = forwardRef<DocumentViewerHandle, DocumentViewerProps>(fun
                 style={{
                     transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
                     transformOrigin: '0 0',
-                    transition: isDragging ? 'none' : 'transform 0.05s ease-out'
+                    opacity: isReady ? 1 : 0,
+                    // No transition until the initial fit is in place, so applying that
+                    // fit can't animate; afterwards, fade in and keep the smooth zoom.
+                    transition: isReady
+                        ? (isDragging ? 'none' : 'transform 0.05s ease-out, opacity 0.15s ease-out')
+                        : 'none',
                 }}
             >
                 <img
