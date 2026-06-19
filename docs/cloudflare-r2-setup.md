@@ -6,7 +6,7 @@ This document walks through provisioning a Cloudflare R2 bucket, uploading all r
 
 ## Overview
 
-The first-run setup wizard downloads ~3.5 GB of assets at runtime rather than bundling them with the installer. All assets are served from a single Cloudflare R2 bucket. The Rust backend reads one constant (`R2_BASE` in [lib.rs](../app/src-tauri/src/lib.rs)) and constructs every download URL from it.
+The first-run setup wizard downloads ~3.5 GB of assets at runtime rather than bundling them with the installer. All assets are served from a single Cloudflare R2 bucket. The Rust backend reads one constant (`R2_BASE` in [setup.rs](../app/src-tauri/src/setup.rs)) and constructs every download URL from it. It is currently set to `https://artifact-assets.aidenpaleczny.com`.
 
 **Assets served from R2:**
 
@@ -46,10 +46,10 @@ The app downloads files over plain HTTPS with no authentication. You need public
 ### Option A — Custom domain (recommended for production)
 
 1. Open the bucket → **Settings** tab → **Custom Domains**.
-2. Click **Connect Domain** and enter the domain you control (e.g. `r2.artifact-app.com`).
+2. Click **Connect Domain** and enter the domain you control (this project uses `artifact-assets.aidenpaleczny.com`).
 3. Cloudflare automatically creates the DNS record if the domain uses Cloudflare DNS.
 4. Wait for the domain to show **Active**.
-5. Your base URL will be `https://r2.artifact-app.com` (or whatever you set).
+5. Your base URL will be `https://artifact-assets.aidenpaleczny.com` (or whatever you set) — this is the value of `R2_BASE` in `setup.rs`.
 
 ### Option B — r2.dev public URL (development/testing only)
 
@@ -114,9 +114,11 @@ Pick a single release tag and use it consistently across all platforms. Rename e
 | Release artifact | Rename to (R2 key under `binaries/`) |
 |---|---|
 | `llama-b9596-bin-win-cpu-x64.zip` | `llama-bin-win-cpu-x64.zip` |
-| `llama-b9550-bin-win-cuda-13.3-x64.zip` | `llama-bin-win-cuda-x64.zip` |
+| `llama-b9596-bin-win-cuda-13.3-x64.zip` | `llama-bin-win-cuda-x64.zip` |
 | `cudart-llama-bin-win-cuda-13.3-x64.zip` | `cudart-llama-bin-win-cuda-x64.zip` |
 | `llama-b9596-bin-macos-arm64.tar.gz` | `llama-bin-macos-arm64.tar.gz` |
+
+> **Currently pinned:** llama.cpp build **`b9596` (commit `18ef86ece`)** — the value recorded in `LLAMA_CPP_BUILD` in `setup.rs` and surfaced in each manifest entry's `version` field. Since the rename strips the tag, this constant is the audit record of what the pinned SHA-256s correspond to; update it in lockstep when you refresh the archives (the build is recoverable any time via `llama-server --version`).
 
 > The `cudart-*` zip (CUDA runtime DLLs) is listed on the same release page and is **required** for the Windows CUDA backend — the CUDA build zip does not bundle the runtime.
 
@@ -126,7 +128,7 @@ That's the entire update procedure: download, rename, upload to `binaries/`. The
 
 ## Step 6 — Build the Tesseract zip archives
 
-The app extracts each Tesseract zip into `{AppData}/DataExtractionAI/tesseract/`. After extraction the app expects this layout:
+The app extracts each Tesseract zip into `{AppData}/com.aidenpaleczny.artifact/tesseract/`. After extraction the app expects this layout:
 
 ```
 tesseract/
@@ -157,20 +159,26 @@ Compress-Archive -Path tesseract.exe, *.dll, tessdata -DestinationPath tesseract
 
 ### macOS
 
-Use the bundled tool — do **not** just `cp $(which tesseract)`. The Homebrew binary
-dynamically links against `/opt/homebrew` dylibs (libtesseract, libleptonica, libwebp,
-libsharpyuv, …) that don't exist on a user's machine, so a bare copy dies at launch with
-`dyld: Library not loaded`. The tool bundles every dependency next to the binary, rewrites
-all load paths to `@loader_path`, ad-hoc re-signs (required on Apple Silicon), and lays out
-the exact `tesseract` + `tessdata/eng.traineddata` structure the app expects:
+> **Status:** the macOS Tesseract zip is **built, uploaded to R2 (`macos/tesseract.zip`), and pinned** in `get_tesseract_spec`. The procedure below documents how that package is produced; the `tools/package-tesseract-macos.sh` helper it references is not committed to the repo, so reproduce the steps manually (or re-add the script) if you need to rebuild it.
+
+Do **not** just `cp $(which tesseract)`. The Homebrew binary dynamically links against
+`/opt/homebrew` dylibs (libtesseract, libleptonica, libwebp, libsharpyuv, …) that don't
+exist on a user's machine, so a bare copy dies at launch with `dyld: Library not loaded`.
+A correct package must bundle every dependency next to the binary, rewrite all load paths
+to `@loader_path`, ad-hoc re-sign (required on Apple Silicon), and lay out the exact
+`tesseract` + `tessdata/eng.traineddata` structure the app expects (the same layout shown
+above for Windows). The plan is a `tools/package-tesseract-macos.sh` helper to automate
+this end-to-end:
 
 ```bash
 brew install tesseract
-tools/package-tesseract-macos.sh eng ./tesseract.zip
+# planned helper (not yet committed):
+# tools/package-tesseract-macos.sh eng ./tesseract.zip
 ```
 
-It verifies the result is fully self-contained before writing the zip. To bundle a
-different language, pass its code (e.g. `deu`) — install it first with `brew install tesseract-lang`.
+The helper would verify the result is fully self-contained before writing the zip. To
+bundle a different language, pass its code (e.g. `deu`) — install it first with
+`brew install tesseract-lang`.
 
 ---
 
@@ -181,7 +189,7 @@ The app uses:
 - **Qwen3.5-4B-Q4_K_M.gguf** (~2.74 GB) — quantized Qwen 3.5 4B language model
 - **mmproj-F16.gguf** (~672 MB) — vision projector
 
-Download both from HuggingFace. Find the correct repository for the Qwen3-4B GGUF variant (search HuggingFace for `Qwen3-4B-Q4_K_M GGUF`). Once you locate the repository, copy the two file download URLs and update the `HF_MODEL_URL` and `HF_MMPROJ_URL` constants in [lib.rs:361-364](../app/src-tauri/src/lib.rs#L361) with the exact HuggingFace resolve URLs as fallbacks.
+Both come from the `unsloth/Qwen3.5-4B-GGUF` repository on HuggingFace. The `HF_MODEL_URL` and `HF_MMPROJ_URL` constants in [setup.rs](../app/src-tauri/src/setup.rs) are **already set** — and pinned to an exact commit revision (`@e87f176…`, not `main`) so a re-quant can't change the bytes underneath the SHA-256 pins. They serve as the fallback if the R2 primary is unreachable. Only revisit them if you re-pin to a different model build (update the revision in both URLs to match the new SHA-256s).
 
 > You can also upload the GGUF files directly to R2 as the primary source (recommended to avoid HuggingFace rate limits). For very large files use multipart upload via the Cloudflare dashboard or `rclone`.
 
@@ -189,7 +197,7 @@ Download both from HuggingFace. Find the correct repository for the Qwen3-4B GGU
 
 ## Step 8 — Compute SHA-256 checksums
 
-After collecting all files, compute a SHA-256 hash for each. These will be pinned in the asset manifest in [lib.rs](../app/src-tauri/src/lib.rs) in Step 11.
+After collecting all files, compute a SHA-256 hash for each. These will be pinned in the asset manifest in [setup.rs](../app/src-tauri/src/setup.rs) in Step 11.
 
 **PowerShell (Windows):**
 
@@ -273,8 +281,8 @@ R2 API credentials are created under **R2 → Manage R2 API Tokens** in the Clou
 After uploading, test each URL with curl (or a browser) before updating the app:
 
 ```bash
-# Replace with your actual R2_BASE
-R2_BASE="https://r2.artifact-app.com"
+# The project's R2_BASE (replace if you provisioned your own domain)
+R2_BASE="https://artifact-assets.aidenpaleczny.com"
 
 curl -I "$R2_BASE/binaries/llama-bin-win-cpu-x64.zip"
 curl -I "$R2_BASE/windows/tesseract.zip"
@@ -288,36 +296,25 @@ All should return `HTTP/2 200` with a `content-length` header matching the file 
 
 ## Step 11 — Update the app constants
 
-Open [app/src-tauri/src/lib.rs](../app/src-tauri/src/lib.rs).
+All asset constants live in [app/src-tauri/src/setup.rs](../app/src-tauri/src/setup.rs) (near the top of the file, and in the `get_llama_server_spec()` / `get_tesseract_spec()` / `get_asset_manifest()` functions). For the current project these are **already populated** — this step matters only if you are re-provisioning your own bucket or re-pinning new asset versions.
 
 ### 11a — Set R2_BASE
 
-Find line 358 and replace the placeholder URL with your actual bucket URL:
+`R2_BASE` is currently:
 
 ```rust
-// Before
-const R2_BASE: &str = "https://r2.artifact-app.com";
-
-// After — use your actual public URL
-const R2_BASE: &str = "https://r2.artifact-app.com";  // ← replace if using a different domain
+const R2_BASE: &str = "https://artifact-assets.aidenpaleczny.com";
 ```
 
-### 11b — Set HuggingFace fallback URLs
+If you provision your own bucket under a different domain, replace it with your public URL.
 
-Find lines 361–364 and replace the `PLACEHOLDER` paths with the real HuggingFace repo and filenames:
+### 11b — HuggingFace fallback URLs
 
-```rust
-const HF_MODEL_URL: &str =
-    "https://huggingface.co/YOUR_ORG/YOUR_REPO/resolve/main/Qwen3.5-4B-Q4_K_M.gguf";
-const HF_MMPROJ_URL: &str =
-    "https://huggingface.co/YOUR_ORG/YOUR_REPO/resolve/main/mmproj-F16.gguf";
-```
+`HF_MODEL_URL` / `HF_MMPROJ_URL` are already set and pinned to a commit revision of `unsloth/Qwen3.5-4B-GGUF` (see Step 7). Only change them if you re-pin to a different model build — keep them pinned to an exact revision, never `main`.
 
 ### 11c — Pin SHA-256 checksums
 
-In the `get_llama_server_spec()`, `get_tesseract_spec()`, and `get_asset_manifest()` functions the `sha256` field is currently an empty string (`String::new()`). Fill in the hashes you recorded in Step 8.
-
-Find each `sha256: String::new()` and replace with the actual hash, for example:
+The `sha256` field on each asset is pinned in `get_llama_server_spec()`, `get_tesseract_spec()`, and `get_asset_manifest()`. When pinning a new asset, replace its `sha256` with the hash recorded in Step 8, for example:
 
 ```rust
 // In get_asset_manifest — mmproj entry
@@ -329,7 +326,11 @@ let mmproj = AssetManifestEntry {
 };
 ```
 
-Do this for every asset entry. The `verify_file_hash` command in Rust treats an empty sha256 as "skip verification", so leaving these empty means the wizard never validates downloads — a security risk for production.
+`verify_file_hash` treats an empty sha256 as "skip verification" in **debug builds only** — in a release build an empty/unpinned hash is rejected outright, so an unverified binary never runs in production. The only intentionally-empty hashes today are the Linux assets (a later addition).
+
+### 11d — Record the version
+
+Each manifest entry carries a `version` field for audit. When you re-pin, update it alongside the SHA-256: `LLAMA_CPP_BUILD` (currently `b9596 (18ef86ece)`) for the llama-server/cudart entries, and `QWEN_MODEL_REVISION` (`unsloth/Qwen3.5-4B-GGUF@e87f176`) for the GGUFs. The llama.cpp build is recoverable any time via `llama-server --version`.
 
 ---
 
@@ -340,25 +341,25 @@ cd app
 npm run tauri dev
 ```
 
-The app should open the setup wizard on first launch (or after clearing the `{AppData}/DataExtractionAI/` directory). Walk through all six steps and confirm:
+The app should open the setup wizard on first launch (or after clearing the `{AppData}/com.aidenpaleczny.artifact/` directory). The wizard is **Welcome → (Configuration, Custom path only) → Install → Complete** (hardware is probed in the background on Welcome; download/verify/extract all happen in the single Install step). Walk through it and confirm:
 
-- [ ] Hardware detection completes without errors
-- [ ] All six llama-server, Tesseract, and model download tasks show correct sizes
-- [ ] Progress bars advance during download
-- [ ] Files land in the correct `{AppData}/DataExtractionAI/` subdirectories
-- [ ] SHA-256 verification passes for all assets
-- [ ] The main app launches after "Launch Artifact" is clicked
+- [ ] Hardware probe completes and the recommended backend is offered
+- [ ] The Install step lists every asset with correct sizes and an overall progress bar + time estimate
+- [ ] Progress advances during download; "Show details" reveals per-asset progress
+- [ ] Files land in the correct `{AppData}/com.aidenpaleczny.artifact/` subdirectories
+- [ ] SHA-256 verification passes for all assets (verified incrementally as they stream)
+- [ ] The main app launches after the wizard completes
 
 To reset the wizard during testing:
 
 ```powershell
 # Windows
-Remove-Item -Recurse "$env:APPDATA\com.aidenpaleczny.dataextraction" -Force
+Remove-Item -Recurse "$env:APPDATA\com.aidenpaleczny.artifact" -Force
 ```
 
 ```bash
 # macOS
-rm -rf ~/Library/Application\ Support/com.aidenpaleczny.dataextraction
+rm -rf ~/Library/Application\ Support/com.aidenpaleczny.artifact
 ```
 
 ---
@@ -374,7 +375,7 @@ Before going to production, confirm every item below is complete:
 - [ ] Both Tesseract zips uploaded (windows, macos)
 - [ ] Both GGUF model files uploaded
 - [ ] All uploads return HTTP 200 when accessed via curl
-- [ ] `R2_BASE` constant updated in `lib.rs`
-- [ ] `HF_MODEL_URL` and `HF_MMPROJ_URL` constants updated in `lib.rs`
-- [ ] All `sha256` fields populated in the asset manifest
+- [ ] `R2_BASE` constant correct in `setup.rs`
+- [ ] `HF_MODEL_URL` and `HF_MMPROJ_URL` constants set in `setup.rs` (pinned to an exact revision)
+- [ ] All `sha256` fields populated in the asset manifest (Linux assets may stay empty — later addition)
 - [ ] Setup wizard tested end-to-end on at least one platform

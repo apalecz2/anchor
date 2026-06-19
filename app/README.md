@@ -5,7 +5,7 @@ React + Tauri source for Artifact. See the [root README](../README.md) for a pro
 ## AppData layout (after first-run setup)
 
 ```
-{AppData}/com.aidenpaleczny.app/
+{AppData}/com.aidenpaleczny.artifact/
 ├── binaries/
 │   ├── llama-server[.exe]
 │   └── pdfium.dll / libpdfium.dylib   (Windows / macOS; for PDF rendering)
