@@ -30,6 +30,9 @@ pub fn run() {
                 // Reap a llama-server orphaned by a previous crash/taskkill before
                 // it lingers holding multi-GB of RAM.
                 sweep_orphan_server(&data_dir);
+                // Reclaim multi-GB `.part` files from downloads the user abandoned
+                // for good (older than the retention window; recent resumes are kept).
+                setup::sweep_stale_partials(&data_dir);
             }
 
             // On first launch there is no saved window state for the window-state

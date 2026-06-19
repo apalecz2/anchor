@@ -46,6 +46,10 @@ export const useLlamaChat = () => {
         naturalHeight: number,
         sessionId: string,
         pageIndex: number,
+        // When the user retries a truncated table, request the entire remaining
+        // context window instead of the per-cell heuristic (which underestimated and
+        // caused the truncation). Costs more memory/time, so it's opt-in per retry.
+        options?: { boostTokens?: boolean },
     ): Promise<TableFormatResult> => {
         // Flip the in-flight flags up front (before any await) so the click responds
         // instantly and the UI can show progress while the model server loads — which
@@ -87,7 +91,10 @@ export const useLlamaChat = () => {
             const TOKENS_PER_CELL = 4;
             const desiredTokens = Math.max(MIN_OUTPUT_TOKENS, sanitizedWords.length * TOKENS_PER_CELL);
             const budget = estimateExtractionBudget(prompt);
-            const maxTokens = Math.max(MIN_OUTPUT_TOKENS, Math.min(desiredTokens, budget.availableOutputTokens));
+            // A boosted retry asks for the whole remaining window; a normal run uses the
+            // per-cell estimate. Either way the value is capped to what actually fits.
+            const targetTokens = options?.boostTokens ? budget.availableOutputTokens : desiredTokens;
+            const maxTokens = Math.max(MIN_OUTPUT_TOKENS, Math.min(targetTokens, budget.availableOutputTokens));
             const contextOverflow = budget.overflow;
 
             // Load image as base64

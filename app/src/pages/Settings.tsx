@@ -213,11 +213,11 @@ export default function Settings(): React.ReactElement {
                     <div className="rounded-[10px] border border-outline-variant bg-surface-container divide-y divide-outline-variant">
                         <SettingRow
                             label="Language"
-                            description="Additional language packs (.traineddata files) coming in a future release."
+                            description="This version recognizes English only. Other languages are not yet supported."
                         >
                             <span className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-outline-variant bg-surface font-label-md text-label-md text-on-surface-variant">
                                 <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>translate</span>
-                                English (eng)
+                                English only
                             </span>
                         </SettingRow>
                     </div>

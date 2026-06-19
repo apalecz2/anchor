@@ -28,6 +28,9 @@ export interface AssetManifestEntry {
     extract_to_dir: string | null;
     flatten_marker: string | null;
     installed: boolean;
+    /** Human-readable upstream version this asset is pinned to (audit; design F7).
+     *  null where no stable version string applies (e.g. PDFium, Tesseract). */
+    version: string | null;
 }
 
 export interface AssetProgress {

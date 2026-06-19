@@ -186,6 +186,40 @@ pub fn cancel_setup() {
     SETUP_GENERATION.fetch_add(1, Ordering::SeqCst);
 }
 
+/// How long an untouched `.part` is kept before the startup sweep reclaims it.
+/// Long enough that an interrupted download the user means to resume (relaunch and
+/// continue) is never disturbed, short enough that a truly abandoned multi-GB
+/// partial doesn't linger forever.
+const PARTIAL_RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60); // 7 days
+
+/// Garbage-collect abandoned `.part` files (design review M3 residual).
+///
+/// `download_file` intentionally *keeps* a `.part` across app runs so a dropped
+/// download resumes from where it stopped — so this sweep must not touch recent
+/// partials. It deletes only `.part` files older than [`PARTIAL_RETENTION`], which a
+/// genuine resume never is. Best-effort and non-recursive over the two dirs that
+/// hold download targets (the data dir root and `models/`); errors are ignored.
+/// Called once at startup.
+pub fn sweep_stale_partials(data_dir: &Path) {
+    for dir in [data_dir.to_path_buf(), data_dir.join("models")] {
+        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("part") {
+                continue;
+            }
+            let stale = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .map(|modified| modified.elapsed().map(|age| age > PARTIAL_RETENTION).unwrap_or(false))
+                .unwrap_or(false);
+            if stale {
+                let _ = fs::remove_file(&path);
+            }
+        }
+    }
+}
+
 /// Delete a leftover `.part` for `dest_path`. The frontend calls this before
 /// retrying a download from a *different* URL (primary → fallback), since the
 /// two sources are distinct origins and resuming one stream into the other's
@@ -676,14 +710,32 @@ pub struct AssetManifestEntry {
     /// True if this asset's final artifact already exists in AppData. The wizard
     /// uses this to skip re-downloading assets the user already has.
     pub installed: bool,
+    /// Human-readable upstream version this asset is pinned to, for audit (design
+    /// review F7). The R2 object keys strip the build tag, so this records what the
+    /// pinned SHA-256 actually corresponds to. `None` where no stable version string
+    /// applies (e.g. PDFium prebuilts). Refresh in lockstep with the `sha256` pins.
+    pub version: Option<String>,
 }
+
+// Pinned llama.cpp release the llama-server (and CUDA-runtime) binaries come from.
+// Verified by running the installed Windows CUDA binary: `llama-server --version`
+// → `version: 9596 (18ef86ece)`. llama.cpp publishes every platform binary under a
+// single build tag per release, so win-cpu / win-cuda / macos-arm64 share this build.
+// To refresh after pinning new archives, re-run `llama-server --version` (or read the
+// `build:`/`version:` line) and update this alongside the SHA-256s above.
+const LLAMA_CPP_BUILD: &str = "b9596 (18ef86ece)";
+
+// Pinned model revision for the two GGUF files — the unsloth repo commit the
+// fallback URLs (and SHA-256 pins) reference; see HF_MODEL_URL / HF_MMPROJ_URL.
+const QWEN_MODEL_REVISION: &str = "unsloth/Qwen3.5-4B-GGUF@e87f176";
 
 // llama.cpp release archives are uploaded to R2 as-is, under `binaries/`, with the
 // build tag and CUDA version stripped from the filename. Examples:
 //   llama-b9596-bin-win-cpu-x64.zip        → binaries/llama-bin-win-cpu-x64.zip
-//   llama-b9550-bin-win-cuda-13.3-x64.zip  → binaries/llama-bin-win-cuda-x64.zip
+//   llama-b9596-bin-win-cuda-13.3-x64.zip  → binaries/llama-bin-win-cuda-x64.zip
 //   cudart-llama-bin-win-cuda-13.3-x64.zip → binaries/cudart-llama-bin-win-cuda-x64.zip
 //   llama-b9596-bin-macos-arm64.tar.gz     → binaries/llama-bin-macos-arm64.tar.gz
+// (All three platform builds are the same release — see LLAMA_CPP_BUILD below.)
 // Windows/Linux zips are flat; the macOS .tar.gz nests binaries under build/bin.
 // extract_archive(flatten=true) normalizes both so llama-server[.exe] and its
 // shared libraries end up directly in the `binaries` dir.
@@ -739,6 +791,7 @@ fn get_tesseract_spec(data_dir: &Path) -> AssetManifestEntry {
         // real root by the tesseract binary. tessdata/ subtree is preserved.
         flatten_marker: Some("tesseract".into()),
         installed:      false, // filled in by get_asset_manifest
+        version:        None,  // upstream Tesseract build not separately pinned
     }
 }
 
@@ -766,6 +819,7 @@ pub fn get_asset_manifest(
         extract_to_dir: Some(binaries_dir.clone()),
         flatten_marker: Some("llama-server".into()), // macOS nests under build/bin; Windows is flat
         installed:      false,
+        version:        Some(LLAMA_CPP_BUILD.into()),
     };
 
     // Windows CUDA builds need the CUDA runtime DLLs, which llama.cpp ships as a
@@ -782,6 +836,8 @@ pub fn get_asset_manifest(
         extract_to_dir: Some(binaries_dir.clone()),
         flatten_marker: None, // DLLs sit flat at the zip root
         installed:      false,
+        // Shipped as part of the same llama.cpp CUDA release archive set.
+        version:        Some(LLAMA_CPP_BUILD.into()),
     });
 
     // PDFium renderer (Windows + macOS; see pdfium_spec). The library nests under
@@ -798,6 +854,7 @@ pub fn get_asset_manifest(
         extract_to_dir: Some(binaries_dir),
         flatten_marker: Some(pdfium_lib_name().into()),
         installed:      false,
+        version:        None, // pdfium prebuild not separately pinned
     });
 
     let tesseract = get_tesseract_spec(&data_dir);
@@ -813,6 +870,7 @@ pub fn get_asset_manifest(
         extract_to_dir: None,
         flatten_marker: None,
         installed:      false,
+        version:        Some(QWEN_MODEL_REVISION.into()),
     };
 
     let model = AssetManifestEntry {
@@ -826,6 +884,7 @@ pub fn get_asset_manifest(
         extract_to_dir: None,
         flatten_marker: None,
         installed:      false,
+        version:        Some(QWEN_MODEL_REVISION.into()),
     };
 
     // Ordered smallest → largest so early progress is fast.

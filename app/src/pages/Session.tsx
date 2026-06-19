@@ -450,7 +450,9 @@ function SessionContent(): React.ReactElement {
     };
 
 
-    const handleFormatTable = async () => {
+    // `boostTokens` is set by the truncation banner's Retry to re-run with the full
+    // context window (more memory/time, but recovers rows the budget cut off).
+    const handleFormatTable = async (boostTokens = false) => {
         if (!fileUrl || !activePage?.words.length || !id) return;
         setOutputView('table');
         setSelectedCell(null);
@@ -467,6 +469,7 @@ function SessionContent(): React.ReactElement {
                 activePage.natural_height,
                 id,
                 activePageIndex,
+                { boostTokens },
             );
             setSavedCsv(result.csvContent);
             setProvenanceCells(result.provenanceCells);
@@ -827,9 +830,9 @@ function SessionContent(): React.ReactElement {
                                         {extractionError
                                             ?? (contextOverflow
                                                 ? 'This page is dense enough that it may not fit the model in a single pass, so some rows or columns could be missing. Consider splitting the page if the table looks incomplete.'
-                                                : 'The model reached its output limit, so this table may be missing trailing rows. Re-extract if any rows look cut off.')}
+                                                : 'The model reached its output limit, so this table may be missing trailing rows. Retrying re-runs with a larger output budget — it uses more memory and takes longer, so proceed with caution.')}
                                     </span>
-                                    <button onClick={handleFormatTable} className="shrink-0 font-medium underline hover:no-underline">Retry</button>
+                                    <button onClick={() => handleFormatTable(!extractionError && truncated)} className="shrink-0 font-medium underline hover:no-underline">Retry</button>
                                 </div>
                             )}
                             {isExtracting ? (
@@ -922,7 +925,7 @@ function SessionContent(): React.ReactElement {
                                     <span className="material-symbols-outlined text-error text-[28px]" aria-hidden="true">error</span>
                                     <p className="text-error text-sm text-center max-w-sm">{extractionError || llamaError}</p>
                                     <button
-                                        onClick={handleFormatTable}
+                                        onClick={() => handleFormatTable()}
                                         className="px-4 py-1 text-sm bg-primary text-on-primary rounded-lg hover:bg-primary/90"
                                     >
                                         Retry
@@ -934,7 +937,7 @@ function SessionContent(): React.ReactElement {
                                         Organize the extracted text into rows and columns.
                                     </p>
                                     <button
-                                        onClick={handleFormatTable}
+                                        onClick={() => handleFormatTable()}
                                         disabled={isExtracting}
                                         className="flex h-10 shrink-0 items-center gap-2 rounded-lg bg-primary px-5 text-sm text-on-primary shadow-sm transition-colors hover:bg-primary/90 disabled:opacity-50"
                                     >
@@ -968,7 +971,7 @@ function SessionContent(): React.ReactElement {
                                             </button>
                                         ) : (
                                             <button
-                                                onClick={handleFormatTable}
+                                                onClick={() => handleFormatTable()}
                                                 disabled={isExtracting}
                                                 className="flex h-9 shrink-0 items-center px-4 text-sm bg-primary text-on-primary rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-colors"
                                             >
@@ -985,7 +988,7 @@ function SessionContent(): React.ReactElement {
                                                 openUp
                                             />
                                             <button
-                                                onClick={handleFormatTable}
+                                                onClick={() => handleFormatTable()}
                                                 disabled={isExtracting}
                                                 className="flex h-9 shrink-0 items-center px-4 text-sm bg-surface-variant text-on-surface-variant rounded-lg hover:bg-surface-container-high disabled:opacity-50 transition-colors"
                                             >

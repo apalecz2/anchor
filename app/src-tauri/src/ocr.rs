@@ -8,7 +8,10 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -33,13 +36,17 @@ const MAX_FILE_SIZE_BYTES: u64 = 500 * 1024 * 1024; // 500 MB
 /// reads the generation once at entry and aborts the moment it changes between
 /// pages, so a cancel can never accidentally apply to a *later* run that started
 /// after the cancel was requested.
+///
+/// The counter is an `Arc<AtomicU64>` so the same atomic can be shared with the
+/// `spawn_blocking` worker that does the actual render/OCR — the cancel command
+/// (on the main thread) and the worker poll the same value.
 pub struct ProcessState {
-    generation: AtomicU64,
+    generation: Arc<AtomicU64>,
 }
 
 impl ProcessState {
     pub fn new() -> Self {
-        ProcessState { generation: AtomicU64::new(0) }
+        ProcessState { generation: Arc::new(AtomicU64::new(0)) }
     }
 }
 
@@ -211,12 +218,38 @@ pub async fn process_document(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, ProcessState>,
     session_id: String,
-    file_path: String
+    file_path: String,
+) -> Result<ExtractionResult, String> {
+    // All the heavy work below — pdfium rendering, image resizing, the Tesseract
+    // subprocess — is synchronous and CPU/IO-bound. Running it directly in this async
+    // command would block a Tokio worker for the whole job (minutes on a long PDF) and
+    // starve other commands. Hand it to the blocking pool instead (design review H5).
+    //
+    // The cancel flag is shared via the Arc, so `cancel_process_document` (main thread)
+    // and this worker poll the same atomic. pdfium objects are `!Send`, so the entire
+    // body must live on one blocking thread — we can't move the document across threads
+    // per page.
+    let generation = Arc::clone(&state.generation);
+    let app_handle = app_handle.clone();
+
+    tokio::task::spawn_blocking(move || {
+        process_document_blocking(app_handle, generation, session_id, file_path)
+    })
+    .await
+    .map_err(|error| format!("document processing task failed: {error}"))?
+}
+
+/// Synchronous body of [`process_document`], run on the blocking thread pool.
+fn process_document_blocking(
+    app_handle: tauri::AppHandle,
+    generation: Arc<AtomicU64>,
+    session_id: String,
+    file_path: String,
 ) -> Result<ExtractionResult, String> {
     // Snapshot the cancellation generation at entry. If `cancel_process_document`
     // bumps it while we're working, the per-page check below aborts this run.
-    let start_generation = state.generation.load(Ordering::SeqCst);
-    let is_cancelled = || state.generation.load(Ordering::SeqCst) != start_generation;
+    let start_generation = generation.load(Ordering::SeqCst);
+    let is_cancelled = || generation.load(Ordering::SeqCst) != start_generation;
 
     let source_path = Path::new(&file_path);
 
