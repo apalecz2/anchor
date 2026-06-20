@@ -2,7 +2,7 @@
 
 ## UI / Frontend
 
-- [ ] Fix: editing OCR words breaks the highlight boxes shown when clicking a cell in the output table
+- [x] Fix: editing OCR words breaks the highlight boxes shown when clicking a cell in the output table -- provenance now stores stable `OcrWord` UUIDs (not array indices) and `getCellSourceBox` resolves them against the *current* words, so an add/edit/delete no longer shifts a cell onto the wrong box (a deleted source word yields no highlight instead). Covered by the reorder/delete cases in `provenance.test.ts`
 - [ ] Persist `SplitLayout` divider position across navigation -- currently resets to 50% every time (`SplitLayout.tsx`)
 - [x] ~~Restrict `ReactMarkdown` to a safe `allowedElements` allowlist~~ -- obsolete: `ReactMarkdown` is no longer used anywhere (LLM output renders as plain text). The `react-markdown` / `remark-gfm` deps (and the unused Rust `imageproc` crate) were removed on 2026-06-16.
 - [ ] Add LLM chat box to the output panel so the user can ask the model to fix column structure problems automatically
@@ -21,7 +21,7 @@
 
 - [x] Surface Tesseract language limitation in the UI -- the Settings → OCR → Language row now reads "English only" with the note "This version recognizes English only. Other languages are not yet supported." (`Settings.tsx`)
 - [ ] Smart OCR routing: detect machine-readable PDF text layers and skip Tesseract entirely
-- [ ] MIME type validation: verify magic bytes on upload, not just file extension / browser `accept` hint
+- [x] MIME type validation: verify magic bytes on upload, not just file extension / browser `accept` hint -- `Dashboard.tsx` keys uploads off `SUPPORTED_FILE_TYPES` and sniffs the leading bytes (`%PDF`, PNG signature, JPEG SOI) via `matchesMagic`, rejecting a mislabeled/corrupt file before any session record is created
 - [ ] Multi-language OCR: allow users to drop in additional `.traineddata` files; wire language selection to the settings page
 
 ## LLM / Extraction
@@ -43,8 +43,7 @@
 ## Settings
 
 - [x] Implement the Settings page (currently a placeholder heading only)
-- [ ] OCR language selection (currently hardcoded to `"eng"`)
-- [ ] Model path configuration (currently resolved at fixed paths)
+- [x] Model path configuration (currently resolved at fixed paths) -- Settings → AI model exposes editable **Model path** and **Multimodal projector path** fields (browse + Save) that override the setup-installed paths on the next server start
 - [ ] Hardware mode toggle: Low-End (Tesseract + lightweight LLM, no vision) vs. High-End (full vision model)
 - [ ] Persisted preference storage for all settings
 
@@ -68,7 +67,7 @@
 - [x] Re-run Tesseract `PATH` / `TESSDATA_PREFIX` injection at `process_document` call time so OCR works in the wizard's first session without a restart (fixes `CODE_REVIEW.md` C2)
 - [x] Replace `R2_BASE` placeholder with the real asset domain (`artifact-assets.aidenpaleczny.com`)
 - [ ] Provision the Cloudflare R2 bucket end-to-end and confirm every asset object is reachable
-- [ ] Replace `HF_MODEL_URL` / `HF_MMPROJ_URL` placeholder constants with real HuggingFace URLs
+- [x] Replace `HF_MODEL_URL` / `HF_MMPROJ_URL` placeholder constants with real HuggingFace URLs -- both point at `unsloth/Qwen3.5-4B-GGUF` resolve URLs pinned to commit `e87f176` (not `main`), so the fallback bytes can't drift from the SHA-256 pins (`setup.rs`)
 - [x] Build and upload the macOS Tesseract zip to R2 and pin it (Windows pinned). _(Linux is a later addition — not needed for now.)_ -- on R2 at `macos/tesseract.zip`, SHA-256 pinned in `get_tesseract_spec`
 - [x] Upload llama-server binaries per platform to R2 and pin hashes (Windows CPU/CUDA, macOS). _(Linux build deferred — later addition.)_
 - [x] Upload GGUF model + mmproj files to R2 and pin their SHA-256 hashes
@@ -91,7 +90,7 @@
 - [x] Fuzzy second pass tests: single-glyph misread (`I`→`|`) recovers as `fuzzy`; fuzzy match cannot claim a word already owned by a matched neighbour; perfect gap hit promotes to `matched` not `fuzzy` -- covered in `provenance.test.ts`
 - [x] Grid cross-check tests: a reading-order-desynced cell is recovered from its row/column anchors; no recovery when a whole column is unmatched; no word stolen below the similarity threshold -- covered in `provenance.test.ts`
 - [x] Context-budget tests: token estimate (~4 chars/token), output budget clamped to remaining context, overflow flagged, never negative -- covered in `contextBudget.test.ts`
-- [ ] `buildTableText` header-anchored column test: a row with left- and right-justified content in one wide column stays a single column (no phantom trailing column)
+- [x] `buildTableText` header-anchored column test: a row with left- and right-justified content in one wide column stays a single column (no phantom trailing column) -- covered in `ocrTransforms.test.ts` ("keeps right-justified content in its column (no phantom trailing column)")
 
 ## Roadmap
 
@@ -105,3 +104,4 @@
 
 ## Out of Scope / Later Additions:
 - [ ] XLSX export (requires adding a library dependency)
+- [ ] OCR language selection (currently hardcoded to `"eng"`)
