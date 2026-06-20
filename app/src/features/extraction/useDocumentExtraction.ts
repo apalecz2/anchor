@@ -22,6 +22,10 @@ export function useDocumentExtraction(sessionId: string | undefined, activePageI
     const hasProcessed = useRef(false);
     // Set by retry() to bypass the page cache and re-run OCR from the source file.
     const forceReprocess = useRef(false);
+    // Set the instant the user cancels. A single-page render/OCR is one uninterruptible
+    // backend call, so a result may still arrive after the cancel — this flag lets us
+    // discard it (and skip persisting it) instead of replacing the cancelled UI.
+    const cancelledRef = useRef(false);
 
     useEffect(() => {
         let unlistenProgress: (() => void) | undefined;
@@ -33,6 +37,7 @@ export function useDocumentExtraction(sessionId: string | undefined, activePageI
             try {
                 setError(null);
                 setCancelled(false);
+                cancelledRef.current = false;
                 setIsLoading(true);
                 const db = await getDb();
 
@@ -68,6 +73,7 @@ export function useDocumentExtraction(sessionId: string | undefined, activePageI
                 unlistenProgress = await listen<{ session_id: string; current_page: number; total_pages: number }>(
                     'process:progress',
                     event => {
+                        if (cancelledRef.current) return;
                         if (event.payload.session_id === sessionId) {
                             setProgress({ current: event.payload.current_page, total: event.payload.total_pages });
                         }
@@ -78,6 +84,11 @@ export function useDocumentExtraction(sessionId: string | undefined, activePageI
                     sessionId,
                     filePath: dbResult[0].file_path
                 });
+
+                // The user cancelled while the backend was still working: drop the
+                // result and don't persist it — the UI is already showing the
+                // cancelled state, and a retry will reprocess from the source.
+                if (cancelledRef.current) return;
 
                 for (let i = 0; i < rustResult.pages.length; i++) {
                     const page = rustResult.pages[i];
@@ -95,6 +106,9 @@ export function useDocumentExtraction(sessionId: string | undefined, activePageI
                 setExtractionResult(rustResult);
 
             } catch (err) {
+                // A cancel already moved the UI to its neutral cancelled state, so
+                // ignore any late rejection from the abandoned backend job.
+                if (cancelledRef.current) return;
                 // Tauri rejects invoke() with a plain string, not an Error, so don't
                 // discard it — surface the real backend message.
                 const message =
@@ -126,14 +140,23 @@ export function useDocumentExtraction(sessionId: string | undefined, activePageI
         if (!sessionId) return;
         hasProcessed.current = false;
         forceReprocess.current = true;
+        cancelledRef.current = false;
         setError(null);
         setCancelled(false);
         setRetryToken(token => token + 1);
     };
 
-    // Ask the backend to abort an in-flight process_document. The running invoke()
-    // then rejects with CANCELLED_MESSAGE, which the catch above turns into `cancelled`.
+    // Cancel an in-flight process_document. We respond immediately rather than waiting
+    // for the backend to reach its next cancellation checkpoint: flip the UI to the
+    // cancelled state now, and ask the backend to abort. The generation bump stops a
+    // multi-page job at the next page boundary; a single-page render/OCR can't be
+    // interrupted mid-call, so its result is discarded by the cancelledRef guard above.
     const cancel = () => {
+        if (cancelledRef.current) return;
+        cancelledRef.current = true;
+        setCancelled(true);
+        setIsLoading(false);
+        setProgress(null);
         invoke('cancel_process_document').catch(err => console.error('Failed to cancel processing:', err));
     };
 

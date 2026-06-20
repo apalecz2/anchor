@@ -18,8 +18,10 @@ type LlamaChatContextValue = {
     attachImage: (file: File) => Promise<boolean>;
     removePendingAttachment: () => void;
     /** Resolves true once the server reports healthy, false if it failed to start
-     *  (the reason is also placed in `serverError`). Cancels any pending idle unload. */
-    startServer: () => Promise<boolean>;
+     *  (the reason is also placed in `serverError`). Cancels any pending idle unload.
+     *  Pass a signal to abandon the readiness wait promptly on cancel — the server
+     *  process keeps loading (and stays reusable), but the caller stops blocking. */
+    startServer: (signal?: AbortSignal) => Promise<boolean>;
     stopServer: () => Promise<void>;
     /** Release the server after a job: keep it warm for a short idle window so an
      *  immediate re-extract is instant, then unload to free RAM. A new startServer
@@ -29,6 +31,21 @@ type LlamaChatContextValue = {
 };
 
 export const LlamaChatContext = createContext<LlamaChatContextValue | null>(null);
+
+// A setTimeout that also resolves the instant `signal` aborts, so a cancel doesn't
+// have to wait out the remaining delay. Always resolves (never rejects) — the caller
+// re-checks the signal after it returns.
+const interruptibleSleep = (ms: number, signal?: AbortSignal): Promise<void> =>
+    new Promise(resolve => {
+        if (signal?.aborted) return resolve();
+        const timer = setTimeout(finish, ms);
+        function finish() {
+            clearTimeout(timer);
+            signal?.removeEventListener('abort', finish);
+            resolve();
+        }
+        signal?.addEventListener('abort', finish, { once: true });
+    });
 
 const readImageFile = (file: File) =>
     new Promise<string>((resolve, reject) => {
@@ -110,7 +127,7 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
     // poll up to this long but bail early the moment the process is seen to have died.
     const READINESS_TIMEOUT_MS = 180_000;
 
-    const startServer = async (): Promise<boolean> => {
+    const startServer = async (signal?: AbortSignal): Promise<boolean> => {
         // A new job cancels any pending idle unload, whether or not the server is up.
         cancelIdleUnload();
         if (isServerReady) return true;
@@ -124,6 +141,12 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
 
             const deadline = Date.now() + READINESS_TIMEOUT_MS;
             while (Date.now() < deadline) {
+                // Cancelled while still loading: stop blocking immediately. The spawned
+                // server keeps loading and stays reusable (Rust dedupes the next start),
+                // so a re-extract finds it warm; an unused one is reaped by the idle
+                // unload the cancelled job schedules via releaseServer().
+                if (signal?.aborted) return false;
+
                 if (await checkLlamaServerHealth()) {
                     setIsServerReady(true);
                     startWatchdog();
@@ -137,7 +160,9 @@ export const LlamaChatProvider = ({ children }: { children: ReactNode }) => {
                     return false;
                 }
 
-                await new Promise(resolve => setTimeout(resolve, 1000));
+                // Interruptible 1 s wait so a cancel doesn't sit out the remaining
+                // sleep before the loop notices it (re-checks signal at the top).
+                await interruptibleSleep(1000, signal);
             }
 
             setServerError('The model server did not finish loading in time. A large model on a slow disk can take a while — retry, or free up RAM and try again.');

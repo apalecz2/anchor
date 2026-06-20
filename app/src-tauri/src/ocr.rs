@@ -412,6 +412,13 @@ fn process_document_blocking(
         }
 
     } else if ["png", "jpg", "jpeg"].contains(&extension.as_str()) {
+        // A single image is one uninterruptible OCR call, so honor a cancel that
+        // arrives before it begins (mid-call cancellation isn't possible — the
+        // frontend discards the result if one still arrives after the user cancels).
+        if is_cancelled() {
+            return Err(CANCELLED_MESSAGE.to_string());
+        }
+
         let (natural_width, natural_height) = image::image_dimensions(source_path)
             .map(|(w, h)| (w as i32, h as i32))
             .unwrap_or((0, 0));

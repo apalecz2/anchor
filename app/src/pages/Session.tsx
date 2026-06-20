@@ -311,8 +311,10 @@ function SessionContent(): React.ReactElement {
 
     const {
         requestTableFormat,
+        cancelTableFormat,
         streamingContent,
         isExtracting,
+        isCancelling,
         extractionPhase,
         serverError: llamaError,
     } = useLlamaChat();
@@ -337,6 +339,9 @@ function SessionContent(): React.ReactElement {
     // the selected word is bolded in the text and outlined on the image.
     const [selectedWordId, setSelectedWordId] = useState<string | null>(null);
     const selectedWordRef = useRef<HTMLSpanElement | null>(null);
+    // The streaming-output box is fixed-height; keep it pinned to the bottom so the
+    // newest generated tokens stay visible as they arrive.
+    const streamRef = useRef<HTMLPreElement | null>(null);
     const [editingState, setEditingState] = useState<{ box?: BoundingBox | null, id?: string, text?: string } | null>(null);
 
     const [activeTool, setActiveTool] = useState<'draw' | 'pan'>('draw');
@@ -389,6 +394,12 @@ function SessionContent(): React.ReactElement {
     useEffect(() => {
         selectedWordRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }, [selectedWordId]);
+
+    // Keep the fixed-height streaming box scrolled to the latest tokens.
+    useEffect(() => {
+        const el = streamRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+    }, [streamingContent]);
 
     // Load source filename once per session for descriptive export names
     useEffect(() => {
@@ -476,6 +487,9 @@ function SessionContent(): React.ReactElement {
             setTruncated(result.truncated);
             setContextOverflow(result.contextOverflow);
         } catch (err) {
+            // A user-initiated cancel isn't a failure — just unwind to the prior view
+            // (a previous table stays shown, otherwise the empty state) without an error.
+            if ((err as { name?: string })?.name === 'AbortError') return;
             // Surface the failure instead of leaving the pane on a stale prompt.
             setExtractionError(err instanceof Error ? err.message : 'Extraction failed. Please try again.');
         }
@@ -759,6 +773,10 @@ function SessionContent(): React.ReactElement {
                         showProcessing ? (
                             <div className="flex h-full items-center justify-center">Awaiting extraction...</div>
                         ) : null
+                    ) : processingCancelled ? (
+                        // Mirror the source pane's neutral cancelled state rather than
+                        // claiming OCR ran and found nothing.
+                        <div className="flex h-full items-center justify-center text-on-surface-variant">Processing was cancelled.</div>
                     ) : !activePage?.words ? (
                         <div className="flex h-full items-center justify-center">No readable text found.</div>
                     ) : outputView === 'raw' ? (
@@ -840,12 +858,29 @@ function SessionContent(): React.ReactElement {
                                    what's happening — model load, image read, generation.
                                    Centered in the pane both axes. */
                                 <div className="flex h-full flex-col items-center justify-center gap-5">
-                                    <ExtractionProgress phase={extractionPhase} />
-                                    {streamingContent && (
-                                        <pre className="w-full max-w-2xl text-sm text-on-surface font-mono bg-surface-variant rounded p-3 whitespace-pre-wrap wrap-break-word max-h-96 overflow-y-auto">
+                                    {/* Dim the in-progress detail once cancelling so the
+                                        pending "Cancelling…" state reads as the active one. */}
+                                    <div className={isCancelling ? 'opacity-40 transition-opacity' : 'transition-opacity'}>
+                                        <ExtractionProgress phase={extractionPhase} />
+                                    </div>
+                                    {/* Fixed height and reserved for the whole generation
+                                        phase so streaming tokens fill a stable box instead of
+                                        growing the column and shifting the Cancel button. */}
+                                    {extractionPhase === 'generating' && !isCancelling && (
+                                        <pre ref={streamRef} className="h-72 w-full max-w-2xl text-sm text-on-surface font-mono bg-surface-variant rounded p-3 whitespace-pre-wrap wrap-break-word overflow-y-auto">
                                             {streamingContent}
                                         </pre>
                                     )}
+                                    <button
+                                        onClick={cancelTableFormat}
+                                        disabled={isCancelling}
+                                        className="flex items-center gap-2 rounded-lg border border-outline-variant px-4 py-1 text-sm text-on-surface-variant transition-colors hover:bg-surface-variant hover:text-on-surface disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent disabled:hover:text-on-surface-variant"
+                                    >
+                                        {isCancelling && (
+                                            <span className="material-symbols-outlined animate-spin text-[16px]" aria-hidden="true">progress_activity</span>
+                                        )}
+                                        {isCancelling ? 'Cancelling…' : 'Cancel'}
+                                    </button>
                                 </div>
                             ) : provenanceCells && provenanceCells.length > 0 ? (
                                 /* Provenance-annotated table */

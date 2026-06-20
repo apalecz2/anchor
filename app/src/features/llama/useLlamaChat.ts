@@ -1,4 +1,4 @@
-import { useContext, useState } from "react";
+import { useContext, useRef, useState } from "react";
 import { LlamaChatContext } from "./LlamaChatContext";
 import { readFileAsBase64 } from './promptUtils';
 import { extractTableFromImage } from './llamaClient';
@@ -39,6 +39,22 @@ export const useLlamaChat = () => {
     const [streamingContent, setStreamingContent] = useState<string>('');
     const [isExtracting, setIsExtracting] = useState(false);
     const [extractionPhase, setExtractionPhase] = useState<ExtractionPhase>('idle');
+    // Set the instant Cancel is clicked so the UI can acknowledge it immediately,
+    // even though the abort itself may take a moment to unwind the in-flight request
+    // (e.g. tearing down the streaming fetch, or finishing a non-abortable phase).
+    const [isCancelling, setIsCancelling] = useState(false);
+    // Holds the in-flight extraction's AbortController so the user can cancel it.
+    // Aborting rejects the streaming fetch (and our explicit checkpoints) with an
+    // AbortError, which the caller treats as a neutral cancel rather than a failure.
+    const abortRef = useRef<AbortController | null>(null);
+
+    // Abort an in-flight table extraction. Flips isCancelling for instant feedback;
+    // no-ops when nothing is running so a stray click can't strand the cancelling UI.
+    const cancelTableFormat = () => {
+        if (!abortRef.current) return;
+        setIsCancelling(true);
+        abortRef.current.abort();
+    };
 
     const requestTableFormat = async (
         fileUrl: string,
@@ -57,11 +73,27 @@ export const useLlamaChat = () => {
         setIsExtracting(true);
         setStreamingContent('');
         setExtractionPhase('starting');
+        setIsCancelling(false);
+
+        // Fresh controller per run; cancelTableFormat() aborts it. Checked at each
+        // phase boundary so a cancel during the long, un-abortable model load (or
+        // image read) still stops promptly instead of finishing the whole extraction.
+        const controller = new AbortController();
+        abortRef.current = controller;
+        const throwIfCancelled = () => {
+            if (controller.signal.aborted) {
+                throw new DOMException('Table formatting was cancelled.', 'AbortError');
+            }
+        };
 
         try {
             // Always go through startServer: it returns immediately when the server is
             // already warm (and cancels any pending idle unload from a prior extraction).
-            const ready = await context.startServer();
+            // Passing the signal lets a cancel abandon the model-load wait promptly.
+            const ready = await context.startServer(controller.signal);
+            // Check cancellation before the failure path: a cancel makes startServer
+            // return false, but that's a clean cancel — not a "failed to start" error.
+            throwIfCancelled();
             if (!ready) {
                 // startServer surfaces the specific reason via `serverError`; throw a
                 // fallback so the caller still gets a message even on a stale read.
@@ -98,7 +130,7 @@ export const useLlamaChat = () => {
             const contextOverflow = budget.overflow;
 
             // Load image as base64
-            const response = await fetch(fileUrl);
+            const response = await fetch(fileUrl, { signal: controller.signal });
             const blob = await response.blob();
             const imageData = await readFileAsBase64(
                 new File([blob], "page.png", { type: blob.type || 'image/png' })
@@ -118,6 +150,7 @@ export const useLlamaChat = () => {
                 messages,
                 maxTokens,
                 onContentDelta: setStreamingContent,
+                signal: controller.signal,
             });
 
             // `finish_reason: "length"` means the model ran out of token budget before
@@ -126,6 +159,11 @@ export const useLlamaChat = () => {
 
             // Stage 2 — parse, match to OCR, score confidence, persist.
             setExtractionPhase('finalizing');
+
+            // A cancel that lands during generation may not interrupt the synchronous
+            // finalize work below — bail before doing any of it (and before the DB write)
+            // so a late cancel can't persist a table the user asked to discard.
+            throwIfCancelled();
 
             // Parse the raw output while preserving char offsets for logprob mapping
             const { rows: csvRows } = parseTSVWithOffsets(rawContent);
@@ -145,6 +183,10 @@ export const useLlamaChat = () => {
             const csvContent = toCsv(csvRows);
 
             const db = await getDb();
+            // Final checkpoint: a cancel that landed while the DB handle was awaited
+            // must not still write the row (the await is the only yield point between
+            // the earlier check and the insert).
+            throwIfCancelled();
             // `created_at` is the row's first-write time and must NOT be rewritten on
             // re-extract — otherwise it tracks the latest extraction, not creation.
             // Last-activity tracking lives on sessions.updated_at, bumped below.
@@ -169,15 +211,21 @@ export const useLlamaChat = () => {
             // Any error still propagates to the caller for display in the pane.
             setIsExtracting(false);
             setExtractionPhase('idle');
+            setIsCancelling(false);
+            setStreamingContent('');
             context.releaseServer();
+            // Only clear the ref if a newer run hasn't already replaced it.
+            if (abortRef.current === controller) abortRef.current = null;
         }
     };
 
     return {
         ...context,
         requestTableFormat,
+        cancelTableFormat,
         streamingContent,
         isExtracting,
+        isCancelling,
         extractionPhase,
     };
 };
