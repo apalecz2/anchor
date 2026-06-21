@@ -266,7 +266,7 @@ function OutputCard({ icon, title, action, subheader, bodyClassName = 'px-5 py-4
     children: React.ReactNode;
 }): React.ReactElement {
     return (
-        <div className="overflow-hidden rounded-xl border border-outline-variant">
+        <div className="overflow-hidden rounded-xl border border-outline-variant bg-surface-bright shadow-sm">
             <div className="border-b border-outline-variant bg-surface-variant/40">
                 <div className="flex items-center justify-between gap-2 px-4 py-2">
                     <div className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-on-surface-variant">
@@ -742,8 +742,7 @@ function SessionContent(): React.ReactElement {
 
             {/* RIGHT PANE */}
             <>
-                {/* pr-12 keeps the toggle clear of the floating theme toggle in AppLayout */}
-                <div className="mb-4 flex min-h-[40px] flex-wrap items-center justify-between gap-x-3 gap-y-2 pr-12">
+                <div className="mb-4 flex min-h-[40px] flex-wrap items-center justify-between gap-x-3 gap-y-2">
                     <h1 className="font-headline-md text-headline-md text-primary truncate">
                         {outputView === 'raw' ? 'Extracted Text' : 'Formatted Table'}
                     </h1>
@@ -767,8 +766,11 @@ function SessionContent(): React.ReactElement {
                     )}
                 </div>
 
-                <div className="relative flex-1 overflow-hidden rounded-2xl border border-outline-variant bg-surface-bright shadow-sm">
-                    <div className="h-full overflow-auto px-4 pt-6 pb-24 @sm:px-8 @sm:pt-10">
+                {/* No surrounding card here: the output/content (e.g. the AI output
+                    card) sits directly on the pane. This wrapper only provides the
+                    scroll area and the positioning context for the floating toolbar. */}
+                <div className="relative flex-1 overflow-hidden">
+                    <div className="h-full overflow-auto pb-24">
                     {isDbLoading ? (
                         showProcessing ? (
                             <div className="flex h-full items-center justify-center">Awaiting extraction...</div>

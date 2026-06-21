@@ -40,6 +40,10 @@ export default function AppLayout() {
     const [theme, setTheme] = useTheme();
     const isDarkMode = theme === 'dark';
 
+    // The session page has its own floating toolbars in the top-right area, so the
+    // theme toggle is hidden there to avoid overlapping/competing controls.
+    const isSessionPage = location.pathname.startsWith('/session/');
+
     useEffect(() => {
         let isActive = true;
 
@@ -99,18 +103,20 @@ export default function AppLayout() {
             >
 
                 {/* === Top Right Floating Button === */}
-                <div className="absolute top-4 right-6 z-50">
-                    <button
-                        aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-                        className="flex h-10 w-10 items-center justify-center rounded-[10px] bg-surface-variant text-on-surface transition-colors shadow-md hover:bg-surface-container-high focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
-                        onClick={() => setTheme(isDarkMode ? 'light' : 'dark')}
-                        type="button"
-                    >
-                        <span className="material-symbols-outlined text-[20px]" style={{ fontVariationSettings: "'FILL' 0" }}>
-                            {isDarkMode ? 'dark_mode' : 'light_mode'}
-                        </span>
-                    </button>
-                </div>
+                {!isSessionPage && (
+                    <div className="absolute top-4 right-6 z-50">
+                        <button
+                            aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+                            className="flex h-10 w-10 items-center justify-center rounded-[10px] bg-surface-variant text-on-surface transition-colors shadow-md hover:bg-surface-container-high focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
+                            onClick={() => setTheme(isDarkMode ? 'light' : 'dark')}
+                            type="button"
+                        >
+                            <span className="material-symbols-outlined text-[20px]" style={{ fontVariationSettings: "'FILL' 0" }}>
+                                {isDarkMode ? 'dark_mode' : 'light_mode'}
+                            </span>
+                        </button>
+                    </div>
+                )}
 
                 {/* Dynamic Page Content injects here. Keying on the path remounts the
                     page on navigation (resetting per-page/session state cleanly); the

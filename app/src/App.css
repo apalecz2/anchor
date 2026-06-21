@@ -136,6 +136,17 @@ html.dark {
 	--on-error-container: #ffdad6;
 }
 
+/* Tailwind v4's Preflight resets interactive elements to `cursor: default`, so
+   buttons no longer show the clickable pointer. Restore it for enabled buttons
+   (and ARIA buttons); disabled controls keep their own cursor (e.g. the
+   `disabled:cursor-not-allowed` utilities applied at the call sites). */
+@layer base {
+	button:not(:disabled),
+	[role="button"]:not(:disabled) {
+		cursor: pointer;
+	}
+}
+
 html,
 body,
 #root {
