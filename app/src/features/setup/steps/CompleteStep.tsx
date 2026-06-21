@@ -13,11 +13,16 @@ export default function CompleteStep({ backend, onLaunch }: Props): React.ReactE
     const [ready, setReady] = useState(false);
 
     useEffect(() => {
-        invoke<SetupPaths>('get_setup_paths').then(paths => {
+        invoke<SetupPaths>('get_setup_paths').then(async paths => {
             writeSetting('llamaServerPath', paths.llama_server);
             writeSetting('modelPath', paths.model_path);
             writeSetting('mmprojPath', paths.mmproj_path);
             writeSetting('hardwareBackend', backend);
+            // Also mirror the backend to AppData so a later launch from a different
+            // webview origin (e.g. a packaged build that skips the wizard because the
+            // shared AppData assets already exist) can restore it instead of falling
+            // back to the cpu default and running generation on the CPU.
+            await invoke('persist_backend', { backend }).catch(() => { /* non-fatal */ });
             setReady(true);
         });
     }, [backend]);

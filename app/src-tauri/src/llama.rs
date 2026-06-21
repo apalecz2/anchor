@@ -22,6 +22,7 @@ use std::{
 use serde::Serialize;
 
 use crate::paths::{llama_exe_name, resolve_data_dir};
+use crate::setup::read_persisted_backend;
 
 const DEFAULT_CTX_SIZE: &str = "8192";
 const DEFAULT_IMAGE_MIN_TOKENS: &str = "1024";
@@ -201,6 +202,12 @@ pub fn llama_server_status(state: tauri::State<'_, AppState>) -> Result<String, 
     }
 }
 
+/// Whether a backend offloads to a GPU (and so warrants `--n-gpu-layers 999`).
+/// `cpu` — and any unrecognized value — stays CPU-only.
+fn is_gpu_backend(backend: &str) -> bool {
+    matches!(backend, "cuda" | "rocm" | "metal")
+}
+
 #[tauri::command]
 pub fn start_llama_server(
     app_handle: tauri::AppHandle,
@@ -244,10 +251,18 @@ pub fn start_llama_server(
         return Err("llama-server not found — run the setup wizard to download it.".into());
     }
 
-    let gpu_layers = match backend.as_str() {
-        "cuda" | "rocm" | "metal" => "999",
-        _ => "0",
+    // Resolve the *effective* backend. The frontend passes its localStorage value,
+    // which on a packaged build whose per-origin store never saw the wizard defaults to
+    // `cpu` — which would force `--n-gpu-layers 0` (CPU-only generation) even with a GPU
+    // build installed. So a non-GPU value is upgraded from the backend persisted to
+    // AppData by the wizard, making the on-disk install the source of truth (the same
+    // principle as the model-path heal) rather than fragile per-origin webview storage.
+    let effective_backend = if is_gpu_backend(&backend) {
+        backend.clone()
+    } else {
+        read_persisted_backend(&data_dir).unwrap_or_else(|| backend.clone())
     };
+    let gpu_layers = if is_gpu_backend(&effective_backend) { "999" } else { "0" };
 
     let port = pick_free_port()?;
 
@@ -258,7 +273,15 @@ pub fn start_llama_server(
         let _ = std::fs::create_dir_all(parent);
     }
     let (stdout, stderr) = match std::fs::File::create(&log_path) {
-        Ok(file) => {
+        Ok(mut file) => {
+            // Record the launch decision at the top of the log so the backend actually
+            // in effect (and whether layers will offload) is diagnosable without guessing
+            // from token rates. The child appends its own output after this line.
+            use std::io::Write as _;
+            let _ = writeln!(
+                file,
+                "[artifact] launching llama-server: requested_backend={backend} effective_backend={effective_backend} n_gpu_layers={gpu_layers}",
+            );
             let err = file.try_clone().map(Stdio::from).unwrap_or_else(|_| Stdio::null());
             (Stdio::from(file), err)
         }

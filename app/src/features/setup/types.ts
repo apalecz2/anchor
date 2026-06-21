@@ -44,4 +44,8 @@ export interface SetupPaths {
     llama_server: string;
     model_path: string;
     mmproj_path: string;
+    /** Backend last persisted by the wizard (to AppData), or null if never saved.
+     *  Lets a wizard-skipping launch restore the GPU choice instead of defaulting
+     *  to cpu — see useSetupCheck auto-heal. */
+    hardware_backend: Backend | null;
 }

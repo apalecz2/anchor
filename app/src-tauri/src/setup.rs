@@ -668,24 +668,65 @@ fn extract_archive_inner(
 }
 
 // ---------------------------------------------------------------------------
-// get_setup_paths
+// get_setup_paths / persist_backend
 // ---------------------------------------------------------------------------
+
+/// The chosen acceleration backend, persisted to AppData (not just webview
+/// localStorage) so it survives a launch that skips the wizard. localStorage is
+/// per-origin, so the dev origin (localhost:1420) and the packaged origin
+/// (tauri/asset localhost) keep *separate* stores: a build that finds the shared
+/// AppData assets already present skips the wizard and would otherwise fall back to
+/// the `cpu` default — launching llama-server with `--n-gpu-layers 0` and running
+/// generation on the CPU even when a GPU build is installed. Mirroring the choice on
+/// disk lets the auto-heal in `useSetupCheck` restore it for any origin.
+const BACKEND_FILENAME: &str = "hardware_backend";
+
+/// Backends the frontend may persist; guards against writing a garbage value that
+/// would later flow into the llama-server `--n-gpu-layers` decision.
+const VALID_BACKENDS: [&str; 4] = ["cpu", "cuda", "rocm", "metal"];
 
 #[derive(Serialize)]
 pub struct SetupPaths {
     pub llama_server: String,
     pub model_path: String,
     pub mmproj_path: String,
+    /// Backend last persisted by the wizard, or `None` if never written / invalid.
+    pub hardware_backend: Option<String>,
+}
+
+/// Read the backend persisted by the wizard from `data_dir`, ignoring an absent file
+/// or any value that isn't a recognized backend (corrupt/hand-edited) so a bad token
+/// can't reach the server. Shared by `get_setup_paths` and llama-server startup.
+pub fn read_persisted_backend(data_dir: &Path) -> Option<String> {
+    fs::read_to_string(data_dir.join(BACKEND_FILENAME))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| VALID_BACKENDS.contains(&s.as_str()))
 }
 
 #[tauri::command]
 pub fn get_setup_paths(app_handle: tauri::AppHandle) -> Result<SetupPaths, String> {
     let d = resolve_data_dir(&app_handle)?;
+    let hardware_backend = read_persisted_backend(&d);
     Ok(SetupPaths {
         llama_server: d.join("binaries").join(llama_exe_name()).to_string_lossy().into_owned(),
         model_path:   d.join("models").join(MODEL_FILENAME).to_string_lossy().into_owned(),
         mmproj_path:  d.join("models").join(MMPROJ_FILENAME).to_string_lossy().into_owned(),
+        hardware_backend,
     })
+}
+
+/// Persist the wizard's chosen acceleration backend to AppData so it can be restored
+/// on a later launch whose (per-origin) localStorage never saw the wizard. Rejects an
+/// unrecognized value rather than writing it.
+#[tauri::command]
+pub fn persist_backend(app_handle: tauri::AppHandle, backend: String) -> Result<(), String> {
+    if !VALID_BACKENDS.contains(&backend.as_str()) {
+        return Err(format!("unknown backend: {backend}"));
+    }
+    let d = resolve_data_dir(&app_handle)?;
+    fs::write(d.join(BACKEND_FILENAME), &backend)
+        .map_err(|e| format!("failed to persist backend: {e}"))
 }
 
 // ---------------------------------------------------------------------------

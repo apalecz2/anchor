@@ -98,6 +98,7 @@ pub fn run() {
             setup::cancel_setup,
             setup::verify_file_hash,
             setup::get_setup_paths,
+            setup::persist_backend,
             setup::get_asset_manifest,
             setup::extract_archive,
         ])

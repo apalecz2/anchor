@@ -53,6 +53,14 @@ export function readSetting<K extends keyof SettingsSchema>(key: K): SettingsSch
     return value as SettingsSchema[K];
 }
 
+/** Whether a key has ever been explicitly written for this origin. Distinct from
+ *  `readSetting`, which always returns a value (the default) and so can't tell
+ *  "never set" from "set to the default" — needed for `hardwareBackend`, whose
+ *  default (`cpu`) must not mask a missing value that should be healed from disk. */
+export function hasSetting(key: keyof SettingsSchema): boolean {
+    return localStorage.getItem(STORAGE_KEYS[key]) !== null;
+}
+
 export function writeSetting<K extends keyof SettingsSchema>(key: K, value: SettingsSchema[K]): void {
     localStorage.setItem(STORAGE_KEYS[key], value);
 }
