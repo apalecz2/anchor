@@ -1,5 +1,6 @@
 import { HashRouter, Routes, Route } from 'react-router';
 import "./App.css";
+import Icon from './components/Icon';
 import AppLayout from './layouts/AppLayout';
 import Dashboard from './pages/Dashboard';
 import Session from './pages/Session';
@@ -31,9 +32,7 @@ export default function App() {
     if (isLoading) {
         return (
             <div className="h-screen bg-surface flex items-center justify-center">
-                <span className="material-symbols-outlined text-on-surface-variant animate-spin" style={{ fontSize: '32px' }}>
-                    progress_activity
-                </span>
+                <Icon name="progress_activity" size={32} className="text-on-surface-variant animate-spin" />
             </div>
         );
     }

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router';
 import { DeleteSessionDialog } from '../features/sessions/DeleteSessionDialog';
 import { getDb } from '../lib/db';
+import Icon from '../components/Icon';
 
 interface Session {
     id: string;
@@ -111,12 +112,7 @@ export default function Search(): React.ReactElement {
                     
                     {/* Search Input */}
                     <div className="relative flex w-full items-center">
-                        <span 
-                            className="material-symbols-outlined absolute left-4 text-[24px] text-on-surface-variant"
-                            aria-hidden="true"
-                        >
-                            search
-                        </span>
+                        <Icon name="search" size={24} className="absolute left-4 text-on-surface-variant" />
                         <input
                             type="text"
                             placeholder="Search extractions..."
@@ -131,7 +127,7 @@ export default function Search(): React.ReactElement {
                 <div className="flex-1 overflow-y-auto pb-4 pr-2">
                     {isLoading ? (
                         <div className="flex items-center text-on-surface-variant">
-                            <span className="material-symbols-outlined mr-2 animate-spin">refresh</span>
+                            <Icon name="refresh" className="mr-2 animate-spin" />
                             Searching...
                         </div>
                     ) : results.length > 0 ? (
@@ -159,9 +155,7 @@ export default function Search(): React.ReactElement {
                                         className="flex shrink-0 items-center gap-2 border-l border-surface-variant bg-surface-container px-4 text-sm font-medium text-on-surface-variant transition-colors hover:bg-error/10 hover:text-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/20"
                                         aria-label={`Delete session ${session.title}`}
                                     >
-                                        <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
-                                            delete
-                                        </span>
+                                        <Icon name="delete" size={18} />
                                         Delete
                                     </button>
                                 </div>
@@ -182,7 +176,7 @@ export default function Search(): React.ReactElement {
                             disabled={page === 1}
                             className="flex h-10 items-center justify-center gap-2 rounded-[10px] bg-surface-variant px-4 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 disabled:pointer-events-none disabled:opacity-50"
                         >
-                            <span className="material-symbols-outlined text-[18px]">arrow_back</span>
+                            <Icon name="arrow_back" size={18} />
                             Previous
                         </button>
                         
@@ -196,7 +190,7 @@ export default function Search(): React.ReactElement {
                             className="flex h-10 items-center justify-center gap-2 rounded-[10px] bg-surface-variant px-4 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 disabled:pointer-events-none disabled:opacity-50"
                         >
                             Next
-                            <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
+                            <Icon name="arrow_forward" size={18} />
                         </button>
                     </div>
                 )}

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { getDb } from '../lib/db';
 import { deleteSession } from '../features/sessions/sessionActions';
+import Icon from '../components/Icon';
 
 import { writeFile, mkdir, BaseDirectory } from '@tauri-apps/plugin-fs';
 import { join, appDataDir } from '@tauri-apps/api/path';
@@ -194,12 +195,7 @@ export default function Dashboard(): React.ReactElement {
                     />
 
                     <div className="w-16 h-16 rounded-full bg-surface-container flex items-center justify-center mb-6 group-hover:scale-110 transition-transform duration-300">
-                        <span
-                            className="material-symbols-outlined text-primary"
-                            style={{ fontSize: '32px', fontVariationSettings: "'wght' 300" }}
-                        >
-                            upload_file
-                        </span>
+                        <Icon name="upload_file" size={32} weight={300} className="text-primary" />
                     </div>
 
                     <h3 className="font-headline-md text-headline-md text-primary mb-2">Select a file to upload</h3>
@@ -214,15 +210,15 @@ export default function Dashboard(): React.ReactElement {
                 {/* Supported File Types */}
                 <div className="flex items-center gap-6 text-on-surface-variant font-label-md text-label-md">
                     <span className="flex items-center gap-2">
-                        <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>picture_as_pdf</span>
+                        <Icon name="picture_as_pdf" size={16} />
                         PDF
                     </span>
                     <span className="flex items-center gap-2">
-                        <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>image</span>
+                        <Icon name="image" size={16} />
                         PNG
                     </span>
                     <span className="flex items-center gap-2">
-                        <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>image</span>
+                        <Icon name="image" size={16} />
                         JPEG
                     </span>
                 </div>

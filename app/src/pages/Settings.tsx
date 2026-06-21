@@ -4,6 +4,7 @@ import { useTheme } from '../hooks/useTheme';
 import { requestSetupRerun } from '../features/setup/useSetupCheck';
 import { deleteAllSessions } from '../features/sessions/sessionActions';
 import ConfirmDialog from '../components/ConfirmDialog';
+import Icon from '../components/Icon';
 
 function Section({ title, description, children }: {
     title: string;
@@ -68,7 +69,7 @@ function PathField({ label, hint, value, onChange, onBrowse, disabled = false }:
                     disabled={disabled}
                     className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-outline-variant bg-surface-container hover:bg-surface-container-high font-label-md text-label-md text-on-surface-variant transition-colors"
                 >
-                    <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>folder_open</span>
+                    <Icon name="folder_open" size={16} />
                     Browse
                 </button>
             </div>
@@ -154,9 +155,7 @@ export default function Settings(): React.ReactElement {
                                                 : 'bg-surface-container text-on-surface-variant hover:bg-surface-container-high'
                                         }`}
                                     >
-                                        <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
-                                            {t === 'light' ? 'light_mode' : 'dark_mode'}
-                                        </span>
+                                        <Icon name={t === 'light' ? 'light_mode' : 'dark_mode'} size={16} />
                                         {t === 'light' ? 'Light' : 'Dark'}
                                     </button>
                                 ))}
@@ -195,12 +194,7 @@ export default function Settings(): React.ReactElement {
                             </button>
                             {pathsSaved && (
                                 <span className="mt-4 flex items-center gap-1.5 font-body-sm text-body-sm text-on-surface-variant">
-                                    <span
-                                        className="material-symbols-outlined text-primary"
-                                        style={{ fontSize: '16px', fontVariationSettings: "'FILL' 1" }}
-                                    >
-                                        check_circle
-                                    </span>
+                                    <Icon name="check_circle" size={16} fill={1} className="text-primary" />
                                     Saved
                                 </span>
                             )}
@@ -216,7 +210,7 @@ export default function Settings(): React.ReactElement {
                             description="This version recognizes English only. Other languages are not yet supported."
                         >
                             <span className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-outline-variant bg-surface font-label-md text-label-md text-on-surface-variant">
-                                <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>translate</span>
+                                <Icon name="translate" size={14} />
                                 English only
                             </span>
                         </SettingRow>
@@ -238,7 +232,7 @@ export default function Settings(): React.ReactElement {
                                 onClick={requestSetupRerun}
                                 className="flex items-center gap-1.5 px-4 py-2 rounded-lg border border-outline-variant bg-surface-container hover:bg-surface-container-high font-label-md text-label-md text-on-surface transition-colors"
                             >
-                                <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>restart_alt</span>
+                                <Icon name="restart_alt" size={16} />
                                 Re-run setup
                             </button>
                         </SettingRow>
@@ -267,7 +261,7 @@ export default function Settings(): React.ReactElement {
                                     disabled={deleting}
                                     className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-error text-on-error font-label-md text-label-md hover:bg-error/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
                                 >
-                                    <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>delete_forever</span>
+                                    <Icon name="delete_forever" size={16} />
                                     {deleting ? 'Deleting…' : 'Delete all'}
                                 </button>
                             </div>

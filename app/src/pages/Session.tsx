@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { createPortal } from 'react-dom';
 import { useParams } from 'react-router';
 import DocumentViewer from '../components/DocumentViewer';
+import Icon from '../components/Icon';
+import { Modal } from '../components/Modal';
 import type { DocumentViewerHandle } from '../components/DocumentViewer';
 import ProvenanceTable from '../components/ProvenanceTable';
 import type { SelectedCell } from '../components/ProvenanceTable';
@@ -21,7 +22,6 @@ import type { BoundingBox } from '../features/ocr/types';
 import type { ProvenanceCell } from '../features/extraction/types';
 import { ExportMenu } from '../features/export/ExportMenu';
 import { buildFileStem } from '../features/export/exportUtils';
-import { useDialogA11y } from '../hooks/useDialogA11y';
 
 // Ordered stages shown in the table-extraction progress stepper. The order matches
 // the phase transitions in requestTableFormat (useLlamaChat).
@@ -42,9 +42,9 @@ function ExtractionProgress({ phase }: { phase: ExtractionPhase }): React.ReactE
                     <li key={step.key} className="flex items-start gap-3">
                         <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center">
                             {status === 'done' ? (
-                                <span className="material-symbols-outlined text-[20px] text-primary" aria-hidden="true">check_circle</span>
+                                <Icon name="check_circle" size={20} className="text-primary" />
                             ) : status === 'active' ? (
-                                <span className="material-symbols-outlined animate-spin text-[20px] text-primary" aria-hidden="true">progress_activity</span>
+                                <Icon name="progress_activity" size={20} className="animate-spin text-primary" />
                             ) : (
                                 <span className="h-3 w-3 rounded-full border-2 border-outline-variant" />
                             )}
@@ -75,7 +75,7 @@ function ExtractionProgress({ phase }: { phase: ExtractionPhase }): React.ReactE
 function HelpItem({ icon, title, children }: { icon: string; title: string; children: React.ReactNode }): React.ReactElement {
     return (
         <div className="flex gap-3">
-            <span className="material-symbols-outlined mt-0.5 shrink-0 text-[20px] text-primary" aria-hidden="true">{icon}</span>
+            <Icon name={icon} size={20} className="mt-0.5 shrink-0 text-primary" />
             <div>
                 <p className="font-medium text-on-surface">{title}</p>
                 <p className="text-on-surface-variant">{children}</p>
@@ -84,47 +84,36 @@ function HelpItem({ icon, title, children }: { icon: string; title: string; chil
     );
 }
 
-// Modal help overlay. Covers the viewport (fixed) so it isn't clipped by the panes'
-// overflow-hidden; closes on backdrop click or Escape via useDialogA11y.
+// Modal help overlay. Portals to <body> and covers the viewport (fixed) so a
+// `container-type` ancestor (the @container panes) can't clip it to one pane; closes
+// on backdrop click or Escape via the shared Modal/useDialogA11y scaffolding.
 function HelpOverlay({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }): React.ReactElement {
-    const dialogRef = useDialogA11y<HTMLDivElement>({ active: true, onClose });
-    // Portal to <body>: a `container-type` ancestor (the @container panes) would
-    // otherwise become the containing block for this fixed overlay and clip it to
-    // one pane instead of the whole window.
-    return createPortal(
-        <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-            role="presentation"
-            onClick={onClose}
+    return (
+        <Modal
+            open
+            onClose={onClose}
+            portal
+            labelledBy="help-overlay-title"
+            backdropClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+            className="flex max-h-[80vh] w-full max-w-lg flex-col rounded-2xl border border-outline-variant bg-surface-bright shadow-xl focus:outline-none"
         >
-            <div
-                ref={dialogRef}
-                tabIndex={-1}
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="help-overlay-title"
-                className="flex max-h-[80vh] w-full max-w-lg flex-col rounded-2xl border border-outline-variant bg-surface-bright shadow-xl focus:outline-none"
-                onClick={e => e.stopPropagation()}
-            >
-                <div className="flex items-center justify-between border-b border-outline-variant px-6 py-4">
-                    <h2 id="help-overlay-title" className="flex items-center gap-2 text-lg font-bold text-primary">
-                        <span className="material-symbols-outlined text-[22px]" aria-hidden="true">info</span>
-                        {title}
-                    </h2>
-                    <button
-                        onClick={onClose}
-                        aria-label="Close help"
-                        className="flex h-8 w-8 items-center justify-center rounded-lg text-on-surface-variant transition-colors hover:bg-surface-variant hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
-                    >
-                        <span className="material-symbols-outlined text-[20px]" aria-hidden="true">close</span>
-                    </button>
-                </div>
-                <div className="space-y-4 overflow-y-auto px-6 py-5 text-sm">
-                    {children}
-                </div>
+            <div className="flex items-center justify-between border-b border-outline-variant px-6 py-4">
+                <h2 id="help-overlay-title" className="flex items-center gap-2 text-lg font-bold text-primary">
+                    <Icon name="info" size={22} />
+                    {title}
+                </h2>
+                <button
+                    onClick={onClose}
+                    aria-label="Close help"
+                    className="flex h-8 w-8 items-center justify-center rounded-lg text-on-surface-variant transition-colors hover:bg-surface-variant hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+                >
+                    <Icon name="close" size={20} />
+                </button>
             </div>
-        </div>,
-        document.body
+            <div className="space-y-4 overflow-y-auto px-6 py-5 text-sm">
+                {children}
+            </div>
+        </Modal>
     );
 }
 
@@ -245,9 +234,7 @@ function CopyButton({ onCopy, label = 'Copy' }: { onCopy: () => Promise<void> | 
             aria-label={copied ? 'Copied to clipboard' : `${label} (copies to clipboard)`}
             className="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-sm font-medium text-on-surface-variant transition-colors hover:bg-surface-variant hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
         >
-            <span className={`material-symbols-outlined text-[18px] ${copied ? 'text-green-600' : ''}`} aria-hidden="true">
-                {copied ? 'check' : 'content_copy'}
-            </span>
+            <Icon name={copied ? 'check' : 'content_copy'} size={18} className={copied ? 'text-green-600' : ''} />
             {copied ? 'Copied' : label}
         </button>
     );
@@ -270,7 +257,7 @@ function OutputCard({ icon, title, action, subheader, bodyClassName = 'px-5 py-4
             <div className="border-b border-outline-variant bg-surface-variant/40">
                 <div className="flex items-center justify-between gap-2 px-4 py-2">
                     <div className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-on-surface-variant">
-                        <span className="material-symbols-outlined text-[18px]" aria-hidden="true">{icon}</span>
+                        <Icon name={icon} size={18} />
                         <span className="truncate">{title}</span>
                     </div>
                     {action}
@@ -557,7 +544,7 @@ function SessionContent(): React.ReactElement {
                     {isDbLoading ? (
                         showProcessing ? (
                             <div className="flex w-full flex-col items-center justify-center gap-3 h-full text-on-surface-variant">
-                                <span className="material-symbols-outlined animate-spin" style={{ fontSize: '28px' }}>progress_activity</span>
+                                <Icon name="progress_activity" size={28} className="animate-spin" />
                                 <span className="text-sm">
                                     {processProgress
                                         ? `Processing page ${processProgress.current} of ${processProgress.total}…`
@@ -573,13 +560,13 @@ function SessionContent(): React.ReactElement {
                         ) : null
                     ) : processingCancelled ? (
                         <div className="flex w-full flex-col items-center justify-center gap-3 text-on-surface-variant h-full">
-                            <span className="material-symbols-outlined" style={{ fontSize: '28px' }} aria-hidden="true">cancel</span>
+                            <Icon name="cancel" size={28} />
                             <p className="text-sm text-center max-w-sm">Processing was cancelled.</p>
                             <button onClick={retryProcessing} className="px-4 py-1 text-sm bg-primary text-on-primary rounded-lg hover:bg-primary/90">Process document</button>
                         </div>
                     ) : dbError ? (
                         <div className="flex w-full flex-col items-center justify-center gap-3 text-error h-full">
-                            <span className="material-symbols-outlined" style={{ fontSize: '28px' }} aria-hidden="true">error</span>
+                            <Icon name="error" size={28} />
                             <p className="text-sm text-center max-w-sm">{dbError}</p>
                             <button onClick={retryProcessing} className="px-4 py-1 text-sm bg-primary text-on-primary rounded-lg hover:bg-primary/90">Retry</button>
                         </div>
@@ -602,7 +589,7 @@ function SessionContent(): React.ReactElement {
                         />
                     ) : activePage?.error ? (
                         <div className="flex w-full flex-col items-center justify-center gap-3 text-error h-full">
-                            <span className="material-symbols-outlined" style={{ fontSize: '28px' }} aria-hidden="true">broken_image</span>
+                            <Icon name="broken_image" size={28} />
                             <p className="text-sm text-center max-w-sm">This page could not be processed: {activePage.error}</p>
                             <button onClick={retryProcessing} className="px-4 py-1 text-sm bg-primary text-on-primary rounded-lg hover:bg-primary/90">Retry document</button>
                         </div>
@@ -629,7 +616,7 @@ function SessionContent(): React.ReactElement {
                                     aria-pressed={activeTool === 'draw'}
                                     className={`flex h-7 items-center gap-1 px-3 rounded-md text-sm transition-colors ${activeTool === 'draw' ? 'bg-surface text-primary shadow-sm' : 'text-on-surface-variant hover:text-on-surface'}`}
                                 >
-                                    <span className="material-symbols-outlined text-[16px]">draw</span>
+                                    <Icon name="draw" size={16} />
                                     Edit
                                 </button>
                                 <button
@@ -637,7 +624,7 @@ function SessionContent(): React.ReactElement {
                                     aria-pressed={activeTool === 'pan'}
                                     className={`flex h-7 items-center gap-1 px-3 rounded-md text-sm transition-colors ${activeTool === 'pan' ? 'bg-surface text-primary shadow-sm' : 'text-on-surface-variant hover:text-on-surface'}`}
                                 >
-                                    <span className="material-symbols-outlined text-[16px]">pan_tool</span>
+                                    <Icon name="pan_tool" size={16} />
                                     Pan
                                 </button>
                             </div>
@@ -652,7 +639,7 @@ function SessionContent(): React.ReactElement {
                                         className={iconBtnClass}
                                         type="button"
                                     >
-                                        <span className="material-symbols-outlined text-[18px]">chevron_left</span>
+                                        <Icon name="chevron_left" size={18} />
                                     </button>
                                     <input
                                         type="text"
@@ -675,7 +662,7 @@ function SessionContent(): React.ReactElement {
                                         className={iconBtnClass}
                                         type="button"
                                     >
-                                        <span className="material-symbols-outlined text-[18px]">chevron_right</span>
+                                        <Icon name="chevron_right" size={18} />
                                     </button>
                                 </div>
                             )}
@@ -688,7 +675,7 @@ function SessionContent(): React.ReactElement {
                                     onClick={() => viewerRef.current?.zoomTo(viewTransform.scale - 0.25)}
                                     type="button"
                                 >
-                                    <span className="material-symbols-outlined text-[18px]" style={{ fontVariationSettings: "'FILL' 0" }}>zoom_out</span>
+                                    <Icon name="zoom_out" size={18} fill={0} />
                                 </button>
 
                                 <input
@@ -708,7 +695,7 @@ function SessionContent(): React.ReactElement {
                                     onClick={() => viewerRef.current?.zoomTo(viewTransform.scale + 0.25)}
                                     type="button"
                                 >
-                                    <span className="material-symbols-outlined text-[18px]" style={{ fontVariationSettings: "'FILL' 0" }}>zoom_in</span>
+                                    <Icon name="zoom_in" size={18} fill={0} />
                                 </button>
 
                                 <button
@@ -718,7 +705,7 @@ function SessionContent(): React.ReactElement {
                                     type="button"
                                     title="Fit to screen"
                                 >
-                                    <span className="material-symbols-outlined text-[18px]" style={{ fontVariationSettings: "'FILL' 0" }}>fit_screen</span>
+                                    <Icon name="fit_screen" size={18} fill={0} />
                                 </button>
                             </div>
                             </div>
@@ -732,7 +719,7 @@ function SessionContent(): React.ReactElement {
                                     type="button"
                                     className={iconBtnClass}
                                 >
-                                    <span className="material-symbols-outlined text-[18px]">info</span>
+                                    <Icon name="info" size={18} />
                                 </button>
                             </div>
                         </div>
@@ -784,7 +771,7 @@ function SessionContent(): React.ReactElement {
                     ) : outputView === 'raw' ? (
                         <>
                             <div className="mb-4 flex items-start gap-2 rounded-lg border border-outline-variant bg-surface-variant/40 px-3 py-2 text-sm text-on-surface-variant">
-                                <span className="material-symbols-outlined shrink-0 text-[18px]" aria-hidden="true">info</span>
+                                <Icon name="info" size={18} className="shrink-0" />
                                 <span>
                                     This is an intermediate result — a quick first-pass extraction that may
                                     contain inaccuracies. Continue with
@@ -845,7 +832,7 @@ function SessionContent(): React.ReactElement {
                                 truncation warning as a banner above it (rather than replacing it). */}
                             {!isExtracting && ((provenanceCells?.length ?? 0) > 0 || !!savedCsv) && (extractionError || truncated || contextOverflow) && (
                                 <div className={`mb-3 flex items-start gap-2 rounded-lg border px-3 py-2 text-sm ${extractionError ? 'border-error/40 bg-error/5 text-error' : 'border-amber-400 bg-amber-50 text-amber-900'}`}>
-                                    <span className="material-symbols-outlined text-[18px] shrink-0" aria-hidden="true">{extractionError ? 'error' : 'warning'}</span>
+                                    <Icon name={extractionError ? 'error' : 'warning'} size={18} className="shrink-0" />
                                     <span className="flex-1">
                                         {extractionError
                                             ?? (contextOverflow
@@ -879,7 +866,7 @@ function SessionContent(): React.ReactElement {
                                         className="flex items-center gap-2 rounded-lg border border-outline-variant px-4 py-1 text-sm text-on-surface-variant transition-colors hover:bg-surface-variant hover:text-on-surface disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent disabled:hover:text-on-surface-variant"
                                     >
                                         {isCancelling && (
-                                            <span className="material-symbols-outlined animate-spin text-[16px]" aria-hidden="true">progress_activity</span>
+                                            <Icon name="progress_activity" size={16} className="animate-spin" />
                                         )}
                                         {isCancelling ? 'Cancelling…' : 'Cancel'}
                                     </button>
@@ -959,7 +946,7 @@ function SessionContent(): React.ReactElement {
                                 })()
                             ) : (extractionError || llamaError) ? (
                                 <div className="flex flex-col h-full items-center justify-center gap-3">
-                                    <span className="material-symbols-outlined text-error text-[28px]" aria-hidden="true">error</span>
+                                    <Icon name="error" size={28} className="text-error" />
                                     <p className="text-error text-sm text-center max-w-sm">{extractionError || llamaError}</p>
                                     <button
                                         onClick={() => handleFormatTable()}
@@ -978,7 +965,7 @@ function SessionContent(): React.ReactElement {
                                         disabled={isExtracting}
                                         className="flex h-10 shrink-0 items-center gap-2 rounded-lg bg-primary px-5 text-sm text-on-primary shadow-sm transition-colors hover:bg-primary/90 disabled:opacity-50"
                                     >
-                                        <span className="material-symbols-outlined text-[18px]" aria-hidden="true">table</span>
+                                        <Icon name="table" size={18} />
                                         {isExtracting ? 'Formatting...' : 'Format as Table'}
                                     </button>
                                 </div>
@@ -1003,7 +990,7 @@ function SessionContent(): React.ReactElement {
                                                 onClick={() => setOutputView('table')}
                                                 className="flex h-9 shrink-0 items-center gap-2 px-4 text-sm bg-primary text-on-primary rounded-lg hover:bg-primary/90 transition-colors"
                                             >
-                                                <span className="material-symbols-outlined text-[18px]" aria-hidden="true">table</span>
+                                                <Icon name="table" size={18} />
                                                 Go to Table
                                             </button>
                                         ) : (
@@ -1045,7 +1032,7 @@ function SessionContent(): React.ReactElement {
                                     type="button"
                                     className={iconBtnClass}
                                 >
-                                    <span className="material-symbols-outlined text-[18px]">info</span>
+                                    <Icon name="info" size={18} />
                                 </button>
                             </div>
                         </div>

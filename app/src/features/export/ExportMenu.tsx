@@ -3,6 +3,7 @@ import type { ProvenanceCell } from '../extraction/types';
 import { parseCSV } from '../llama/promptUtils';
 import { toCsv, toHtml, toMarkdown, toPlainText, saveWithDialog } from './exportUtils';
 import type { SaveFormat } from './exportUtils';
+import Icon from '../../components/Icon';
 
 interface ExportMenuProps {
     provenanceCells: ProvenanceCell[][] | null;
@@ -81,11 +82,9 @@ export function ExportMenu({ provenanceCells, savedCsv, fileStem, disabled, open
                 aria-haspopup="true"
                 aria-expanded={open}
             >
-                <span className="material-symbols-outlined text-[16px]">
-                    {copied ? 'check' : 'download'}
-                </span>
+                <Icon name={copied ? 'check' : 'download'} size={16} />
                 {copied ? 'Copied!' : 'Export'}
-                <span className="material-symbols-outlined text-[14px] leading-none">expand_more</span>
+                <Icon name="expand_more" size={14} className="leading-none" />
             </button>
 
             {open && (
@@ -96,7 +95,7 @@ export function ExportMenu({ provenanceCells, savedCsv, fileStem, disabled, open
                             onClick={() => { void handleExport(key); }}
                             className="w-full text-left px-4 py-2 text-sm text-on-surface hover:bg-surface-variant transition-colors flex items-center gap-2"
                         >
-                            <span className="material-symbols-outlined text-[16px]">{icon}</span>
+                            <Icon name={icon} size={16} />
                             {label}
                         </button>
                     ))}
@@ -105,7 +104,7 @@ export function ExportMenu({ provenanceCells, savedCsv, fileStem, disabled, open
                         onClick={handleCopy}
                         className="w-full text-left px-4 py-2 text-sm text-on-surface hover:bg-surface-variant transition-colors flex items-center gap-2"
                     >
-                        <span className="material-symbols-outlined text-[16px]">content_copy</span>
+                        <Icon name="content_copy" size={16} />
                         Copy table
                     </button>
                 </div>

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { writeSetting } from '../../../lib/settings';
 import type { Backend, SetupPaths } from '../types';
+import Icon from '../../../components/Icon';
 
 interface Props {
     backend: Backend;
@@ -23,12 +24,7 @@ export default function CompleteStep({ backend, onLaunch }: Props): React.ReactE
 
     return (
         <div className="flex flex-col gap-8 items-center text-center py-4">
-            <span
-                className="material-symbols-outlined text-primary"
-                style={{ fontSize: '64px', fontVariationSettings: "'FILL' 1" }}
-            >
-                check_circle
-            </span>
+            <Icon name="check_circle" size={64} fill={1} className="text-primary" />
 
             <div>
                 <h2 className="font-display-sm text-display-sm text-on-surface">Setup complete</h2>
@@ -48,7 +44,7 @@ export default function CompleteStep({ backend, onLaunch }: Props): React.ReactE
                 onClick={onLaunch}
                 className="flex items-center gap-2 px-8 py-3 rounded-lg bg-primary text-on-primary font-label-lg text-label-lg hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
-                <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>rocket_launch</span>
+                <Icon name="rocket_launch" size={18} />
                 Launch Artifact
             </button>
         </div>

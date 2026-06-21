@@ -5,6 +5,7 @@ import { useLocation, useNavigate } from 'react-router';
 import { getDb } from '../lib/db';
 import { subscribeToSessionChanges } from '../features/sessions/sessionEvents';
 import { useTheme } from '../hooks/useTheme';
+import Icon from '../components/Icon';
 
 interface SessionRow {
     id: string;
@@ -111,9 +112,7 @@ export default function AppLayout() {
                             onClick={() => setTheme(isDarkMode ? 'light' : 'dark')}
                             type="button"
                         >
-                            <span className="material-symbols-outlined text-[20px]" style={{ fontVariationSettings: "'FILL' 0" }}>
-                                {isDarkMode ? 'dark_mode' : 'light_mode'}
-                            </span>
+                            <Icon name={isDarkMode ? 'dark_mode' : 'light_mode'} size={20} fill={0} />
                         </button>
                     </div>
                 )}

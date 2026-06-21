@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import ConfirmDialog from '../../../components/ConfirmDialog';
+import Icon from '../../../components/Icon';
 import type { AssetManifestEntry, AssetProgress, SetupConfig } from '../types';
 
 interface Props {
@@ -353,7 +354,7 @@ export default function DownloadStep({ config, onComplete, onError, onCancel }: 
                         </span>
                         {etaText && (
                             <span className="flex items-center gap-1.5 font-body-md text-body-md text-on-surface">
-                                <span className="material-symbols-outlined" style={{ fontSize: '18px' }} aria-hidden="true">schedule</span>
+                                <Icon name="schedule" size={18} />
                                 {etaText}
                             </span>
                         )}
@@ -364,7 +365,7 @@ export default function DownloadStep({ config, onComplete, onError, onCancel }: 
             {/* Collapsible per-component detail — closed by default to keep things minimal */}
             {manifest.length === 0 ? (
                 <div className="flex items-center gap-3 text-on-surface-variant font-body-md text-body-md">
-                    <span className="material-symbols-outlined animate-spin" style={{ fontSize: '20px' }}>progress_activity</span>
+                    <Icon name="progress_activity" size={20} className="animate-spin" />
                     Preparing download list…
                 </div>
             ) : (
@@ -375,9 +376,7 @@ export default function DownloadStep({ config, onComplete, onError, onCancel }: 
                         className="flex items-center gap-1 self-start font-label-md text-label-md text-on-surface-variant hover:text-on-surface transition-colors"
                         aria-expanded={showDetails}
                     >
-                        <span className="material-symbols-outlined" style={{ fontSize: '18px' }} aria-hidden="true">
-                            {showDetails ? 'expand_less' : 'expand_more'}
-                        </span>
+                        <Icon name={showDetails ? 'expand_less' : 'expand_more'} size={18} />
                         {showDetails ? 'Hide details' : 'Show details'}
                     </button>
 
@@ -467,25 +466,20 @@ export default function DownloadStep({ config, onComplete, onError, onCancel }: 
 function StatusIcon({ status }: { status: AssetProgress['status'] }): React.ReactElement {
     if (status === 'done' || status === 'skipped') {
         return (
-            <span
-                className="material-symbols-outlined text-primary shrink-0"
-                style={{ fontSize: '20px', fontVariationSettings: "'FILL' 1" }}
-            >
-                check_circle
-            </span>
+            <Icon name="check_circle" size={20} fill={1} className="text-primary shrink-0" />
         );
     }
     if (status === 'error') {
         return (
-            <span className="material-symbols-outlined text-error shrink-0" style={{ fontSize: '20px' }}>error</span>
+            <Icon name="error" size={20} className="text-error shrink-0" />
         );
     }
     if (status === 'downloading' || status === 'verifying' || status === 'extracting') {
         return (
-            <span className="material-symbols-outlined text-primary animate-spin shrink-0" style={{ fontSize: '20px' }}>progress_activity</span>
+            <Icon name="progress_activity" size={20} className="text-primary animate-spin shrink-0" />
         );
     }
     return (
-        <span className="material-symbols-outlined text-on-surface-variant/40 shrink-0" style={{ fontSize: '20px' }}>radio_button_unchecked</span>
+        <Icon name="radio_button_unchecked" size={20} className="text-on-surface-variant/40 shrink-0" />
     );
 }

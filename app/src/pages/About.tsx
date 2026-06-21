@@ -1,15 +1,11 @@
 import React from 'react';
+import Icon from '../components/Icon';
 
 function FeatureCard({ icon, title, body }: { icon: string; title: string; body: string }) {
     return (
         <div className="rounded-[10px] border border-outline-variant bg-surface-container p-6 flex flex-col gap-3">
             <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
-                <span
-                    className="material-symbols-outlined text-primary"
-                    style={{ fontSize: '20px', fontVariationSettings: "'wght' 300" }}
-                >
-                    {icon}
-                </span>
+                <Icon name={icon} size={20} weight={300} className="text-primary" />
             </div>
             <h3 className="font-headline-md text-headline-md text-on-surface">{title}</h3>
             <p className="font-body-md text-body-md text-on-surface-variant leading-relaxed">{body}</p>
@@ -34,7 +30,7 @@ function StepRow({ number, title, body }: { number: string; title: string; body:
 function FormatBadge({ icon, label }: { icon: string; label: string }) {
     return (
         <span className="flex items-center gap-2 px-3 py-1.5 rounded-[10px] border border-outline-variant bg-surface-container font-label-md text-label-md text-on-surface-variant">
-            <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>{icon}</span>
+            <Icon name={icon} size={14} />
             {label}
         </span>
     );
@@ -83,12 +79,7 @@ export default function About(): React.ReactElement {
                             { icon: 'search_off', label: 'Verification is tedious — no link between source and output' },
                         ].map(({ icon, label }) => (
                             <div key={icon} className="flex gap-3 items-start rounded-[10px] border border-outline-variant bg-surface-container p-4">
-                                <span
-                                    className="material-symbols-outlined text-on-surface-variant shrink-0 mt-0.5"
-                                    style={{ fontSize: '18px', fontVariationSettings: "'wght' 300" }}
-                                >
-                                    {icon}
-                                </span>
+                                <Icon name={icon} size={18} weight={300} className="text-on-surface-variant shrink-0 mt-0.5" />
                                 <p className="font-body-md text-body-md text-on-surface-variant">{label}</p>
                             </div>
                         ))}

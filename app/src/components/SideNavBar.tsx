@@ -1,6 +1,7 @@
 import { FC, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { DeleteSessionDialog } from '../features/sessions/DeleteSessionDialog';
+import Icon from './Icon';
 
 // ─── Nav Item Definition ───────────────────────────────────────────────────────
 // Add, remove, or reorder items here to change the sidebar contents.
@@ -90,9 +91,7 @@ const SideNavBar: FC<SideNavBarProps> = ({
                     }
                 `}
             >
-                <span className="material-symbols-outlined text-[20px]" style={{ fontVariationSettings: "'FILL' 0" }}>
-                    {collapsed ? 'menu' : 'chevron_left'}
-                </span>
+                <Icon name={collapsed ? 'menu' : 'chevron_left'} size={20} fill={0} />
             </button>
 
             {/* Sidebar Container */}
@@ -134,17 +133,12 @@ const SideNavBar: FC<SideNavBarProps> = ({
                         const content = (
                             <>
                                 {/* Icon — always visible, centered in collapsed state */}
-                                <span
-                                    className="material-symbols-outlined flex min-w-[24px] justify-center text-[24px]"
-                                    style={{
-                                        fontVariationSettings: isActive
-                                            ? "'FILL' 1"
-                                            : "'FILL' 0",
-                                    }}
-                                    aria-hidden="true"
-                                >
-                                    {item.icon}
-                                </span>
+                                <Icon
+                                    name={item.icon}
+                                    size={24}
+                                    fill={isActive ? 1 : 0}
+                                    className="flex min-w-[24px] justify-center"
+                                />
 
                                 {/*
                                  * Label visibility rules:

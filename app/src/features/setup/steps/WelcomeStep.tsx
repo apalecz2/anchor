@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import type { HardwareInfo } from '../types';
 import { BACKEND_LABEL } from '../backend';
+import Icon from '../../../components/Icon';
 
 interface Props {
     onAutomatic: (hardware: HardwareInfo) => void;
@@ -54,12 +55,7 @@ export default function WelcomeStep({ onAutomatic, onCustom }: Props): React.Rea
             <div className="rounded-[10px] border border-outline-variant bg-surface-container divide-y divide-outline-variant">
                 {ASSETS.map(({ icon, label, size }) => (
                     <div key={label} className="flex items-center gap-4 px-5 py-4">
-                        <span
-                            className="material-symbols-outlined text-primary shrink-0"
-                            style={{ fontSize: '20px' }}
-                        >
-                            {icon}
-                        </span>
+                        <Icon name={icon} size={20} className="text-primary shrink-0" />
                         <span className="flex-1 font-body-md text-body-md text-on-surface">{label}</span>
                         <span className="font-body-sm text-body-sm text-on-surface-variant">{size}</span>
                     </div>
@@ -70,19 +66,19 @@ export default function WelcomeStep({ onAutomatic, onCustom }: Props): React.Rea
             <div className="flex items-center gap-2.5 min-h-5 font-body-sm text-body-sm text-on-surface-variant">
                 {!ready && !error && (
                     <>
-                        <span className="material-symbols-outlined animate-spin" style={{ fontSize: '18px' }}>progress_activity</span>
+                        <Icon name="progress_activity" size={18} className="animate-spin" />
                         Detecting your hardware…
                     </>
                 )}
                 {error && (
                     <>
-                        <span className="material-symbols-outlined text-error" style={{ fontSize: '18px' }}>error</span>
+                        <Icon name="error" size={18} className="text-error" />
                         Couldn’t detect hardware. You can still choose a backend under Custom setup.
                     </>
                 )}
                 {ready && (
                     <>
-                        <span className="material-symbols-outlined text-primary" style={{ fontSize: '18px' }}>verified</span>
+                        <Icon name="verified" size={18} className="text-primary" />
                         {summarize(hw)}
                     </>
                 )}
@@ -97,7 +93,7 @@ export default function WelcomeStep({ onAutomatic, onCustom }: Props): React.Rea
                     className="text-left rounded-[10px] border-2 border-primary bg-primary/5 p-5 flex flex-col gap-2 hover:bg-primary/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 >
                     <div className="flex items-center gap-2">
-                        <span className="material-symbols-outlined text-primary" style={{ fontSize: '22px' }}>bolt</span>
+                        <Icon name="bolt" size={22} className="text-primary" />
                         <span className="font-label-lg text-label-lg text-on-surface">Automatic</span>
                         <span className="px-2 py-0.5 rounded-full bg-primary/15 font-label-sm text-label-sm text-primary">Recommended</span>
                     </div>
@@ -113,7 +109,7 @@ export default function WelcomeStep({ onAutomatic, onCustom }: Props): React.Rea
                     className="text-left rounded-[10px] border border-outline-variant bg-surface-container p-5 flex flex-col gap-2 hover:bg-surface-container-high disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 >
                     <div className="flex items-center gap-2">
-                        <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: '22px' }}>tune</span>
+                        <Icon name="tune" size={22} className="text-on-surface-variant" />
                         <span className="font-label-lg text-label-lg text-on-surface">Custom</span>
                     </div>
                     <p className="font-body-sm text-body-sm text-on-surface-variant">

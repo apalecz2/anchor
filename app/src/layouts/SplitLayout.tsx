@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import Icon from '../components/Icon';
 
 export const SplitLayout = ({ children }: { children: React.ReactNode }) => {
     const [leftWidth, setLeftWidth] = useState(50);
@@ -49,9 +50,7 @@ export const SplitLayout = ({ children }: { children: React.ReactNode }) => {
                     <div className="absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 bg-outline-variant transition-colors group-hover:bg-primary/40" />
                     {/* Grip handle that signals the bar is draggable */}
                     <div className="relative flex h-14 w-5 items-center justify-center rounded-full border border-outline-variant bg-surface-variant shadow-sm transition-colors group-hover:border-primary group-hover:bg-surface-container-high">
-                        <span className="material-symbols-outlined text-[18px] leading-none text-on-surface-variant transition-colors group-hover:text-primary">
-                            drag_indicator
-                        </span>
+                        <Icon name="drag_indicator" size={18} className="leading-none text-on-surface-variant transition-colors group-hover:text-primary" />
                     </div>
                 </div>
                 <div className="@container flex h-full flex-col transition-[width] duration-0 py-4 px-6" style={{ width: `${100 - leftWidth}%` }}>

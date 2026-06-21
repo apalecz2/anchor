@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import type { Backend, HardwareInfo, SetupConfig } from '../types';
 import { BACKEND_DESCRIPTION, BACKEND_LABEL, backendWarning } from '../backend';
+import Icon from '../../../components/Icon';
 
 interface Props {
     hardware: HardwareInfo;
@@ -90,7 +91,7 @@ export default function ConfigStep({ hardware, onNext, onBack }: Props): React.R
             {/* Warn — but don't block — when the selected build doesn't suit the GPU */}
             {selectedWarning && (
                 <div className="rounded-[10px] border border-error/30 bg-error/5 px-5 py-4 flex items-start gap-3">
-                    <span className="material-symbols-outlined text-error shrink-0" style={{ fontSize: '20px' }}>warning</span>
+                    <Icon name="warning" size={20} className="text-error shrink-0" />
                     <div className="flex flex-col gap-1">
                         <p className="font-body-md text-body-md text-on-surface">{selectedWarning}</p>
                         <p className="font-body-sm text-body-sm text-on-surface-variant">
@@ -107,7 +108,7 @@ export default function ConfigStep({ hardware, onNext, onBack }: Props): React.R
                     onClick={onBack}
                     className="flex items-center gap-1.5 px-4 py-2 rounded-lg border border-outline-variant bg-surface-container hover:bg-surface-container-high font-label-md text-label-md text-on-surface-variant transition-colors"
                 >
-                    <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>arrow_back</span>
+                    <Icon name="arrow_back" size={18} />
                     Back
                 </button>
                 <button
@@ -116,7 +117,7 @@ export default function ConfigStep({ hardware, onNext, onBack }: Props): React.R
                     className="flex items-center gap-2 px-6 py-2.5 rounded-lg bg-primary text-on-primary font-label-lg text-label-lg hover:bg-primary/90 transition-colors"
                 >
                     Start download
-                    <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>download</span>
+                    <Icon name="download" size={18} />
                 </button>
             </div>
         </div>
@@ -126,9 +127,7 @@ export default function ConfigStep({ hardware, onNext, onBack }: Props): React.R
 function InfoRow({ icon, label, value }: { icon: string; label: string; value: string }): React.ReactElement {
     return (
         <div className="flex items-center gap-4 px-5 py-4">
-            <span className="material-symbols-outlined text-on-surface-variant shrink-0" style={{ fontSize: '20px' }}>
-                {icon}
-            </span>
+            <Icon name={icon} size={20} className="text-on-surface-variant shrink-0" />
             <span className="flex-1 font-body-md text-body-md text-on-surface-variant">{label}</span>
             <span className="font-body-md text-body-md text-on-surface">{value}</span>
         </div>

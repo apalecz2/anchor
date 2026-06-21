@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import Icon from '../../components/Icon';
 import type { HardwareInfo, SetupConfig, SetupMode, SetupStep } from './types';
 import WelcomeStep from './steps/WelcomeStep';
 import ConfigStep from './steps/ConfigStep';
@@ -72,7 +73,7 @@ export default function SetupWizard({ onComplete }: Props): React.ReactElement {
                                                 'bg-surface-container-high text-on-surface-variant'
                                     }`}>
                                         {done
-                                            ? <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>check</span>
+                                            ? <Icon name="check" size={14} />
                                             : idx + 1
                                         }
                                     </div>
@@ -125,7 +126,7 @@ export default function SetupWizard({ onComplete }: Props): React.ReactElement {
 function ErrorView({ message, onRetry }: { message: string; onRetry: () => void }): React.ReactElement {
     return (
         <div className="flex flex-col gap-6 items-center text-center py-8">
-            <span className="material-symbols-outlined text-error" style={{ fontSize: '48px' }}>error</span>
+            <Icon name="error" size={48} className="text-error" />
             <div>
                 <h2 className="font-headline-lg text-headline-lg text-on-surface">Setup failed</h2>
                 <p className="font-body-md text-body-md text-on-surface-variant mt-2 max-w-md">{message}</p>
@@ -135,7 +136,7 @@ function ErrorView({ message, onRetry }: { message: string; onRetry: () => void 
                 onClick={onRetry}
                 className="flex items-center gap-2 px-6 py-2.5 rounded-lg bg-primary text-on-primary font-label-lg text-label-lg hover:bg-primary/90 transition-colors"
             >
-                <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>refresh</span>
+                <Icon name="refresh" size={18} />
                 Start over
             </button>
         </div>

@@ -1,4 +1,5 @@
 import React from 'react';
+import Icon from './Icon';
 
 interface Props {
     children: React.ReactNode;
@@ -36,9 +37,7 @@ export default class ErrorBoundary extends React.Component<Props, State> {
 
         return (
             <div className="flex h-screen flex-col items-center justify-center gap-4 bg-surface p-8 text-center">
-                <span className="material-symbols-outlined text-error" style={{ fontSize: '40px' }} aria-hidden="true">
-                    error
-                </span>
+                <Icon name="error" size={40} className="text-error" />
                 <h1 className="font-headline-md text-headline-md text-on-surface">Something went wrong</h1>
                 <p className="max-w-md font-body-md text-body-md text-on-surface-variant">
                     The app hit an unexpected error and couldn't render this view. Your saved sessions are safe — reloading usually fixes it.
