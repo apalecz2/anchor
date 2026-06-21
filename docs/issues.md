@@ -6,11 +6,10 @@
 1. Editing the OCR messes up the boxes that are highlighted over the image on the left when you click a cell in the final table on the right
     - **Resolved:** provenance cell→source mappings now store stable `OcrWord` UUIDs instead of array indices, and `getCellSourceBox` resolves them against the *current* word array at click time. An add/edit/delete elsewhere on the page no longer shifts a cell onto the wrong box; a since-deleted source word resolves to no highlight rather than a wrong/broken box. Covered by reorder/delete cases in `provenance.test.ts`.
 
-2. Column names are always shown as gray which implies unverified source. Should be green to match their confidence etc. but also show some indication that they are the column names
-    - **Resolved:** header cells now receive real trust colors via `headerClasses`/`trustColor` (instead of a flat `bg-surface-variant` gray), with a heavier bottom border to still read as headers.
+2. Dark mode screenshot doesn't show high lights correctly
 
-3. Window size, specifically height messes with the side bar. Squishing the height squishes the side bar items
-    - Resolved
+
+
 
 ## Provenance / Matching
 
