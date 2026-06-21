@@ -20,6 +20,26 @@ type FileTypeSpec = {
     matchesMagic: (bytes: Uint8Array) => boolean;
 };
 
+// Resolve a file to a supported type spec. Tries the OS-supplied MIME first, then
+// the filename extension (some drag-drops / file pickers report an empty or
+// generic MIME), then falls back to sniffing the magic bytes so a misnamed,
+// MIME-less file is still accepted. The caller magic-verifies the resolved spec
+// afterward, so this only widens *which* spec we consider — never what we trust.
+function detectFileType(file: File, bytes: Uint8Array): FileTypeSpec | null {
+    const byMime = SUPPORTED_FILE_TYPES[file.type];
+    if (byMime) return byMime;
+
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    if (ext) {
+        const byExt = Object.values(SUPPORTED_FILE_TYPES).find(
+            spec => spec.ext === ext || (spec.ext === 'jpg' && ext === 'jpeg')
+        );
+        if (byExt) return byExt;
+    }
+
+    return Object.values(SUPPORTED_FILE_TYPES).find(spec => spec.matchesMagic(bytes)) ?? null;
+}
+
 const SUPPORTED_FILE_TYPES: Record<string, FileTypeSpec> = {
     'application/pdf': {
         ext: 'pdf',
@@ -57,11 +77,6 @@ export default function Dashboard(): React.ReactElement {
         }
 
         const file = files[0];
-        const fileType = SUPPORTED_FILE_TYPES[file.type];
-        if (!fileType) {
-            setFileError(`"${file.name}" is not a supported file type. Please upload PDF, PNG, or JPEG files.`);
-            return;
-        }
         if (file.size > MAX_FILE_SIZE_BYTES) {
             setFileError(`"${file.name}" exceeds the 500 MB size limit.`);
             return;
@@ -74,28 +89,39 @@ export default function Dashboard(): React.ReactElement {
         try {
             const db = await getDb();
 
-            // 1. Read the bytes and verify the magic number matches the declared
-            //    type before creating any records, so a corrupt/mislabeled file is
-            //    rejected without leaving an orphan session behind.
+            // 1. Read the bytes up front — both to magic-verify and so type
+            //    detection can fall back to content sniffing for MIME-less files.
             const arrayBuffer = await file.arrayBuffer();
             const uint8Array = new Uint8Array(arrayBuffer);
+
+            // 2. Resolve the supported type (MIME → extension → magic bytes), then
+            //    confirm the magic number matches it, so a corrupt/mislabeled file is
+            //    rejected without leaving an orphan session behind.
+            const fileType = detectFileType(file, uint8Array);
+            if (!fileType) {
+                setFileError(`"${file.name}" is not a supported file type. Please upload PDF, PNG, or JPEG files.`);
+                return;
+            }
             if (!fileType.matchesMagic(uint8Array)) {
                 setFileError(`"${file.name}" doesn't look like a valid ${fileType.ext.toUpperCase()} file. It may be corrupted or mislabeled.`);
                 return;
             }
 
-            // 2. Ensure the app's data directory has a 'sessions' folder
+            // 3. Ensure the app's data directory has a 'sessions' folder
             await mkdir('sessions', { baseDir: BaseDirectory.AppData, recursive: true });
 
-            // 3. Create the session record
+            // 4. Create the session record
             await db.execute(
                 'INSERT INTO sessions (id, title) VALUES ($1, $2)',
                 [newSessionId, file.name]
             );
             sessionCreated = true;
 
-            // 4. Copy the file into AppData and record it. The extension comes from
-            //    the verified type, not the user-supplied filename.
+            // 5. Record the file row BEFORE writing the bytes to disk. The extension
+            //    comes from the verified type, not the user-supplied filename. Writing
+            //    the row first means a failed write still leaves a cleanup trail:
+            //    deleteSession() reads paths from this row, so the orphaned copy (if
+            //    any partial bytes landed) is removed rather than stranded on disk.
             const fileId = crypto.randomUUID();
             const safeFileName = `${fileId}.${fileType.ext}`;
             const relativePath = await join('sessions', safeFileName);
@@ -103,13 +129,14 @@ export default function Dashboard(): React.ReactElement {
             const appData = await appDataDir();
             const absolutePath = await join(appData, relativePath);
 
-            await writeFile(relativePath, uint8Array, { baseDir: BaseDirectory.AppData });
-
             // Save the ABSOLUTE path so OCR and the Viewer can find it
             await db.execute(
                 'INSERT INTO files (id, session_id, file_name, file_path) VALUES ($1, $2, $3, $4)',
                 [fileId, newSessionId, file.name, absolutePath]
             );
+
+            // 6. Copy the file into AppData.
+            await writeFile(relativePath, uint8Array, { baseDir: BaseDirectory.AppData });
 
             // Navigate to the new workspace
             navigate(`/session/${newSessionId}`);

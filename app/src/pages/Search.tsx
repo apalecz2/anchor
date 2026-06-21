@@ -68,16 +68,14 @@ export default function Search(): React.ReactElement {
                 const totalItems = countRes[0]?.count || 0;
                 const calculatedTotalPages = Math.max(1, Math.ceil(totalItems / ITEMS_PER_PAGE));
 
-                if (page > calculatedTotalPages) {
-                    if (isMounted) {
-                        setTotalPages(calculatedTotalPages);
-                        setPage(calculatedTotalPages);
-                    }
-                    return;
-                }
+                // Clamp the requested page into range and fetch *that* page's results
+                // directly. Returning early on an out-of-range page (e.g. after the
+                // result set shrank) would leave the previous, now-stale results on
+                // screen until a follow-up render — so fetch the clamped page now and
+                // sync the page state to match.
+                const safePage = Math.min(page, calculatedTotalPages);
+                const offset = (safePage - 1) * ITEMS_PER_PAGE;
 
-                const offset = (page - 1) * ITEMS_PER_PAGE;
-                
                 // Fetch paginated results
                 const items = await db.select<Session[]>(
                     `SELECT * FROM sessions WHERE title LIKE $1 ESCAPE '\\' ORDER BY updated_at DESC LIMIT $2 OFFSET $3`,
@@ -87,6 +85,7 @@ export default function Search(): React.ReactElement {
                 if (isMounted) {
                     setResults(items);
                     setTotalPages(calculatedTotalPages);
+                    if (safePage !== page) setPage(safePage);
                 }
             } catch (error) {
                 console.error("Failed to fetch search results:", error);

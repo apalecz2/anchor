@@ -8,6 +8,8 @@
 
 2. Dark mode screenshot doesn't show high lights correctly
 
+3. Indicate the results are saved in app
+
 
 
 

@@ -72,6 +72,12 @@ export function ExtractionOutputPane(props: ExtractionOutputPaneProps): React.Re
         fileStem, onHelp,
     } = props;
 
+    // A page with no OCR words can't be formatted (a blank page, or one whose
+    // render/OCR errored — the left pane shows that page's error + Retry). Gate the
+    // "Format as Table" entry points on this so the button is never a silent no-op
+    // (handleFormatTable bails on a page with no words/fileUrl).
+    const hasWords = (activePage?.words?.length ?? 0) > 0;
+
     return (
         <>
             <div className="mb-4 flex min-h-[40px] flex-wrap items-center justify-between gap-x-3 gap-y-2">
@@ -111,8 +117,12 @@ export function ExtractionOutputPane(props: ExtractionOutputPaneProps): React.Re
                     // Mirror the source pane's neutral cancelled state rather than
                     // claiming OCR ran and found nothing.
                     <div className="flex h-full items-center justify-center text-on-surface-variant">Processing was cancelled.</div>
-                ) : !activePage?.words ? (
-                    <div className="flex h-full items-center justify-center">No readable text found.</div>
+                ) : !hasWords ? (
+                    <div className="flex h-full items-center justify-center text-on-surface-variant">
+                        {activePage?.error
+                            ? 'This page could not be processed, so there is nothing to extract.'
+                            : 'No readable text found.'}
+                    </div>
                 ) : outputView === 'raw' ? (
                     <>
                         <div className="mb-4 flex items-start gap-2 rounded-lg border border-outline-variant bg-surface-variant/40 px-3 py-2 text-sm text-on-surface-variant">
@@ -326,7 +336,7 @@ export function ExtractionOutputPane(props: ExtractionOutputPaneProps): React.Re
                     island sits to its right and is always available. */}
                 {activePage && (
                     <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20 flex flex-wrap justify-center gap-2 px-4">
-                        {(outputView === 'raw' || (!isExtracting && hasTable)) && (
+                        {((outputView === 'raw' && hasWords) || (!isExtracting && hasTable)) && (
                             <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-outline-variant bg-surface/95 px-3 py-2 shadow-lg backdrop-blur-sm">
                                 {outputView === 'raw' && (
                                     // Once a table exists, the raw view only navigates to it; the

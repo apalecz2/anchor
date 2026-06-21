@@ -6,7 +6,7 @@ import type { ExtractionPhase } from '../llama/useLlamaChat';
 // the phase transitions in requestTableFormat (useLlamaChat).
 const EXTRACTION_STEPS: { key: Exclude<ExtractionPhase, 'idle'>; label: string; hint?: string }[] = [
     { key: 'starting', label: 'Loading AI model', hint: 'First run can take a minute while the model loads into memory.' },
-    { key: 'preparing', label: 'Reading page image' },
+    { key: 'preparing', label: 'Reading image' },
     { key: 'generating', label: 'Generating table' },
     { key: 'finalizing', label: 'Matching to source & saving' },
 ];

@@ -24,8 +24,11 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             if let Ok(data_dir) = app.path().app_data_dir() {
-                // Best-effort at startup; process_document re-runs this so OCR also
-                // works when Tesseract is installed by the wizard mid-session.
+                // Configure Tesseract's PATH / TESSDATA_PREFIX once, here on the main
+                // thread, before any command can run. It points at the canonical
+                // AppData tesseract location even if the wizard hasn't installed it
+                // yet, so a mid-session install is picked up without a restart — and
+                // OCR never has to mutate process env from a worker thread.
                 ocr::configure_tesseract_env(&data_dir);
                 // Reap a llama-server orphaned by a previous crash/taskkill before
                 // it lingers holding multi-GB of RAM.

@@ -29,10 +29,12 @@ export async function deleteSession(sessionId: string): Promise<void> {
     await db.execute('DELETE FROM sessions WHERE id = $1', [sessionId]);
     emitSessionChange({ deletedSessionId: sessionId });
 
+    // Filter out empty paths: a page that failed to render/OCR is stored with an
+    // empty image_path, and remove('') would surface a spurious error.
     const uniquePaths = new Set([
         ...uploadedFiles.map(f => f.file_path),
         ...generatedImages.map(p => p.image_path),
-    ]);
+    ].filter(Boolean));
 
     // Best-effort -> a file that is already missing must not surface as an error.
     await Promise.allSettled([...uniquePaths].map(p => remove(p)));
@@ -59,10 +61,12 @@ export async function deleteAllSessions(): Promise<number> {
     await db.execute('DELETE FROM sessions');
     emitSessionChange({ allDeleted: true });
 
+    // Filter out empty paths: a page that failed to render/OCR is stored with an
+    // empty image_path, and remove('') would surface a spurious error.
     const uniquePaths = new Set([
         ...uploadedFiles.map(f => f.file_path),
         ...generatedImages.map(p => p.image_path),
-    ]);
+    ].filter(Boolean));
 
     // Best-effort -> a file that is already missing must not surface as an error.
     await Promise.allSettled([...uniquePaths].map(p => remove(p)));

@@ -274,14 +274,17 @@ fn process_document_blocking(
         .unwrap_or("")
         .to_lowercase();
 
-    // Make sure the bundled Tesseract is on PATH / TESSDATA_PREFIX before OCR.
-    // The startup hook can't do this when Tesseract was installed by the wizard
-    // earlier in this same session, so do it here too (idempotent).
+    // Tesseract's PATH / TESSDATA_PREFIX is configured once at startup
+    // (`configure_tesseract_env`, called from the Tauri setup hook on the main
+    // thread). We deliberately do NOT touch the process environment here: mutating
+    // `std::env` from this blocking worker would race with env reads on other
+    // threads (a data race / UB under the Rust 2024 model). The startup hook points
+    // the env at the canonical AppData tesseract location whether or not it exists
+    // yet, so a mid-session wizard install is picked up without a restart.
     let data_dir = app_handle
         .path()
         .app_data_dir()
         .map_err(|error| format!("failed to resolve app data directory: {error}"))?;
-    configure_tesseract_env(&data_dir);
 
     let eng_traineddata = data_dir.join("tesseract").join("tessdata").join("eng.traineddata");
     if !eng_traineddata.exists() {
@@ -442,19 +445,25 @@ fn process_document_blocking(
 /// `tessdata` folder so OCR (which invokes a bare `tesseract` binary) resolves
 /// the right executable and language data.
 ///
-/// Idempotent. Must run before every OCR call rather than only at startup: when
-/// Tesseract is installed by the first-run wizard, the `tesseract` dir does not
-/// exist yet when the startup hook fires, so without this the env stays unset
-/// until the app is restarted and the first OCR silently fails.
+/// Call this exactly once, at startup, from the main thread (the Tauri setup
+/// hook) — never from a worker thread. Mutating `std::env` while other threads
+/// read it is a data race (UB under the Rust 2024 model), and OCR runs on the
+/// blocking pool. Doing it once up front, before any command can fire, sidesteps
+/// that entirely.
+///
+/// The target paths are set whether or not the `tesseract` dir exists yet: it is
+/// the deterministic AppData location the first-run wizard installs into, so a
+/// mid-session install lands exactly where the env already points and OCR works
+/// without an app restart (the webview reload after setup does not restart the
+/// Rust process).
+///
+/// Idempotent — the PATH prepend is skipped if the dir is already present.
 ///
 /// Note: this Tesseract 5.x build requires TESSDATA_PREFIX to point *directly at*
 /// the tessdata folder — pointing it at the parent dir makes tesseract exit
 /// non-zero with no output.
 pub fn configure_tesseract_env(data_dir: &Path) {
     let dir = data_dir.join("tesseract");
-    if !dir.exists() {
-        return;
-    }
     let sep = if cfg!(target_os = "windows") { ";" } else { ":" };
     let dir_str = dir.display().to_string();
     let current = std::env::var("PATH").unwrap_or_default();

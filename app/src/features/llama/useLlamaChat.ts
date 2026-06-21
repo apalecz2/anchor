@@ -202,6 +202,13 @@ export const useLlamaChat = () => {
             // in the session's last-updated time that "Recent" and Search order by.
             await db.execute('UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = $1', [sessionId]);
 
+            // A cancel can land during the (non-abortable) DB writes above — the last
+            // yield points before we return. Re-check here so the result is never
+            // rendered into a pane the user asked to discard. The row is already a
+            // complete, valid extraction, so we leave it persisted: re-entering the
+            // page loads it rather than forcing a re-run of the work just finished.
+            throwIfCancelled();
+
             return { csvContent, provenanceCells, sanitizedWords, truncated, contextOverflow };
         } finally {
             // Reset UI, then release the server with a short warm window instead of
