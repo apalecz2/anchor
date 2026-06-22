@@ -58,7 +58,7 @@ const MIGRATIONS: string[][] = [
 // ON DELETE CASCADE — see the FK-pragma note on initDb().
 export const SESSION_CHILD_TABLES = ['csv_outputs', 'document_pages', 'files'] as const;
 
-async function runMigrations(db: Database): Promise<void> {
+export async function runMigrations(db: Database): Promise<void> {
     const rows = await db.select<{ user_version: number }[]>('PRAGMA user_version');
     const currentVersion = rows[0].user_version;
 
