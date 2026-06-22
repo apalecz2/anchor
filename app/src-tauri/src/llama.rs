@@ -415,7 +415,11 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         assert!(something_listening(port));
-        drop(listener);
-        assert!(!something_listening(port));
+        // The negative case (nothing listening) is covered by
+        // `pick_free_port_returns_a_bindable_port`, which probes a port nothing has
+        // connected to. Asserting "not listening" here — right after a connect, then
+        // dropping the listener — is racy on macOS, where the just-closed loopback
+        // connection lingers in the accept backlog and a follow-up connect can still
+        // succeed.
     }
 }
