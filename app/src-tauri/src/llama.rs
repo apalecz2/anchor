@@ -120,9 +120,7 @@ pub fn sweep_orphan_server(data_dir: &Path) {
         return;
     };
 
-    let mut parts = contents.split_whitespace();
-    let pid = parts.next().and_then(|s| s.parse::<u32>().ok());
-    let port = parts.next().and_then(|s| s.parse::<u16>().ok());
+    let (pid, port) = parse_pidfile(&contents);
 
     if let (Some(pid), Some(port)) = (pid, port) {
         if something_listening(port) {
@@ -200,6 +198,16 @@ pub fn llama_server_status(state: tauri::State<'_, AppState>) -> Result<String, 
             Some(_) => Ok("exited".into()),
         },
     }
+}
+
+/// Parse a `llama-server.pid` file ("`<pid> <port>`", whitespace-separated) into its
+/// PID and port. Pure so the orphan-reaper's parsing is testable without a process.
+/// A malformed/short line yields `None` for the missing field.
+fn parse_pidfile(contents: &str) -> (Option<u32>, Option<u16>) {
+    let mut parts = contents.split_whitespace();
+    let pid = parts.next().and_then(|s| s.parse::<u32>().ok());
+    let port = parts.next().and_then(|s| s.parse::<u16>().ok());
+    (pid, port)
 }
 
 /// Whether a backend offloads to a GPU (and so warrants `--n-gpu-layers 999`).
@@ -346,4 +354,52 @@ pub fn start_llama_server(
 #[tauri::command]
 pub fn stop_llama_server(state: tauri::State<'_, AppState>) -> Result<(), String> {
     stop_llama_server_process(&state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_gpu_backend_matrix() {
+        assert!(is_gpu_backend("cuda"));
+        assert!(is_gpu_backend("rocm"));
+        assert!(is_gpu_backend("metal"));
+        assert!(!is_gpu_backend("cpu"));
+        // Unknown/garbage stays CPU-only rather than risking --n-gpu-layers 999.
+        assert!(!is_gpu_backend("vulkan"));
+        assert!(!is_gpu_backend(""));
+    }
+
+    #[test]
+    fn parse_pidfile_reads_pid_and_port() {
+        assert_eq!(parse_pidfile("4321 5599"), (Some(4321), Some(5599)));
+        assert_eq!(parse_pidfile("  4321\t5599\n"), (Some(4321), Some(5599)));
+    }
+
+    #[test]
+    fn parse_pidfile_tolerates_malformed_lines() {
+        assert_eq!(parse_pidfile(""), (None, None));
+        assert_eq!(parse_pidfile("4321"), (Some(4321), None)); // port missing
+        assert_eq!(parse_pidfile("notanum 5599"), (None, Some(5599)));
+        // A port that overflows u16 yields None for the port, not a panic.
+        assert_eq!(parse_pidfile("4321 70000"), (Some(4321), None));
+    }
+
+    #[test]
+    fn pick_free_port_returns_a_bindable_port() {
+        let port = pick_free_port().expect("should find a free port");
+        assert!(port > 0);
+        // Nothing is listening on it yet (we only bound momentarily to discover it).
+        assert!(!something_listening(port));
+    }
+
+    #[test]
+    fn something_listening_detects_a_live_listener() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(something_listening(port));
+        drop(listener);
+        assert!(!something_listening(port));
+    }
 }

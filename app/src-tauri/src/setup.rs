@@ -945,6 +945,126 @@ pub fn get_asset_manifest(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn is_targz_recognizes_gzip_tarballs() {
+        assert!(is_targz("foo.tar.gz"));
+        assert!(is_targz("FOO.TGZ"));
+        assert!(is_targz("pdfium-win-x64.tgz"));
+        assert!(!is_targz("llama.zip"));
+        assert!(!is_targz("model.gguf"));
+    }
+
+    #[test]
+    fn accept_unpinned_is_ok_in_debug_test_build() {
+        // Tests compile with debug_assertions, so the unpinned policy accepts (warns).
+        assert!(accept_unpinned_or_err("some-asset").is_ok());
+    }
+
+    #[test]
+    fn hash_file_range_hashes_only_the_requested_window() {
+        use sha2::{Digest, Sha256};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("blob");
+        fs::write(&path, b"0123456789").unwrap();
+
+        // Hash bytes [2, 7) == "23456" via the helper.
+        let mut h = Sha256::new();
+        hash_file_range(&path, &mut h, 2, 7).unwrap();
+        let got = format!("{:x}", h.finalize());
+
+        let want = format!("{:x}", Sha256::digest(b"23456"));
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn find_marker_dir_locates_a_nested_payload_root() {
+        let dir = tempfile::tempdir().unwrap();
+        // Simulate an archive that wrapped the binary two folders deep.
+        let nested = dir.path().join("wrapper").join("build").join("bin");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("llama-server"), b"x").unwrap();
+
+        let found = find_marker_dir(dir.path(), "llama-server").expect("marker dir found");
+        assert_eq!(found, nested);
+
+        assert!(find_marker_dir(dir.path(), "does-not-exist").is_none());
+    }
+
+    #[test]
+    fn copy_dir_contents_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        let dest = dir.path().join("dest");
+        fs::create_dir_all(src.join("sub")).unwrap();
+        fs::write(src.join("bin"), b"hello").unwrap();
+        fs::write(src.join("sub").join("data"), b"world").unwrap();
+
+        copy_dir_contents(&src, &dest).unwrap();
+        // Re-extracting over the existing copy must succeed (CR:M16).
+        copy_dir_contents(&src, &dest).unwrap();
+
+        assert_eq!(fs::read(dest.join("bin")).unwrap(), b"hello");
+        assert_eq!(fs::read(dest.join("sub").join("data")).unwrap(), b"world");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn copy_dir_contents_overwrites_a_read_only_target() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        let dest = dir.path().join("dest");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("tool"), b"v2").unwrap();
+
+        copy_dir_contents(&src, &dest).unwrap();
+        // Release binaries ship as 0o555 (no owner write) — re-extract must still work.
+        fs::set_permissions(dest.join("tool"), fs::Permissions::from_mode(0o555)).unwrap();
+        copy_dir_contents(&src, &dest).unwrap();
+        assert_eq!(fs::read(dest.join("tool")).unwrap(), b"v2");
+    }
+
+    #[test]
+    fn asset_installed_detects_installed_artifacts() {
+        let dir = tempfile::tempdir().unwrap();
+        let binaries = dir.path().join("binaries");
+        fs::create_dir_all(&binaries).unwrap();
+
+        assert!(!asset_installed("llama_server", dir.path()));
+        fs::write(binaries.join(llama_exe_name()), b"x").unwrap();
+        assert!(asset_installed("llama_server", dir.path()));
+
+        // tesseract needs both the binary and the language data.
+        let tess = dir.path().join("tesseract");
+        fs::create_dir_all(tess.join("tessdata")).unwrap();
+        fs::write(tess.join(tesseract_exe_name()), b"x").unwrap();
+        assert!(!asset_installed("tesseract", dir.path()));
+        fs::write(tess.join("tessdata").join("eng.traineddata"), b"x").unwrap();
+        assert!(asset_installed("tesseract", dir.path()));
+    }
+
+    #[test]
+    fn sweep_stale_partials_keeps_fresh_and_reclaims_old(/* NC:A2 */) {
+        let dir = tempfile::tempdir().unwrap();
+        let fresh = dir.path().join("fresh.part");
+        let old = dir.path().join("old.part");
+        let other = dir.path().join("keep.txt");
+        fs::write(&fresh, b"resumable").unwrap();
+        fs::write(&old, b"abandoned").unwrap();
+        fs::write(&other, b"not a part").unwrap();
+
+        // Backdate the old partial well beyond the 7-day retention window.
+        let ten_days_ago = SystemTime::now() - Duration::from_secs(10 * 24 * 60 * 60);
+        filetime::set_file_mtime(&old, filetime::FileTime::from_system_time(ten_days_ago)).unwrap();
+
+        sweep_stale_partials(dir.path());
+
+        assert!(fresh.exists(), "a recent .part (a genuine resume) must be kept");
+        assert!(!old.exists(), "a .part older than the retention window must be reclaimed");
+        assert!(other.exists(), "non-.part files must be untouched");
+    }
 
     /// Validates extract_archive's flatten logic against a real pdfium archive:
     /// the upstream .tgz nests the shared library under bin/ (Windows) or lib/

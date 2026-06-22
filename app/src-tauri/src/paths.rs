@@ -60,3 +60,37 @@ pub fn pdfium_spec() -> Option<(&'static str, &'static str, u64)> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exe_and_lib_names_match_platform() {
+        if cfg!(target_os = "windows") {
+            assert_eq!(llama_exe_name(), "llama-server.exe");
+            assert_eq!(tesseract_exe_name(), "tesseract.exe");
+            assert_eq!(pdfium_lib_name(), "pdfium.dll");
+        } else {
+            assert_eq!(llama_exe_name(), "llama-server");
+            assert_eq!(tesseract_exe_name(), "tesseract");
+        }
+        if cfg!(target_os = "macos") {
+            assert_eq!(pdfium_lib_name(), "libpdfium.dylib");
+        }
+    }
+
+    #[test]
+    fn pdfium_spec_present_on_supported_platforms() {
+        let spec = pdfium_spec();
+        if cfg!(any(target_os = "windows", target_os = "macos")) {
+            let (key, sha, size) = spec.expect("pdfium spec must exist on Win/mac");
+            assert!(key.ends_with(".tgz"));
+            assert_eq!(sha.len(), 64); // a full SHA-256 hex digest
+            assert!(size > 0);
+        } else {
+            // Linux ships no pdfium asset yet.
+            assert!(spec.is_none());
+        }
+    }
+}

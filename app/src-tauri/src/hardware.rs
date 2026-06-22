@@ -92,12 +92,16 @@ fn nvidia_smi_vram_mb() -> Option<u64> {
         .args(["--query-gpu=memory.total", "--format=csv,noheader,nounits"])
         .output()
         .ok()?;
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .next()?
-        .trim()
-        .parse::<u64>()
-        .ok()
+    parse_nvidia_smi(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Parse the first line of `nvidia-smi --query-gpu=memory.total
+/// --format=csv,noheader,nounits` (a bare MB integer) into VRAM in MB. Split out as
+/// a pure function so the saturation-bypass path (CR:H3) is unit-testable without a
+/// real GPU. Returns None when the output is empty or unparseable.
+#[cfg_attr(target_os = "macos", allow(dead_code))] // caller is win/linux-only
+fn parse_nvidia_smi(stdout: &str) -> Option<u64> {
+    stdout.lines().next()?.trim().parse::<u64>().ok()
 }
 
 fn extract_gpu_vendor(name: &str) -> &'static str {
@@ -231,4 +235,91 @@ fn query_hardware_linux() -> (Option<String>, Option<String>, Option<u64>, u64) 
     };
 
     (gpu_line, gpu_vendor, vram_mb, ram_mb)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recommend_backend_matrix() {
+        // NVIDIA with ample VRAM -> cuda.
+        assert_eq!(recommend_backend(Some("NVIDIA GeForce RTX 4070"), Some(8192)), "cuda");
+        // NVIDIA below the 4 GB threshold -> cpu.
+        assert_eq!(recommend_backend(Some("NVIDIA"), Some(2048)), "cpu");
+        // NVIDIA with unreliable (None) VRAM -> cuda, not a wrong CPU downgrade (CR:H3).
+        assert_eq!(recommend_backend(Some("NVIDIA"), None), "cuda");
+        // Apple -> metal regardless of VRAM.
+        assert_eq!(recommend_backend(Some("Apple M3"), None), "metal");
+        // Intel / unknown / no vendor -> cpu.
+        assert_eq!(recommend_backend(Some("Intel Iris"), None), "cpu");
+        assert_eq!(recommend_backend(None, Some(99999)), "cpu");
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn recommend_backend_amd_is_rocm_on_linux() {
+        assert_eq!(recommend_backend(Some("AMD Radeon"), Some(8192)), "rocm");
+    }
+
+    #[test]
+    #[cfg(not(target_os = "linux"))]
+    fn recommend_backend_amd_is_cpu_off_linux() {
+        // ROCm only ships on the (future) Linux target; AMD elsewhere falls back to CPU.
+        assert_eq!(recommend_backend(Some("AMD Radeon"), Some(8192)), "cpu");
+    }
+
+    #[test]
+    fn extract_gpu_vendor_classifies_known_brands() {
+        assert_eq!(extract_gpu_vendor("NVIDIA GeForce RTX 4070"), "NVIDIA");
+        assert_eq!(extract_gpu_vendor("AMD Radeon RX 7900"), "AMD");
+        assert_eq!(extract_gpu_vendor("Radeon Pro 5500M"), "AMD");
+        assert_eq!(extract_gpu_vendor("Apple M3 Max"), "Apple");
+        assert_eq!(extract_gpu_vendor("Intel UHD Graphics 630"), "Intel");
+        assert_eq!(extract_gpu_vendor("Some Other GPU"), "Unknown");
+    }
+
+    #[test]
+    fn current_os_matches_compilation_target() {
+        let os = current_os();
+        if cfg!(target_os = "windows") {
+            assert_eq!(os, "windows");
+        } else if cfg!(target_os = "macos") {
+            assert_eq!(os, "macos");
+        } else {
+            assert_eq!(os, "linux");
+        }
+    }
+
+    #[test]
+    fn available_backends_are_platform_appropriate() {
+        let b = available_backends();
+        assert!(!b.is_empty());
+        if cfg!(target_os = "macos") {
+            // No CPU/CUDA split on macOS — only the Metal build ships.
+            assert_eq!(b, vec!["metal".to_string()]);
+            assert!(!b.contains(&"cuda".to_string()));
+        } else if cfg!(target_os = "windows") {
+            assert!(b.contains(&"cuda".to_string()));
+            assert!(b.contains(&"cpu".to_string()));
+            assert!(!b.contains(&"metal".to_string()));
+        }
+    }
+
+    #[test]
+    fn parse_nvidia_smi_reads_first_line_mb() {
+        assert_eq!(parse_nvidia_smi("8192\n"), Some(8192));
+        assert_eq!(parse_nvidia_smi("  12288  \n4096\n"), Some(12288));
+        assert_eq!(parse_nvidia_smi(""), None);
+        assert_eq!(parse_nvidia_smi("not a number"), None);
+    }
+
+    #[test]
+    fn detect_hardware_does_not_panic() {
+        // Smoke: probing real hardware must always return a struct, never panic,
+        // even with no GPU / tools absent.
+        let hw = detect_hardware();
+        assert!(!hw.recommended_backend.is_empty());
+        assert!(!hw.os.is_empty());
+    }
 }

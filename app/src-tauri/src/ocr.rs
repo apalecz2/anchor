@@ -112,6 +112,42 @@ pub struct ExtractionResult {
 
 const UPSCALE_NARROW_SIDE_THRESHOLD: u32 = 1500;
 
+/// The geometric scale applied before OCR: 2× Lanczos upscale when upscaling is
+/// allowed (image-upload path only) and the narrow side is below the threshold,
+/// else 1.0. Split out as a pure function so the decision and the coordinate
+/// mapping that divides by it (see [`map_coord`]) are unit-testable (design §6.2a).
+fn upscale_factor(width: u32, height: u32, allow_upscale: bool) -> f32 {
+    if allow_upscale && width.min(height) < UPSCALE_NARROW_SIDE_THRESHOLD {
+        2.0
+    } else {
+        1.0
+    }
+}
+
+/// Map an OCR bounding-box coordinate from the (possibly upscaled) preprocessed
+/// image back into the original image's coordinate space by dividing out the scale
+/// factor. Pure so the round-trip is testable without running Tesseract.
+fn map_coord(value: i32, scale: f32) -> i32 {
+    (value as f32 / scale).round() as i32
+}
+
+/// How `process_document` dispatches on a file's (lowercased) extension. Pure so
+/// the pdf/image/unsupported split is unit-testable.
+#[derive(Debug, PartialEq, Eq)]
+enum InputKind {
+    Pdf,
+    Image,
+    Unsupported,
+}
+
+fn classify_extension(ext: &str) -> InputKind {
+    match ext {
+        "pdf" => InputKind::Pdf,
+        "png" | "jpg" | "jpeg" => InputKind::Image,
+        _ => InputKind::Unsupported,
+    }
+}
+
 /// Produce a preprocessed copy of `source` for Tesseract.
 /// Returns (preprocessed_path, scale_factor). Callers divide OCR bounding boxes by
 /// scale_factor to map back to original-image coordinates.
@@ -129,7 +165,7 @@ fn preprocess_for_ocr(
 
     let (w, h) = img.dimensions();
     let stem = source.file_stem().and_then(|s| s.to_str()).unwrap_or("page");
-    let scale: f32 = if allow_upscale && w.min(h) < UPSCALE_NARROW_SIDE_THRESHOLD { 2.0 } else { 1.0 };
+    let scale: f32 = upscale_factor(w, h, allow_upscale);
 
     let gray: GrayImage = img.grayscale().to_luma8();
 
@@ -185,10 +221,10 @@ fn ocr_image_to_page(
                 text: item.text,
                 confidence: item.conf,
                 box_coords: BoundingBox {
-                    left:   (item.left   as f32 / scale).round() as i32,
-                    top:    (item.top    as f32 / scale).round() as i32,
-                    width:  (item.width  as f32 / scale).round() as i32,
-                    height: (item.height as f32 / scale).round() as i32,
+                    left:   map_coord(item.left,   scale),
+                    top:    map_coord(item.top,    scale),
+                    width:  map_coord(item.width,  scale),
+                    height: map_coord(item.height, scale),
                 },
             })
             .collect::<Vec<_>>();
@@ -324,7 +360,8 @@ fn process_document_blocking(
 
     let mut pages: Vec<DocumentPageResult> = Vec::new();
 
-    if extension == "pdf" {
+    let input_kind = classify_extension(&extension);
+    if input_kind == InputKind::Pdf {
         // Load the PDFium library the wizard downloaded into AppData rather than a
         // system copy — neither Windows nor macOS ships one. bind_to_library takes
         // the full path to the shared library, so it resolves regardless of the
@@ -414,7 +451,7 @@ fn process_document_blocking(
             );
         }
 
-    } else if ["png", "jpg", "jpeg"].contains(&extension.as_str()) {
+    } else if input_kind == InputKind::Image {
         // A single image is one uninterruptible OCR call, so honor a cancel that
         // arrives before it begins (mid-call cancellation isn't possible — the
         // frontend discards the result if one still arrives after the user cancels).
@@ -491,5 +528,60 @@ fn ensure_tesseract_tsv_config(data_dir: &Path) {
     }
     if fs::create_dir_all(&configs_dir).is_ok() {
         let _ = fs::write(&tsv, "tessedit_create_tsv 1\n");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upscale_factor_doubles_small_allowed_images_only() {
+        // narrow side < 1500 and upscaling allowed -> 2.0
+        assert_eq!(upscale_factor(1000, 800, true), 2.0);
+        // narrow side >= threshold -> 1.0 even when allowed
+        assert_eq!(upscale_factor(2000, 1600, true), 1.0);
+        // exactly at the threshold is not "below" -> 1.0
+        assert_eq!(upscale_factor(1500, 1500, true), 1.0);
+        // upscaling disallowed (pdf path) -> always 1.0
+        assert_eq!(upscale_factor(500, 500, false), 1.0);
+    }
+
+    #[test]
+    fn map_coord_divides_by_scale_and_rounds() {
+        // At scale 1.0 coordinates pass through unchanged.
+        assert_eq!(map_coord(123, 1.0), 123);
+        // At scale 2.0 an upscaled coordinate maps back to original space.
+        assert_eq!(map_coord(200, 2.0), 100);
+        // Rounding to nearest integer.
+        assert_eq!(map_coord(101, 2.0), 51); // 50.5 -> 51 (round half up)
+    }
+
+    #[test]
+    fn classify_extension_dispatch() {
+        assert_eq!(classify_extension("pdf"), InputKind::Pdf);
+        assert_eq!(classify_extension("png"), InputKind::Image);
+        assert_eq!(classify_extension("jpg"), InputKind::Image);
+        assert_eq!(classify_extension("jpeg"), InputKind::Image);
+        assert_eq!(classify_extension("gif"), InputKind::Unsupported);
+        assert_eq!(classify_extension(""), InputKind::Unsupported);
+    }
+
+    #[test]
+    fn max_file_size_is_500_mb() {
+        assert_eq!(MAX_FILE_SIZE_BYTES, 500 * 1024 * 1024);
+    }
+
+    #[test]
+    fn ensure_tesseract_tsv_config_writes_the_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let tsv = dir.path().join("tesseract").join("tessdata").join("configs").join("tsv");
+        assert!(!tsv.exists());
+        ensure_tesseract_tsv_config(dir.path());
+        assert!(tsv.exists());
+        assert_eq!(fs::read_to_string(&tsv).unwrap(), "tessedit_create_tsv 1\n");
+        // Idempotent: a second call doesn't error or change it.
+        ensure_tesseract_tsv_config(dir.path());
+        assert!(tsv.exists());
     }
 }
