@@ -17,6 +17,14 @@ describe('toCsv (RFC-4180 escaping)', () => {
     it('quotes cells containing newlines', () => {
         expect(toCsv([['line1\nline2']])).toBe('"line1\nline2"');
     });
+
+    it('quotes a cell containing a carriage return', () => {
+        expect(toCsv([['a\rb']])).toBe('"a\rb"');
+    });
+
+    it('leaves a plain cell unquoted', () => {
+        expect(toCsv([['plain']])).toBe('plain');
+    });
 });
 
 describe('toPlainText', () => {
@@ -34,6 +42,10 @@ describe('toHtml', () => {
         expect(html).toContain('<tbody>');
     });
 
+    it('escapes double quotes', () => {
+        expect(toHtml([['"q"'], ['x']])).toContain('<th>&quot;q&quot;</th>');
+    });
+
     it('returns empty string for no rows', () => {
         expect(toHtml([])).toBe('');
     });
@@ -45,6 +57,23 @@ describe('toMarkdown', () => {
         expect(md[0]).toContain('Name');
         expect(md[1]).toMatch(/^\| -+ \| -+ \|$/);
         expect(md[2]).toContain('Al');
+    });
+
+    it('uses a minimum column width of 3', () => {
+        // single-char header/data still gets padded to width 3
+        const md = toMarkdown([['A'], ['x']]).split('\n');
+        expect(md[1]).toBe('| --- |');
+        expect(md[0]).toBe('| A   |');
+    });
+
+    it('pads ragged rows out to the widest column count', () => {
+        const md = toMarkdown([['A', 'B'], ['x']]).split('\n');
+        // data row missing a second cell is padded, keeping the table rectangular
+        expect(md[2]).toMatch(/^\| x\s+\|\s+\|$/);
+    });
+
+    it('returns empty string for no rows', () => {
+        expect(toMarkdown([])).toBe('');
     });
 });
 
@@ -59,5 +88,19 @@ describe('buildFileStem', () => {
 
     it('falls back to "extraction" when no name is given', () => {
         expect(buildFileStem(null, 0, 1)).toBe('extraction_extract');
+    });
+
+    it('collapses repeated illegal chars and trims edge underscores', () => {
+        expect(buildFileStem('!!a  b!!.csv', 0, 1)).toBe('a_b_extract');
+    });
+
+    it('caps the stem at 50 characters before the suffix', () => {
+        const long = 'x'.repeat(80) + '.pdf';
+        const stem = buildFileStem(long, 0, 1);
+        expect(stem).toBe('x'.repeat(50) + '_extract');
+    });
+
+    it('falls back to "extraction" when the name sanitizes to empty', () => {
+        expect(buildFileStem('!!!.pdf', 0, 1)).toBe('extraction_extract');
     });
 });

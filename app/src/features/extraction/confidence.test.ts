@@ -30,6 +30,26 @@ describe('parseTSVWithOffsets', () => {
         expect(cellRanges[0][0]).toEqual({ start: 0, end: 2 });
         expect(cellRanges[0][1]).toEqual({ start: 3, end: 5 });
     });
+
+    it('treats a trailing tab as a real empty final cell', () => {
+        const { rows } = parseTSVWithOffsets('A\tB\t');
+        expect(rows).toEqual([['A', 'B', '']]);
+    });
+
+    it('handles a single-column table', () => {
+        const { rows } = parseTSVWithOffsets('Header\nrow1\nrow2');
+        expect(rows).toEqual([['Header'], ['row1'], ['row2']]);
+    });
+
+    it('preserves ragged rows (different column counts)', () => {
+        const { rows } = parseTSVWithOffsets('A\tB\tC\nX\tY');
+        expect(rows).toEqual([['A', 'B', 'C'], ['X', 'Y']]);
+    });
+
+    it('handles CRLF inside a fenced block', () => {
+        const { rows } = parseTSVWithOffsets('```tsv\r\nA\tB\r\nC\tD\r\n```');
+        expect(rows).toEqual([['A', 'B'], ['C', 'D']]);
+    });
 });
 
 describe('cellTrust', () => {
@@ -50,6 +70,21 @@ describe('cellTrust', () => {
         expect(cellTrust('agree', 0.7, 0.7, 70)).toBe('medium');
         // weak blend -> low
         expect(cellTrust('agree', 0.4, 0.4, 40)).toBe('low');
+    });
+
+    it('blend >= 0.85 but llmMin < 0.5 is held out of high (gate)', () => {
+        // blended = 0.4*0.9 + 0.6*1.0 = 0.96 >= 0.85, but llmMin 0.49 < 0.5
+        expect(cellTrust('agree', 0.9, 0.49, 100)).toBe('medium');
+    });
+
+    it('lands exactly on the 0.65 medium boundary', () => {
+        // blended = 0.4*0.65 + 0.6*0.65 = 0.65 -> medium
+        expect(cellTrust('agree', 0.65, 0.65, 65)).toBe('medium');
+    });
+
+    it('treats null OCR as 0 in the blend for an agreeing cell', () => {
+        // blended = 0.4*1 + 0.6*0 = 0.4 < 0.65 -> low even with a perfect LLM
+        expect(cellTrust('agree', 1, 1, null)).toBe('low');
     });
 });
 
@@ -86,5 +121,62 @@ describe('computeProvenanceCells', () => {
         const fuzzy = computeProvenanceCells(provFuzzy, logprobs, raw, [wordA])[0][0];
         expect(high.confidence.trust).toBe('high');
         expect(fuzzy.confidence.trust).toBe('medium'); // high -> medium
+    });
+
+    it('knocks a non-high fuzzy cell down to low', () => {
+        const raw = 'Hi';
+        const provFuzzy: CellProvenance[][] = [[
+            { rowIndex: 0, colIndex: 0, value: 'Hi', wordIds: ['a'], matchStatus: 'fuzzy' },
+        ]];
+        // A shaky token + weak OCR keep the base trust at medium; fuzzy -> low.
+        const lowWord: OcrWord = { ...wordA, confidence: 60 };
+        const logprobs: TokenLogprob[] = [{ token: 'Hi', logprob: Math.log(0.6), charOffset: 0 }];
+        const cell = computeProvenanceCells(provFuzzy, logprobs, raw, [lowWord])[0][0];
+        expect(cell.confidence.trust).toBe('low');
+    });
+
+    it('excludes null logprobs from the mean instead of treating them as prob 1.0 (M17)', () => {
+        const raw = 'Hi';
+        const prov: CellProvenance[][] = [[
+            { rowIndex: 0, colIndex: 0, value: 'Hi', wordIds: ['a'], matchStatus: 'matched' },
+        ]];
+        // Two tokens land in the cell range [0,2): one shaky real logprob and one null.
+        // If null were treated as logprob 0 (prob 1.0) it would inflate the mean.
+        const shaky: TokenLogprob[] = [
+            { token: 'H', logprob: Math.log(0.5), charOffset: 0 },
+            { token: 'i', logprob: null, charOffset: 1 },
+        ];
+        const cell = computeProvenanceCells(prov, shaky, raw, [wordA])[0][0];
+        // Mean over the single usable token only => exp(log 0.5) = 0.5, not inflated.
+        expect(cell.confidence.llmMean).toBeCloseTo(0.5, 5);
+        expect(cell.confidence.llmMin).toBeCloseTo(0.5, 5);
+    });
+
+    it('falls back to llmMean/llmMin of 0 when a cell has no usable logprobs', () => {
+        const raw = 'Hi';
+        const prov: CellProvenance[][] = [[
+            { rowIndex: 0, colIndex: 0, value: 'Hi', wordIds: ['a'], matchStatus: 'matched' },
+        ]];
+        const cell = computeProvenanceCells(prov, [], raw, [wordA])[0][0];
+        expect(cell.confidence.llmMean).toBe(0);
+        expect(cell.confidence.llmMin).toBe(0);
+    });
+
+    it('maps each logprob offset to the cell whose [start,end) contains it', () => {
+        // raw = "AB\tCD" -> cell0 range [0,2), cell1 range [3,5)
+        const raw = 'AB\tCD';
+        const prov: CellProvenance[][] = [[
+            { rowIndex: 0, colIndex: 0, value: 'AB', wordIds: [], matchStatus: 'unmatched' },
+            { rowIndex: 0, colIndex: 1, value: 'CD', wordIds: [], matchStatus: 'unmatched' },
+        ]];
+        // offset 1 -> cell0; offset 4 -> cell1; offset 2 (the tab) -> neither.
+        const logprobs: TokenLogprob[] = [
+            { token: 'A', logprob: Math.log(0.9), charOffset: 1 },
+            { token: 'D', logprob: Math.log(0.3), charOffset: 4 },
+            { token: '\t', logprob: Math.log(0.1), charOffset: 2 },
+        ];
+        const cells = computeProvenanceCells(prov, logprobs, raw, []);
+        expect(cells[0][0].confidence.llmMean).toBeCloseTo(0.9, 5);
+        expect(cells[0][1].confidence.llmMean).toBeCloseTo(0.3, 5);
     });
 });

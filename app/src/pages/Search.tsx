@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { DeleteSessionDialog } from '../features/sessions/DeleteSessionDialog';
 import { getDb } from '../lib/db';
 import Icon from '../components/Icon';
+import { formatSqliteTimestamp, escapeLike } from './searchUtils';
 
 interface Session {
     id: string;
@@ -12,23 +13,6 @@ interface Session {
 }
 
 const ITEMS_PER_PAGE = 10;
-
-// SQLite's CURRENT_TIMESTAMP is UTC with no timezone marker ('YYYY-MM-DD HH:MM:SS').
-// `new Date()` would parse that as *local* time, skewing "Last updated" by the UTC
-// offset. Tag it as UTC (ISO 'T...Z') so it's interpreted correctly.
-function formatSqliteTimestamp(ts: string): string {
-    const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(ts)
-        ? `${ts.replace(' ', 'T')}Z`
-        : ts;
-    const date = new Date(normalized);
-    return isNaN(date.getTime()) ? ts : date.toLocaleDateString();
-}
-
-// Escape LIKE metacharacters so a query such as "100%" or "a_b" matches literally
-// instead of acting as wildcards. Paired with `ESCAPE '\'` in the query.
-function escapeLike(value: string): string {
-    return value.replace(/[\\%_]/g, (char) => `\\${char}`);
-}
 
 export default function Search(): React.ReactElement {
     const [query, setQuery] = useState('');

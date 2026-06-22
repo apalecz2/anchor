@@ -1,14 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import type { OcrWord } from '../features/ocr/types';
 import { groupWordsIntoLines, sortWords, generateLinesFromWords, buildTableText } from './ocrTransforms';
-
-let nextId = 0;
-const word = (text: string, left: number, top: number, width = 10, height = 10): OcrWord => ({
-    id: `w${nextId++}`,
-    text,
-    confidence: 90,
-    box_coords: { left, top, width, height },
-});
+import { ocrWord as word } from '../test/fixtures';
 
 // imageHeight 1000 -> lineThreshold = max(2, 5) = 5px
 const H = 1000;
@@ -58,6 +50,19 @@ describe('groupWordsIntoLines', () => {
     it('returns [] for no words', () => {
         expect(groupWordsIntoLines([], H)).toEqual([]);
     });
+
+    it('keeps a single short line together', () => {
+        const lines = groupWordsIntoLines([word('a', 0, 0), word('b', 20, 0)], H);
+        expect(lines.length).toBe(1);
+    });
+
+    it('applies the 2px floor on the line threshold for tiny images', () => {
+        // imageHeight 100 -> 0.005*100 = 0.5, floored to 2px.
+        const same = groupWordsIntoLines([word('a', 0, 0), word('b', 20, 2)], 100);
+        expect(same.length).toBe(1); // gap 2 is not > 2 -> same line
+        const split = groupWordsIntoLines([word('a', 0, 0), word('b', 20, 3)], 100);
+        expect(split.length).toBe(2); // gap 3 > 2 -> split
+    });
 });
 
 describe('sortWords', () => {
@@ -102,5 +107,29 @@ describe('buildTableText', () => {
         // No line should contain more whitespace-separated column starts than headers.
         expect(lines[0]).toContain('Name');
         expect(lines[0]).toContain('Code');
+    });
+
+    it('returns empty string for no words', () => {
+        expect(buildTableText([], H)).toBe('');
+    });
+
+    it('falls back to a single column when the header is one word', () => {
+        const words = [word('Title', 0, 0, 50), word('Value', 0, 100, 50)];
+        const out = buildTableText(words, H);
+        // Both rows render in one column; no phantom split.
+        expect(out.split('\n')).toEqual(['Title', 'Value']);
+    });
+
+    it('pads a later column to its character anchor', () => {
+        const words = [
+            word('A', 0, 0, 10),
+            word('B', 400, 0, 10),   // header second column far to the right
+            word('x', 0, 100, 10),
+            word('y', 400, 100, 10),
+        ];
+        const lines = buildTableText(words, H).split('\n');
+        // The second column should be indented (spaces before it), aligned across rows.
+        expect(lines[0].indexOf('B')).toBe(lines[1].indexOf('y'));
+        expect(lines[0].indexOf('B')).toBeGreaterThan(1);
     });
 });

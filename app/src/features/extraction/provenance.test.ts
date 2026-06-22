@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import type { OcrWord } from '../ocr/types';
 import {
     matchCellsToOcr,
     getCellSourceBox,
@@ -8,14 +7,7 @@ import {
     similarity,
     normalize,
 } from './provenance';
-
-let nextId = 0;
-const word = (text: string, left = 0, top = 0): OcrWord => ({
-    id: `w${nextId++}`,
-    text,
-    confidence: 90,
-    box_coords: { left, top, width: 10, height: 10 },
-});
+import { ocrWord as word } from '../../test/fixtures';
 
 describe('normalize', () => {
     it('lowercases and strips non-alphanumerics', () => {
@@ -87,6 +79,38 @@ describe('matchCellsToOcr — fuzzy second pass', () => {
         const prov = matchCellsToOcr(csv, w);
         expect(prov[0][0].matchStatus).toBe('unmatched');
         expect(prov[0][0].wordIds).toEqual([]);
+    });
+
+    it('accepts a fuzzy match exactly at the 0.8 similarity threshold', () => {
+        // target "abcde" (5) vs OCR "abcdx" -> 1 edit / maxLen 5 = 0.8 -> accept
+        const w = [word('abcdx')];
+        const prov = matchCellsToOcr([['abcde']], w);
+        expect(prov[0][0].matchStatus).toBe('fuzzy');
+        expect(prov[0][0].wordIds).toEqual([w[0].id]);
+    });
+
+    it('rejects a fuzzy candidate just below the 0.8 threshold', () => {
+        // target "abcd" (4) vs OCR "abcx" -> 1 edit / maxLen 4 = 0.75 -> reject
+        const w = [word('abcx')];
+        const prov = matchCellsToOcr([['abcd']], w);
+        expect(prov[0][0].matchStatus).toBe('unmatched');
+    });
+});
+
+describe('matchCellsToOcr — degenerate inputs', () => {
+    it('returns [] for an empty CSV', () => {
+        expect(matchCellsToOcr([], [word('a')])).toEqual([]);
+    });
+
+    it('leaves every cell unmatched when there are no OCR words', () => {
+        const prov = matchCellsToOcr([['a', 'b']], []);
+        expect(prov[0].every(c => c.matchStatus === 'unmatched')).toBe(true);
+        expect(prov[0].every(c => c.wordIds.length === 0)).toBe(true);
+    });
+
+    it('leaves an all-unmatched row without throwing', () => {
+        const prov = matchCellsToOcr([['zzz', 'yyy']], [word('abc')]);
+        expect(prov[0].map(c => c.matchStatus)).toEqual(['unmatched', 'unmatched']);
     });
 });
 
