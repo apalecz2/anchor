@@ -1,0 +1,7 @@
+node_modules
+
+# WebdriverIO / test run artifacts
+logs
+*.log
+.wdio-*
+results
