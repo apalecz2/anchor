@@ -42,7 +42,10 @@ pub fn detect_hardware() -> HardwareInfo {
 const CUDA_MIN_VRAM_MB: u64 = 4096;
 
 fn recommend_backend(vendor: Option<&str>, vram_mb: Option<u64>) -> String {
-    let v = match vendor { Some(s) => s, None => return "cpu".into() };
+    let v = match vendor {
+        Some(s) => s,
+        None => return "cpu".into(),
+    };
     if v.contains("NVIDIA") {
         // An NVIDIA GPU is present. Recommend CUDA unless we have a *reliable*
         // VRAM reading below the threshold. VRAM of None means detection was
@@ -65,9 +68,13 @@ fn recommend_backend(vendor: Option<&str>, vram_mb: Option<u64>) -> String {
 }
 
 fn current_os() -> &'static str {
-    if cfg!(target_os = "windows") { "windows" }
-    else if cfg!(target_os = "macos") { "macos" }
-    else { "linux" }
+    if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "linux"
+    }
 }
 
 /// Backends with a downloadable asset on this platform, ordered best → fallback.
@@ -106,11 +113,17 @@ fn parse_nvidia_smi(stdout: &str) -> Option<u64> {
 
 fn extract_gpu_vendor(name: &str) -> &'static str {
     let u = name.to_uppercase();
-    if u.contains("NVIDIA") { "NVIDIA" }
-    else if u.contains("AMD") || u.contains("RADEON") { "AMD" }
-    else if u.contains("APPLE") { "Apple" }
-    else if u.contains("INTEL") { "Intel" }
-    else { "Unknown" }
+    if u.contains("NVIDIA") {
+        "NVIDIA"
+    } else if u.contains("AMD") || u.contains("RADEON") {
+        "AMD"
+    } else if u.contains("APPLE") {
+        "Apple"
+    } else if u.contains("INTEL") {
+        "Intel"
+    } else {
+        "Unknown"
+    }
 }
 
 fn query_hardware() -> (Option<String>, Option<String>, Option<u64>, u64) {
@@ -135,7 +148,10 @@ fn query_hardware_windows() -> (Option<String>, Option<String>, Option<u64>, u64
     let gpu_json = run_powershell(ps_gpu).unwrap_or_default();
     let gpu_val: serde_json::Value = serde_json::from_str(gpu_json.trim()).unwrap_or_default();
     let gpu_name = gpu_val["Name"].as_str().map(String::from);
-    let gpu_vendor = gpu_name.as_deref().map(extract_gpu_vendor).map(String::from);
+    let gpu_vendor = gpu_name
+        .as_deref()
+        .map(extract_gpu_vendor)
+        .map(String::from);
 
     // Win32_VideoController.AdapterRAM is a uint32 and saturates near 4 GB, so a
     // 6/8/12 GB card reports ~4095 MB — just under the CUDA threshold, which is
@@ -194,10 +210,18 @@ fn query_hardware_macos() -> (Option<String>, Option<String>, Option<u64>, u64) 
         .args(["-n", "hw.memsize"])
         .output()
         .ok()
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u64>().ok())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<u64>()
+                .ok()
+        })
         .unwrap_or(0);
 
-    let gpu_vendor = gpu_name.as_deref().map(extract_gpu_vendor).map(String::from);
+    let gpu_vendor = gpu_name
+        .as_deref()
+        .map(extract_gpu_vendor)
+        .map(String::from);
     (gpu_name, gpu_vendor, vram_mb, ram_bytes / (1024 * 1024))
 }
 
@@ -211,15 +235,24 @@ fn query_hardware_linux() -> (Option<String>, Option<String>, Option<u64>, u64) 
         .unwrap_or_default();
 
     let gpu_line = lspci.lines().next().map(String::from);
-    let gpu_vendor = gpu_line.as_deref().map(|l| {
-        if l.contains("NVIDIA") { "NVIDIA" }
-        else if l.contains("AMD") || l.contains("Advanced Micro Devices") { "AMD" }
-        else if l.contains("Intel") { "Intel" }
-        else { "Unknown" }
-    }).map(String::from);
+    let gpu_vendor = gpu_line
+        .as_deref()
+        .map(|l| {
+            if l.contains("NVIDIA") {
+                "NVIDIA"
+            } else if l.contains("AMD") || l.contains("Advanced Micro Devices") {
+                "AMD"
+            } else if l.contains("Intel") {
+                "Intel"
+            } else {
+                "Unknown"
+            }
+        })
+        .map(String::from);
 
     let meminfo = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
-    let ram_mb = meminfo.lines()
+    let ram_mb = meminfo
+        .lines()
         .find(|l| l.starts_with("MemTotal:"))
         .and_then(|l| l.split_whitespace().nth(1))
         .and_then(|n| n.parse::<u64>().ok())
@@ -244,7 +277,10 @@ mod tests {
     #[test]
     fn recommend_backend_matrix() {
         // NVIDIA with ample VRAM -> cuda.
-        assert_eq!(recommend_backend(Some("NVIDIA GeForce RTX 4070"), Some(8192)), "cuda");
+        assert_eq!(
+            recommend_backend(Some("NVIDIA GeForce RTX 4070"), Some(8192)),
+            "cuda"
+        );
         // NVIDIA below the 4 GB threshold -> cpu.
         assert_eq!(recommend_backend(Some("NVIDIA"), Some(2048)), "cpu");
         // NVIDIA with unreliable (None) VRAM -> cuda, not a wrong CPU downgrade (CR:H3).

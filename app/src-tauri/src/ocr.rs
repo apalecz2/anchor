@@ -46,7 +46,9 @@ pub struct ProcessState {
 
 impl ProcessState {
     pub fn new() -> Self {
-        ProcessState { generation: Arc::new(AtomicU64::new(0)) }
+        ProcessState {
+            generation: Arc::new(AtomicU64::new(0)),
+        }
     }
 }
 
@@ -160,11 +162,14 @@ fn preprocess_for_ocr(
     out_dir: &Path,
     allow_upscale: bool,
 ) -> Result<(PathBuf, f32), String> {
-    let img = image::open(source)
-        .map_err(|e| format!("failed to open image for preprocessing: {e}"))?;
+    let img =
+        image::open(source).map_err(|e| format!("failed to open image for preprocessing: {e}"))?;
 
     let (w, h) = img.dimensions();
-    let stem = source.file_stem().and_then(|s| s.to_str()).unwrap_or("page");
+    let stem = source
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("page");
     let scale: f32 = upscale_factor(w, h, allow_upscale);
 
     let gray: GrayImage = img.grayscale().to_luma8();
@@ -202,16 +207,19 @@ fn ocr_image_to_page(
     // it regardless of outcome so these copies never accumulate (they used to be
     // written into the persistent sessions/ folder, untracked, and pile up forever).
     let result = (|| -> Result<DocumentPageResult, String> {
-        let mut args = rusty_tesseract::Args::default();
-        args.lang = "eng".to_string();
-        args.psm = Some(6);  // single uniform block — better for tabular layouts
-        args.dpi = None;     // let Tesseract estimate from image; the default 150 misrepresents upscaled content
+        let args = rusty_tesseract::Args {
+            lang: "eng".to_string(),
+            psm: Some(6), // single uniform block — better for tabular layouts
+            dpi: None, // let Tesseract estimate from image; the default 150 misrepresents upscaled content
+            ..Default::default()
+        };
 
         let tesseract_image = rusty_tesseract::tesseract::input::Image::from_path(&ocr_path)
             .map_err(|error| format!("failed to load image for ocr: {error}"))?;
 
-        let ocr_output = rusty_tesseract::tesseract::output_data::image_to_data(&tesseract_image, &args)
-            .map_err(|error| format!("ocr failed: {error}"))?;
+        let ocr_output =
+            rusty_tesseract::tesseract::output_data::image_to_data(&tesseract_image, &args)
+                .map_err(|error| format!("ocr failed: {error}"))?;
 
         let words = ocr_output
             .data
@@ -221,9 +229,9 @@ fn ocr_image_to_page(
                 text: item.text,
                 confidence: item.conf,
                 box_coords: BoundingBox {
-                    left:   map_coord(item.left,   scale),
-                    top:    map_coord(item.top,    scale),
-                    width:  map_coord(item.width,  scale),
+                    left: map_coord(item.left, scale),
+                    top: map_coord(item.top, scale),
+                    width: map_coord(item.width, scale),
                     height: map_coord(item.height, scale),
                 },
             })
@@ -322,7 +330,10 @@ fn process_document_blocking(
         .app_data_dir()
         .map_err(|error| format!("failed to resolve app data directory: {error}"))?;
 
-    let eng_traineddata = data_dir.join("tesseract").join("tessdata").join("eng.traineddata");
+    let eng_traineddata = data_dir
+        .join("tesseract")
+        .join("tessdata")
+        .join("eng.traineddata");
     if !eng_traineddata.exists() {
         return Err(format!(
             "Tesseract English language data not found at {}. Re-run setup to reinstall Tesseract.",
@@ -373,10 +384,12 @@ fn process_document_blocking(
                 pdfium_lib.display()
             ));
         }
-        let pdfium = Pdfium::new(
-            Pdfium::bind_to_library(&pdfium_lib)
-                .map_err(|error| format!("failed to bind to pdfium at {}: {error}", pdfium_lib.display()))?,
-        );
+        let pdfium = Pdfium::new(Pdfium::bind_to_library(&pdfium_lib).map_err(|error| {
+            format!(
+                "failed to bind to pdfium at {}: {error}",
+                pdfium_lib.display()
+            )
+        })?);
 
         let document = pdfium
             .load_pdf_from_file(source_path, None)
@@ -409,8 +422,8 @@ fn process_document_blocking(
                     .render_with_config(&render_config)
                     .map_err(|error| format!("failed to render page {}: {error}", i + 1))?;
 
-                let natural_width = bitmap.width() as i32;
-                let natural_height = bitmap.height() as i32;
+                let natural_width = bitmap.width();
+                let natural_height = bitmap.height();
 
                 let generated_path =
                     session_dir.join(format!("{}_page_{}_{}.png", session_id, i + 1, timestamp));
@@ -450,7 +463,6 @@ fn process_document_blocking(
                 },
             );
         }
-
     } else if input_kind == InputKind::Image {
         // A single image is one uninterruptible OCR call, so honor a cancel that
         // arrives before it begins (mid-call cancellation isn't possible — the
@@ -470,7 +482,6 @@ fn process_document_blocking(
             &ocr_work_dir,
             true, // arbitrary resolution; upscale if small
         )?);
-
     } else {
         return Err(format!("Unsupported file format: .{}", extension));
     }
@@ -501,13 +512,20 @@ fn process_document_blocking(
 /// non-zero with no output.
 pub fn configure_tesseract_env(data_dir: &Path) {
     let dir = data_dir.join("tesseract");
-    let sep = if cfg!(target_os = "windows") { ";" } else { ":" };
+    let sep = if cfg!(target_os = "windows") {
+        ";"
+    } else {
+        ":"
+    };
     let dir_str = dir.display().to_string();
     let current = std::env::var("PATH").unwrap_or_default();
     if !current.split(sep).any(|p| p == dir_str) {
         std::env::set_var("PATH", format!("{dir_str}{sep}{current}"));
     }
-    std::env::set_var("TESSDATA_PREFIX", dir.join("tessdata").display().to_string());
+    std::env::set_var(
+        "TESSDATA_PREFIX",
+        dir.join("tessdata").display().to_string(),
+    );
 }
 
 /// Guarantee the `tsv` output config exists.
@@ -575,7 +593,12 @@ mod tests {
     #[test]
     fn ensure_tesseract_tsv_config_writes_the_config() {
         let dir = tempfile::tempdir().unwrap();
-        let tsv = dir.path().join("tesseract").join("tessdata").join("configs").join("tsv");
+        let tsv = dir
+            .path()
+            .join("tesseract")
+            .join("tessdata")
+            .join("configs")
+            .join("tsv");
         assert!(!tsv.exists());
         ensure_tesseract_tsv_config(dir.path());
         assert!(tsv.exists());

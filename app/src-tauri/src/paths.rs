@@ -23,18 +23,30 @@ pub fn resolve_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 
 pub fn llama_exe_name() -> &'static str {
-    if cfg!(target_os = "windows") { "llama-server.exe" } else { "llama-server" }
+    if cfg!(target_os = "windows") {
+        "llama-server.exe"
+    } else {
+        "llama-server"
+    }
 }
 
 pub fn tesseract_exe_name() -> &'static str {
-    if cfg!(target_os = "windows") { "tesseract.exe" } else { "tesseract" }
+    if cfg!(target_os = "windows") {
+        "tesseract.exe"
+    } else {
+        "tesseract"
+    }
 }
 
 /// Filename of the PDFium shared library once extracted into the binaries dir.
 /// Also used as the archive's flatten marker, since the library file is what we
 /// lift out of the archive's wrapper folder.
 pub fn pdfium_lib_name() -> &'static str {
-    if cfg!(target_os = "windows") { "pdfium.dll" } else { "libpdfium.dylib" }
+    if cfg!(target_os = "windows") {
+        "pdfium.dll"
+    } else {
+        "libpdfium.dylib"
+    }
 }
 
 /// (r2_object_key, sha256_of_archive, approx_size_bytes) for the current

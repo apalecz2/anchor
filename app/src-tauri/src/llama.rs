@@ -83,7 +83,11 @@ fn pick_free_port() -> Result<u16, String> {
 /// True if something is accepting connections on `127.0.0.1:port` right now. Used
 /// to decide whether a recorded PID is still a live server worth reaping.
 fn something_listening(port: u16) -> bool {
-    TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], port)), Duration::from_millis(300)).is_ok()
+    TcpStream::connect_timeout(
+        &SocketAddr::from(([127, 0, 0, 1], port)),
+        Duration::from_millis(300),
+    )
+    .is_ok()
 }
 
 /// Best-effort, OS-native force-kill of a process tree by PID. We don't hold a
@@ -100,9 +104,7 @@ fn kill_pid(pid: u32) {
     }
     #[cfg(unix)]
     {
-        let _ = Command::new("kill")
-            .args(["-9", &pid.to_string()])
-            .output();
+        let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
     }
 }
 
@@ -161,7 +163,9 @@ pub fn stop_llama_server_process(state: &AppState) -> Result<(), String> {
 
 #[tauri::command]
 pub fn resolve_llama_server_path(app_handle: tauri::AppHandle) -> Result<String, String> {
-    let binary = resolve_data_dir(&app_handle)?.join("binaries").join(llama_exe_name());
+    let binary = resolve_data_dir(&app_handle)?
+        .join("binaries")
+        .join(llama_exe_name());
     if binary.exists() {
         Ok(binary.to_string_lossy().into_owned())
     } else {
@@ -243,7 +247,10 @@ pub fn start_llama_server(
                 .ok()
                 .and_then(|guard| *guard)
                 .ok_or_else(|| "server is running but its port is unknown".to_string())?;
-            return Ok(ServerHandle { pid: child.id(), port });
+            return Ok(ServerHandle {
+                pid: child.id(),
+                port,
+            });
         }
         // It exited; drop the stale handle and start a fresh one below.
         llama_server.take();
@@ -270,13 +277,19 @@ pub fn start_llama_server(
     } else {
         read_persisted_backend(&data_dir).unwrap_or_else(|| backend.clone())
     };
-    let gpu_layers = if is_gpu_backend(&effective_backend) { "999" } else { "0" };
+    let gpu_layers = if is_gpu_backend(&effective_backend) {
+        "999"
+    } else {
+        "0"
+    };
 
     let port = pick_free_port()?;
 
     // Redirect the server's output to a truncated log file so (a) no console window
     // appears in release on Windows and (b) crash diagnostics survive.
-    let log_path: PathBuf = LOG_RELATIVE_PATH.iter().fold(data_dir.clone(), |p, seg| p.join(seg));
+    let log_path: PathBuf = LOG_RELATIVE_PATH
+        .iter()
+        .fold(data_dir.clone(), |p, seg| p.join(seg));
     if let Some(parent) = log_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -290,7 +303,10 @@ pub fn start_llama_server(
                 file,
                 "[artifact] launching llama-server: requested_backend={backend} effective_backend={effective_backend} n_gpu_layers={gpu_layers}",
             );
-            let err = file.try_clone().map(Stdio::from).unwrap_or_else(|_| Stdio::null());
+            let err = file
+                .try_clone()
+                .map(Stdio::from)
+                .unwrap_or_else(|_| Stdio::null());
             (Stdio::from(file), err)
         }
         // If the log file can't be created, fall back to discarding output rather

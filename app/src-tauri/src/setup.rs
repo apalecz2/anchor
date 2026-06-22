@@ -39,7 +39,9 @@ fn dir_contains_prefix(dir: &Path, prefix: &str) -> bool {
     fs::read_dir(dir)
         .map(|rd| {
             rd.flatten().any(|e| {
-                e.file_name().to_str().is_some_and(|n| n.starts_with(prefix))
+                e.file_name()
+                    .to_str()
+                    .is_some_and(|n| n.starts_with(prefix))
             })
         })
         .unwrap_or(false)
@@ -120,16 +122,26 @@ fn accept_unpinned_or_err(what: &str) -> Result<(), String> {
 /// Feed bytes `[from, to)` of `path` into `hasher`. Used to seed the rolling hash
 /// when resuming a `.part` left by a previous app run (the in-memory hasher didn't
 /// see those bytes). Only this gap is read — not the whole file.
-fn hash_file_range(path: &Path, hasher: &mut sha2::Sha256, from: u64, to: u64) -> Result<(), String> {
+fn hash_file_range(
+    path: &Path,
+    hasher: &mut sha2::Sha256,
+    from: u64,
+    to: u64,
+) -> Result<(), String> {
     use sha2::Digest;
     let mut f = fs::File::open(path).map_err(|e| format!("open .part for hashing failed: {e}"))?;
-    f.seek(std::io::SeekFrom::Start(from)).map_err(|e| format!("seek failed: {e}"))?;
+    f.seek(std::io::SeekFrom::Start(from))
+        .map_err(|e| format!("seek failed: {e}"))?;
     let mut remaining = to - from;
     let mut buf = [0u8; 65536];
     while remaining > 0 {
         let want = remaining.min(buf.len() as u64) as usize;
-        let n = f.read(&mut buf[..want]).map_err(|e| format!("read error: {e}"))?;
-        if n == 0 { break; }
+        let n = f
+            .read(&mut buf[..want])
+            .map_err(|e| format!("read error: {e}"))?;
+        if n == 0 {
+            break;
+        }
         hasher.update(&buf[..n]);
         remaining -= n as u64;
     }
@@ -202,7 +214,9 @@ const PARTIAL_RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60); // 7 
 /// Called once at startup.
 pub fn sweep_stale_partials(data_dir: &Path) {
     for dir in [data_dir.to_path_buf(), data_dir.join("models")] {
-        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("part") {
@@ -211,7 +225,12 @@ pub fn sweep_stale_partials(data_dir: &Path) {
             let stale = entry
                 .metadata()
                 .and_then(|m| m.modified())
-                .map(|modified| modified.elapsed().map(|age| age > PARTIAL_RETENTION).unwrap_or(false))
+                .map(|modified| {
+                    modified
+                        .elapsed()
+                        .map(|age| age > PARTIAL_RETENTION)
+                        .unwrap_or(false)
+                })
                 .unwrap_or(false);
             if stale {
                 let _ = fs::remove_file(&path);
@@ -269,10 +288,20 @@ pub async fn download_file(
 
     // Finalize once the bytes on disk are known-good: emit a `verifying` tick,
     // confirm the rolling hash (or apply the unpinned-asset policy), then rename.
-    let finalize = |app_handle: &tauri::AppHandle, hex: Option<String>, bytes: u64, total: Option<u64>| -> Result<(), String> {
-        let _ = app_handle.emit("setup:progress", SetupProgress {
-            asset_id: asset_id.clone(), phase: "verifying", bytes_received: bytes, total_bytes: total,
-        });
+    let finalize = |app_handle: &tauri::AppHandle,
+                    hex: Option<String>,
+                    bytes: u64,
+                    total: Option<u64>|
+     -> Result<(), String> {
+        let _ = app_handle.emit(
+            "setup:progress",
+            SetupProgress {
+                asset_id: asset_id.clone(),
+                phase: "verifying",
+                bytes_received: bytes,
+                total_bytes: total,
+            },
+        );
         match hex {
             Some(actual) => {
                 if !actual.eq_ignore_ascii_case(&expected_sha256) {
@@ -412,7 +441,8 @@ pub async fn download_file(
                     if cancelled() {
                         return Err("setup cancelled".into());
                     }
-                    file.write_all(&chunk).map_err(|e| format!("write error: {e}"))?;
+                    file.write_all(&chunk)
+                        .map_err(|e| format!("write error: {e}"))?;
                     if verify {
                         hasher.update(&chunk);
                         hashed_up_to += chunk.len() as u64;
@@ -420,12 +450,15 @@ pub async fn download_file(
                     bytes_received += chunk.len() as u64;
                     // Coalesce progress events to PROGRESS_THROTTLE to avoid flooding the UI.
                     if last_emit.elapsed() >= PROGRESS_THROTTLE {
-                        let _ = app_handle.emit("setup:progress", SetupProgress {
-                            asset_id: asset_id.clone(),
-                            phase: "downloading",
-                            bytes_received,
-                            total_bytes,
-                        });
+                        let _ = app_handle.emit(
+                            "setup:progress",
+                            SetupProgress {
+                                asset_id: asset_id.clone(),
+                                phase: "downloading",
+                                bytes_received,
+                                total_bytes,
+                            },
+                        );
                         last_emit = Instant::now();
                     }
                 }
@@ -453,17 +486,22 @@ pub async fn download_file(
 
         // Final download progress so the bar reaches 100% even if the last chunk
         // was throttled, then verify-and-finalize from the rolling hash.
-        let _ = app_handle.emit("setup:progress", SetupProgress {
-            asset_id: asset_id.clone(),
-            phase: "downloading",
-            bytes_received,
-            total_bytes,
-        });
+        let _ = app_handle.emit(
+            "setup:progress",
+            SetupProgress {
+                asset_id: asset_id.clone(),
+                phase: "downloading",
+                bytes_received,
+                total_bytes,
+            },
+        );
         let hex = verify.then(|| format!("{:x}", hasher.clone().finalize()));
         return finalize(&app_handle, hex, bytes_received, total_bytes);
     }
 
-    Err(format!("download failed after {DOWNLOAD_MAX_ATTEMPTS} attempts: {last_err}"))
+    Err(format!(
+        "download failed after {DOWNLOAD_MAX_ATTEMPTS} attempts: {last_err}"
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -486,14 +524,17 @@ pub async fn verify_file_hash(path: String, expected_sha256: String) -> Result<b
     tokio::task::spawn_blocking(move || {
         use sha2::{Digest, Sha256};
 
-        let mut file = std::fs::File::open(&path)
-            .map_err(|e| format!("open failed: {e}"))?;
+        let mut file = std::fs::File::open(&path).map_err(|e| format!("open failed: {e}"))?;
 
         let mut hasher = Sha256::new();
         let mut buf = [0u8; 65536];
         loop {
-            let n = file.read(&mut buf).map_err(|e| format!("read error: {e}"))?;
-            if n == 0 { break; }
+            let n = file
+                .read(&mut buf)
+                .map_err(|e| format!("read error: {e}"))?;
+            if n == 0 {
+                break;
+            }
             hasher.update(&buf[..n]);
         }
 
@@ -531,23 +572,23 @@ fn extract_preserving(archive_path: &str, dest: &Path) -> Result<(), String> {
     fs::create_dir_all(dest).map_err(|e| format!("mkdir failed: {e}"))?;
 
     if is_targz(archive_path) {
-        let file = fs::File::open(archive_path)
-            .map_err(|e| format!("open archive failed: {e}"))?;
+        let file = fs::File::open(archive_path).map_err(|e| format!("open archive failed: {e}"))?;
         let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
         // unpack() preserves permissions (incl. the executable bit) and rejects
         // entries that would escape `dest` via path traversal.
-        archive.unpack(dest).map_err(|e| format!("tar.gz extract failed: {e}"))?;
+        archive
+            .unpack(dest)
+            .map_err(|e| format!("tar.gz extract failed: {e}"))?;
         return Ok(());
     }
 
     use zip::ZipArchive;
-    let file = fs::File::open(archive_path)
-        .map_err(|e| format!("open archive failed: {e}"))?;
-    let mut archive = ZipArchive::new(file)
-        .map_err(|e| format!("zip open failed: {e}"))?;
+    let file = fs::File::open(archive_path).map_err(|e| format!("open archive failed: {e}"))?;
+    let mut archive = ZipArchive::new(file).map_err(|e| format!("zip open failed: {e}"))?;
 
     for i in 0..archive.len() {
-        let mut entry = archive.by_index(i)
+        let mut entry = archive
+            .by_index(i)
             .map_err(|e| format!("zip entry error at index {i}: {e}"))?;
 
         // enclosed_name() returns None for entries with path traversal — skip them.
@@ -561,10 +602,9 @@ fn extract_preserving(archive_path: &str, dest: &Path) -> Result<(), String> {
             if let Some(parent) = out_path.parent() {
                 fs::create_dir_all(parent).map_err(|e| format!("mkdir failed: {e}"))?;
             }
-            let mut out_file = fs::File::create(&out_path)
-                .map_err(|e| format!("create file failed: {e}"))?;
-            std::io::copy(&mut entry, &mut out_file)
-                .map_err(|e| format!("extract failed: {e}"))?;
+            let mut out_file =
+                fs::File::create(&out_path).map_err(|e| format!("create file failed: {e}"))?;
+            std::io::copy(&mut entry, &mut out_file).map_err(|e| format!("extract failed: {e}"))?;
 
             // Preserve the executable bit (llama-server in upstream zips).
             #[cfg(unix)]
@@ -585,7 +625,9 @@ fn find_marker_dir(root: &Path, marker: &str) -> Option<PathBuf> {
     let marker_exe = format!("{marker}.exe");
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let Ok(read_dir) = fs::read_dir(&dir) else { continue };
+        let Ok(read_dir) = fs::read_dir(&dir) else {
+            continue;
+        };
         let mut subdirs = Vec::new();
         for entry in read_dir.flatten() {
             let path = entry.path();
@@ -610,7 +652,9 @@ fn copy_dir_contents(src: &Path, dest: &Path) -> Result<(), String> {
     fs::create_dir_all(dest).map_err(|e| format!("mkdir failed: {e}"))?;
     for entry in fs::read_dir(src).map_err(|e| format!("read dir failed: {e}"))? {
         let path = entry.map_err(|e| format!("read dir failed: {e}"))?.path();
-        let Some(name) = path.file_name() else { continue };
+        let Some(name) = path.file_name() else {
+            continue;
+        };
         let target = dest.join(name);
         if path.is_dir() {
             copy_dir_contents(&path, &target)?;
@@ -636,9 +680,11 @@ pub async fn extract_archive(
     dest_dir: String,
     flatten_marker: Option<String>,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || extract_archive_inner(&archive_path, &dest_dir, flatten_marker))
-        .await
-        .map_err(|e| format!("extract task failed: {e}"))?
+    tokio::task::spawn_blocking(move || {
+        extract_archive_inner(&archive_path, &dest_dir, flatten_marker)
+    })
+    .await
+    .map_err(|e| format!("extract task failed: {e}"))?
 }
 
 fn extract_archive_inner(
@@ -709,9 +755,21 @@ pub fn get_setup_paths(app_handle: tauri::AppHandle) -> Result<SetupPaths, Strin
     let d = resolve_data_dir(&app_handle)?;
     let hardware_backend = read_persisted_backend(&d);
     Ok(SetupPaths {
-        llama_server: d.join("binaries").join(llama_exe_name()).to_string_lossy().into_owned(),
-        model_path:   d.join("models").join(MODEL_FILENAME).to_string_lossy().into_owned(),
-        mmproj_path:  d.join("models").join(MMPROJ_FILENAME).to_string_lossy().into_owned(),
+        llama_server: d
+            .join("binaries")
+            .join(llama_exe_name())
+            .to_string_lossy()
+            .into_owned(),
+        model_path: d
+            .join("models")
+            .join(MODEL_FILENAME)
+            .to_string_lossy()
+            .into_owned(),
+        mmproj_path: d
+            .join("models")
+            .join(MMPROJ_FILENAME)
+            .to_string_lossy()
+            .into_owned(),
         hardware_backend,
     })
 }
@@ -788,21 +846,38 @@ fn get_llama_server_spec(backend: &str) -> (&'static str, u64, &'static str, &'s
     // (pre-extraction). Empty = not yet uploaded to R2, so verify_file_hash skips it.
     if cfg!(target_os = "macos") {
         // macOS releases are .tar.gz (nested under build/bin) — see extract_archive.
-        return ("llama.cpp server (Metal / Apple Silicon)", 10_547_769, "llama-bin-macos-arm64.tar.gz",
-            "b77565f38c8cad9b0132dd4dbca54e201e8fb5b654d57780b87e0e05da25fafe");
+        return (
+            "llama.cpp server (Metal / Apple Silicon)",
+            10_547_769,
+            "llama-bin-macos-arm64.tar.gz",
+            "b77565f38c8cad9b0132dd4dbca54e201e8fb5b654d57780b87e0e05da25fafe",
+        );
     }
     if cfg!(target_os = "windows") {
         return if backend == "cuda" {
-            ("llama.cpp server (CUDA / GPU)", 260_955_318, "llama-bin-win-cuda-x64.zip",
-                "4be0993b63ff501e3aa23e7f35e16e03a8b44404462792994cd66ce98915fa7e")
+            (
+                "llama.cpp server (CUDA / GPU)",
+                260_955_318,
+                "llama-bin-win-cuda-x64.zip",
+                "4be0993b63ff501e3aa23e7f35e16e03a8b44404462792994cd66ce98915fa7e",
+            )
         } else {
-            ("llama.cpp server (CPU)", 16_721_561, "llama-bin-win-cpu-x64.zip",
-                "d6af2cdf070fe3222c1ffc0cf9665d1d395aff32b985a29d8dc2e3ae1398d780")
+            (
+                "llama.cpp server (CPU)",
+                16_721_561,
+                "llama-bin-win-cpu-x64.zip",
+                "d6af2cdf070fe3222c1ffc0cf9665d1d395aff32b985a29d8dc2e3ae1398d780",
+            )
         };
     }
     // Linux — upstream only publishes CPU (ubuntu) builds; GPU backends fall back to it.
     // Not yet uploaded to R2 — size is a rough placeholder, hash empty, until it is.
-    ("llama.cpp server (CPU)", 25_000_000, "llama-bin-ubuntu-x64.zip", "")
+    (
+        "llama.cpp server (CPU)",
+        25_000_000,
+        "llama-bin-ubuntu-x64.zip",
+        "",
+    )
 }
 
 fn get_tesseract_spec(data_dir: &Path) -> AssetManifestEntry {
@@ -810,29 +885,45 @@ fn get_tesseract_spec(data_dir: &Path) -> AssetManifestEntry {
     // uploaded to R2 (Linux), so verify_file_hash skips it.
     // size_bytes = actual R2 Content-Length (verified 2026-06-16).
     let (label, size_bytes, url_suffix, sha256) = if cfg!(target_os = "windows") {
-        ("Tesseract OCR engine (38 MB)", 38_218_316u64, "windows/tesseract.zip",
-            "268ded1253c5697071915e0dcea6c32a278bf037d51d0602165d4502c113dd1a")
+        (
+            "Tesseract OCR engine (38 MB)",
+            38_218_316u64,
+            "windows/tesseract.zip",
+            "268ded1253c5697071915e0dcea6c32a278bf037d51d0602165d4502c113dd1a",
+        )
     } else if cfg!(target_os = "macos") {
-        ("Tesseract OCR engine (5.7 MB)", 5_701_459u64, "macos/tesseract.zip",
-            "efe841cbccfa2f65664101546a93cc47a793dcf8b2313d47460ca234482430ab")
+        (
+            "Tesseract OCR engine (5.7 MB)",
+            5_701_459u64,
+            "macos/tesseract.zip",
+            "efe841cbccfa2f65664101546a93cc47a793dcf8b2313d47460ca234482430ab",
+        )
     } else {
-        ("Tesseract OCR engine (15 MB)", 15_000_000u64, "linux/tesseract.zip", "")
+        (
+            "Tesseract OCR engine (15 MB)",
+            15_000_000u64,
+            "linux/tesseract.zip",
+            "",
+        )
     };
 
     AssetManifestEntry {
-        asset_id:       "tesseract".into(),
-        label:          label.into(),
+        asset_id: "tesseract".into(),
+        label: label.into(),
         size_bytes,
-        dest_path:      data_dir.join("tesseract.zip").to_string_lossy().into_owned(),
-        sha256:         sha256.into(),
-        url_primary:    format!("{R2_BASE}/{url_suffix}"),
-        url_fallback:   None,
+        dest_path: data_dir
+            .join("tesseract.zip")
+            .to_string_lossy()
+            .into_owned(),
+        sha256: sha256.into(),
+        url_primary: format!("{R2_BASE}/{url_suffix}"),
+        url_fallback: None,
         extract_to_dir: Some(data_dir.join("tesseract").to_string_lossy().into_owned()),
         // Installer zips wrap files in a folder (e.g. tesseract-w64/); find the
         // real root by the tesseract binary. tessdata/ subtree is preserved.
         flatten_marker: Some("tesseract".into()),
-        installed:      false, // filled in by get_asset_manifest
-        version:        None,  // upstream Tesseract build not separately pinned
+        installed: false, // filled in by get_asset_manifest
+        version: None,    // upstream Tesseract build not separately pinned
     }
 }
 
@@ -847,85 +938,97 @@ pub fn get_asset_manifest(
 
     // Keep the local archive's extension matching the upstream format so
     // extract_archive can dispatch zip vs tar.gz.
-    let llama_archive = if is_targz(r2_key) { "llama.tar.gz" } else { "llama.zip" };
+    let llama_archive = if is_targz(r2_key) {
+        "llama.tar.gz"
+    } else {
+        "llama.zip"
+    };
 
     let llama = AssetManifestEntry {
-        asset_id:       "llama_server".into(),
-        label:          label.into(),
+        asset_id: "llama_server".into(),
+        label: label.into(),
         size_bytes,
-        dest_path:      data_dir.join(llama_archive).to_string_lossy().into_owned(),
-        sha256:         llama_sha.into(),
-        url_primary:    format!("{R2_BASE}/binaries/{r2_key}"),
-        url_fallback:   None,
+        dest_path: data_dir.join(llama_archive).to_string_lossy().into_owned(),
+        sha256: llama_sha.into(),
+        url_primary: format!("{R2_BASE}/binaries/{r2_key}"),
+        url_fallback: None,
         extract_to_dir: Some(binaries_dir.clone()),
         flatten_marker: Some("llama-server".into()), // macOS nests under build/bin; Windows is flat
-        installed:      false,
-        version:        Some(LLAMA_CPP_BUILD.into()),
+        installed: false,
+        version: Some(LLAMA_CPP_BUILD.into()),
     };
 
     // Windows CUDA builds need the CUDA runtime DLLs, which llama.cpp ships as a
     // separate zip. Its DLLs sit flat at the root, so a plain extract into the
     // binaries dir places them alongside llama-server.exe.
     let cudart = (cfg!(target_os = "windows") && backend == "cuda").then(|| AssetManifestEntry {
-        asset_id:       "cudart".into(),
-        label:          "CUDA runtime libraries".into(),
-        size_bytes:     391_443_627, // actual R2 Content-Length (verified 2026-06-16)
-        dest_path:      data_dir.join("cudart.zip").to_string_lossy().into_owned(),
-        sha256:         "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6".into(),
-        url_primary:    format!("{R2_BASE}/binaries/cudart-llama-bin-win-cuda-x64.zip"),
-        url_fallback:   None,
+        asset_id: "cudart".into(),
+        label: "CUDA runtime libraries".into(),
+        size_bytes: 391_443_627, // actual R2 Content-Length (verified 2026-06-16)
+        dest_path: data_dir.join("cudart.zip").to_string_lossy().into_owned(),
+        sha256: "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6".into(),
+        url_primary: format!("{R2_BASE}/binaries/cudart-llama-bin-win-cuda-x64.zip"),
+        url_fallback: None,
         extract_to_dir: Some(binaries_dir.clone()),
         flatten_marker: None, // DLLs sit flat at the zip root
-        installed:      false,
+        installed: false,
         // Shipped as part of the same llama.cpp CUDA release archive set.
-        version:        Some(LLAMA_CPP_BUILD.into()),
+        version: Some(LLAMA_CPP_BUILD.into()),
     });
 
     // PDFium renderer (Windows + macOS; see pdfium_spec). The library nests under
     // a wrapper folder in the archive, so flatten by its filename to drop it
     // directly into the binaries dir.
     let pdfium = pdfium_spec().map(|(key, sha, size)| AssetManifestEntry {
-        asset_id:       "pdfium".into(),
-        label:          "PDFium renderer".into(),
-        size_bytes:     size,
-        dest_path:      data_dir.join("pdfium.tgz").to_string_lossy().into_owned(),
-        sha256:         sha.into(),
-        url_primary:    format!("{R2_BASE}/binaries/{key}"),
-        url_fallback:   None,
+        asset_id: "pdfium".into(),
+        label: "PDFium renderer".into(),
+        size_bytes: size,
+        dest_path: data_dir.join("pdfium.tgz").to_string_lossy().into_owned(),
+        sha256: sha.into(),
+        url_primary: format!("{R2_BASE}/binaries/{key}"),
+        url_fallback: None,
         extract_to_dir: Some(binaries_dir),
         flatten_marker: Some(pdfium_lib_name().into()),
-        installed:      false,
-        version:        None, // pdfium prebuild not separately pinned
+        installed: false,
+        version: None, // pdfium prebuild not separately pinned
     });
 
     let tesseract = get_tesseract_spec(&data_dir);
 
     let mmproj = AssetManifestEntry {
-        asset_id:       "mmproj_gguf".into(),
-        label:          "Vision projector (672 MB)".into(),
-        size_bytes:     672_423_616, // actual R2 Content-Length (verified 2026-06-16)
-        dest_path:      data_dir.join("models").join(MMPROJ_FILENAME).to_string_lossy().into_owned(),
-        sha256:         "cd88edcf8d031894960bb0c9c5b9b7e1fea6ebee02b9f7ce925a00d12891f864".into(),
-        url_primary:    format!("{R2_BASE}/models/{MMPROJ_FILENAME}"),
-        url_fallback:   Some(HF_MMPROJ_URL.into()),
+        asset_id: "mmproj_gguf".into(),
+        label: "Vision projector (672 MB)".into(),
+        size_bytes: 672_423_616, // actual R2 Content-Length (verified 2026-06-16)
+        dest_path: data_dir
+            .join("models")
+            .join(MMPROJ_FILENAME)
+            .to_string_lossy()
+            .into_owned(),
+        sha256: "cd88edcf8d031894960bb0c9c5b9b7e1fea6ebee02b9f7ce925a00d12891f864".into(),
+        url_primary: format!("{R2_BASE}/models/{MMPROJ_FILENAME}"),
+        url_fallback: Some(HF_MMPROJ_URL.into()),
         extract_to_dir: None,
         flatten_marker: None,
-        installed:      false,
-        version:        Some(QWEN_MODEL_REVISION.into()),
+        installed: false,
+        version: Some(QWEN_MODEL_REVISION.into()),
     };
 
     let model = AssetManifestEntry {
-        asset_id:       "model_gguf".into(),
-        label:          "Qwen language model (2.7 GB)".into(),
-        size_bytes:     2_740_937_888, // actual R2 Content-Length (verified 2026-06-16)
-        dest_path:      data_dir.join("models").join(MODEL_FILENAME).to_string_lossy().into_owned(),
-        sha256:         "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4".into(),
-        url_primary:    format!("{R2_BASE}/models/{MODEL_FILENAME}"),
-        url_fallback:   Some(HF_MODEL_URL.into()),
+        asset_id: "model_gguf".into(),
+        label: "Qwen language model (2.7 GB)".into(),
+        size_bytes: 2_740_937_888, // actual R2 Content-Length (verified 2026-06-16)
+        dest_path: data_dir
+            .join("models")
+            .join(MODEL_FILENAME)
+            .to_string_lossy()
+            .into_owned(),
+        sha256: "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4".into(),
+        url_primary: format!("{R2_BASE}/models/{MODEL_FILENAME}"),
+        url_fallback: Some(HF_MODEL_URL.into()),
         extract_to_dir: None,
         flatten_marker: None,
-        installed:      false,
-        version:        Some(QWEN_MODEL_REVISION.into()),
+        installed: false,
+        version: Some(QWEN_MODEL_REVISION.into()),
     };
 
     // Ordered smallest → largest so early progress is fast.
@@ -1061,8 +1164,14 @@ mod tests {
 
         sweep_stale_partials(dir.path());
 
-        assert!(fresh.exists(), "a recent .part (a genuine resume) must be kept");
-        assert!(!old.exists(), "a .part older than the retention window must be reclaimed");
+        assert!(
+            fresh.exists(),
+            "a recent .part (a genuine resume) must be kept"
+        );
+        assert!(
+            !old.exists(),
+            "a .part older than the retention window must be reclaimed"
+        );
         assert!(other.exists(), "non-.part files must be untouched");
     }
 
@@ -1100,11 +1209,21 @@ mod tests {
         .expect("extract_archive failed");
 
         // The library must land flat in dest…
-        assert!(dest.join(lib).exists(), "{lib} did not land flat in {}", dest.display());
+        assert!(
+            dest.join(lib).exists(),
+            "{lib} did not land flat in {}",
+            dest.display()
+        );
         // …with the wrapper dirs collapsed away (only the marker dir's contents copied).
-        assert!(!dest.join("include").exists(), "wrapper dir 'include' leaked into dest");
+        assert!(
+            !dest.join("include").exists(),
+            "wrapper dir 'include' leaked into dest"
+        );
         // asset_installed must now agree the asset is present.
-        assert!(asset_installed("pdfium", &work), "asset_installed(pdfium) should be true");
+        assert!(
+            asset_installed("pdfium", &work),
+            "asset_installed(pdfium) should be true"
+        );
 
         let _ = fs::remove_dir_all(&work);
     }

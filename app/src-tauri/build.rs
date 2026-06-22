@@ -51,7 +51,10 @@ fn main() {
 
     println!("cargo:rerun-if-changed={}", source_binaries_dir.display());
     println!("cargo:rerun-if-changed={}", legacy_binaries_dir.display());
-    println!("cargo:rerun-if-changed={}", manifest_dir.join("tauri.conf.json").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest_dir.join("tauri.conf.json").display()
+    );
 
     tauri_build::build()
 }
