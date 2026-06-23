@@ -1,0 +1,61 @@
+name: release
+
+# Builds the Windows installers and publishes them to a GitHub Release.
+# Trigger: push a version tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`),
+# or run manually from the Actions tab. The release is created as a DRAFT so you
+# review the artifacts and notes before making it public.
+#
+# Versioning: the installer filename uses the `version` in app/src-tauri/tauri.conf.json,
+# so keep the tag (vX.Y.Z) and that version in sync.
+#
+# Code signing is added later (release-strategy.md Phase 2): set the signing env
+# vars on the tauri-action step and the produced installer is signed automatically.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write # required for tauri-action to create the Release
+
+jobs:
+  release:
+    name: Build & publish (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: Install frontend deps
+        working-directory: app
+        run: npm ci
+
+      - name: Build app + publish GitHub Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: app
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Anchor ${{ github.ref_name }}'
+          releaseBody: |
+            Download the installer below.
+
+            **Note:** on first launch Anchor downloads its OCR engine, model server,
+            PDF renderer, and a local AI model (~3.5 GB) into your user folder. An
+            internet connection is needed once for this setup; afterwards all
+            processing runs offline on your device.
+          releaseDraft: true
+          prerelease: false
