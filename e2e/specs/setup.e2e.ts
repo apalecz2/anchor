@@ -1,7 +1,7 @@
 import { browser, $, expect } from '@wdio/globals';
 
 // TEST_PLAN §7 journey 1: First-run setup — automatic.
-// Requires a fresh AppData and ARTIFACT_R2_BASE pointing at the local fixture
+// Requires a fresh AppData and ANCHOR_R2_BASE pointing at the local fixture
 // asset server (small stand-in binaries/models with known SHA-256), so the wizard
 // runs end to end without 3.5 GB of real downloads.
 describe('First-run setup — automatic', () => {

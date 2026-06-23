@@ -135,7 +135,7 @@ export default function Settings(): React.ReactElement {
                 <section>
                     <h1 className="font-display-lg text-display-lg text-primary tracking-tight">Settings</h1>
                     <p className="font-body-lg text-body-lg text-on-surface-variant mt-3 max-w-xl">
-                        Configure Artifact's appearance, AI model paths, and setup.
+                        Configure Anchor's appearance, AI model paths, and setup.
                     </p>
                 </section>
 
@@ -274,7 +274,7 @@ export default function Settings(): React.ReactElement {
             <ConfirmDialog
                 open={confirmDeleteAll}
                 title="Delete all sessions?"
-                description="This permanently deletes every session and the data Artifact has copied for itself. It only touches the app's own data — your original attached files and any outputs you saved elsewhere are left untouched. This cannot be undone."
+                description="This permanently deletes every session and the data Anchor has copied for itself. It only touches the app's own data — your original attached files and any outputs you saved elsewhere are left untouched. This cannot be undone."
                 confirmLabel="Delete all"
                 onConfirm={handleDeleteAllSessions}
                 onCancel={() => setConfirmDeleteAll(false)}

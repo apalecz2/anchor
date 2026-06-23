@@ -200,7 +200,7 @@ export default function Dashboard(): React.ReactElement {
             <div className="max-w-2xl w-full flex flex-col items-center text-center z-10">
                 <h2 className="font-display-lg text-display-lg text-primary mb-4 tracking-tight">Extract Intelligence.</h2>
                 <p className="font-body-lg text-body-lg text-on-surface-variant mb-12 max-w-lg">
-                    Drop your documents here. Artifact will analyze and extract structured data locally, ensuring complete privacy.
+                    Drop your documents here. Anchor will analyze and extract structured data locally, ensuring complete privacy.
                 </p>
 
                 {/* Drag & Drop Zone */}

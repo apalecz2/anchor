@@ -1,6 +1,6 @@
 # Dark / Light Mode Implementation
 
-How dark and light mode work in this project (Artifact, `app/`). The theme is a
+How dark and light mode work in this project (Anchor, `app/`). The theme is a
 class on `<html>` plus a set of CSS custom properties that the Tailwind tokens read
 from, with a single shared hook keeping every toggle in sync.
 

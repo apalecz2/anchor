@@ -1,4 +1,4 @@
-# Test Plan — Artifact (DataExtractionAI)
+# Test Plan — Anchor (DataExtractionAI)
 
 **Status:** authored 2026-06-17 · **Scope:** the shippable app (`app/` React frontend + `app/src-tauri/` Rust backend). Prototypes (`prototypes/`) are out of scope.
 **Supported platforms:** Windows + macOS (per [design.md §5](design.md)). Linux paths exist but are unsupported placeholders — they are smoke-checked for compilation only, not validated.
@@ -315,7 +315,7 @@ Each row is a deliberately-induced failure with an asserted recovery. Mostly Tie
 - **SQL injection**: search/title with `%_'"\;` matches literally and cannot break the query `(CR:L5)`.
 - No telemetry/outbound calls except R2/HuggingFace during setup and loopback llama traffic (network capture during an extraction).
 
-**Cross-platform matrix** — run Tiers 3–4 on both Windows and macOS runners. Platform-specific asserts: Windows console window suppressed `(CR:M9)`; macOS exec bits preserved on extracted binaries `(CR:H6)`; AppData path `com.aidenpaleczny.artifact` (no `.app`) `(design §7.2)`; pdfium binds to the bundled lib on both `(CR:C3)`.
+**Cross-platform matrix** — run Tiers 3–4 on both Windows and macOS runners. Platform-specific asserts: Windows console window suppressed `(CR:M9)`; macOS exec bits preserved on extracted binaries `(CR:H6)`; AppData path `com.aidenpaleczny.anchor` (no `.app`) `(design §7.2)`; pdfium binds to the bundled lib on both `(CR:C3)`.
 
 ---
 

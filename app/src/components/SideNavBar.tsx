@@ -114,7 +114,7 @@ const SideNavBar: FC<SideNavBarProps> = ({
                     tabIndex={collapsed ? -1 : 0}
                 >
                     <span className="text-2xl font-bold text-on-surface hover:opacity-80 transition-opacity">
-                        Artifact
+                        Anchor
                     </span>
                 </Link>
 

@@ -18,10 +18,10 @@ const ASSETS = [
 function summarize(hw: HardwareInfo): string {
     const build = BACKEND_LABEL[hw.recommended_backend];
     if (hw.recommended_backend === 'cpu' || !hw.gpu_name) {
-        return `No compatible GPU detected — Artifact will install the ${build} build.`;
+        return `No compatible GPU detected — Anchor will install the ${build} build.`;
     }
     const vram = hw.vram_mb != null ? ` (${(hw.vram_mb / 1024).toFixed(1)} GB)` : '';
-    return `Detected ${hw.gpu_name}${vram} — Artifact will install the ${build} build.`;
+    return `Detected ${hw.gpu_name}${vram} — Anchor will install the ${build} build.`;
 }
 
 export default function WelcomeStep({ onAutomatic, onCustom }: Props): React.ReactElement {
@@ -43,7 +43,7 @@ export default function WelcomeStep({ onAutomatic, onCustom }: Props): React.Rea
         <div className="flex flex-col gap-8">
             <div>
                 <h1 className="font-display-lg text-display-lg text-primary tracking-tight">
-                    Welcome to Artifact
+                    Welcome to Anchor
                 </h1>
                 <p className="font-body-lg text-body-lg text-on-surface-variant mt-3 max-w-xl">
                     Before you can start extracting data, the app needs to download a few

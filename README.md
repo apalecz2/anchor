@@ -1,4 +1,4 @@
-# Artifact
+# Anchor
 
 A local-first desktop application for extracting structured data from non-machine-readable documents -- scanned PDFs, photos, image-based tables -- with zero API cost and no data leaving the machine.
 

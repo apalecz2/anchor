@@ -301,7 +301,7 @@ pub fn start_llama_server(
             use std::io::Write as _;
             let _ = writeln!(
                 file,
-                "[artifact] launching llama-server: requested_backend={backend} effective_backend={effective_backend} n_gpu_layers={gpu_layers}",
+                "[anchor] launching llama-server: requested_backend={backend} effective_backend={effective_backend} n_gpu_layers={gpu_layers}",
             );
             let err = file
                 .try_clone()

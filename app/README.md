@@ -1,11 +1,11 @@
 # app/
 
-React + Tauri source for Artifact. See the [root README](../README.md) for a project overview and the [design doc](../docs/design.md) for architecture details.
+React + Tauri source for Anchor. See the [root README](../README.md) for a project overview and the [design doc](../docs/design.md) for architecture details.
 
 ## AppData layout (after first-run setup)
 
 ```
-{AppData}/com.aidenpaleczny.artifact/
+{AppData}/com.aidenpaleczny.anchor/
 ├── binaries/
 │   ├── llama-server[.exe]
 │   └── pdfium.dll / libpdfium.dylib   (Windows / macOS; for PDF rendering)

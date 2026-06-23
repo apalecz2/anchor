@@ -66,6 +66,18 @@ jobs:
         with:
           node-version: 22
       # Gated Rust suites (need the real pdfium archive / a tesseract on PATH).
+      # extract_pdfium_flattens_library runs only when PDFIUM_TGZ points at a real
+      # archive, so fetch the platform build from R2 first — otherwise the test
+      # fails copying a file that was never downloaded.
+      - name: Fetch pdfium archive for gated test
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            KEY=pdfium-win-x64.tgz
+          else
+            KEY=pdfium-mac-arm64.tgz
+          fi
+          curl -fsSL "https://anchor-assets.aidenpaleczny.com/binaries/$KEY" -o "$RUNNER_TEMP/pdfium.tgz"
       - name: Gated cargo tests
         working-directory: app/src-tauri
         env:

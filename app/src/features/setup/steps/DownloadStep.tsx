@@ -330,7 +330,7 @@ export default function DownloadStep({ config, onComplete, onError, onCancel }: 
             <div>
                 <h2 className="font-headline-lg text-headline-lg text-on-surface">Setting things up</h2>
                 <p className="font-body-md text-body-md text-on-surface-variant mt-1">
-                    Downloading and installing everything Artifact needs. You can cancel any time —
+                    Downloading and installing everything Anchor needs. You can cancel any time —
                     your progress is saved, so you can pick up where you left off later.
                 </p>
             </div>
@@ -453,7 +453,7 @@ export default function DownloadStep({ config, onComplete, onError, onCancel }: 
             <ConfirmDialog
                 open={confirmKind !== null}
                 title={confirmKind === 'quit' ? 'Quit setup?' : 'Cancel setup?'}
-                description="Your progress is saved. The next time you open Artifact, setup will pick up right where it left off."
+                description="Your progress is saved. The next time you open Anchor, setup will pick up right where it left off."
                 confirmLabel={confirmKind === 'quit' ? 'Quit' : 'Cancel setup'}
                 cancelLabel="Keep going"
                 onConfirm={handleConfirm}

@@ -6,7 +6,7 @@ This document walks through provisioning a Cloudflare R2 bucket, uploading all r
 
 ## Overview
 
-The first-run setup wizard downloads ~3.5 GB of assets at runtime rather than bundling them with the installer. All assets are served from a single Cloudflare R2 bucket. The Rust backend reads one constant (`R2_BASE` in [setup.rs](../app/src-tauri/src/setup.rs)) and constructs every download URL from it. It is currently set to `https://artifact-assets.aidenpaleczny.com`.
+The first-run setup wizard downloads ~3.5 GB of assets at runtime rather than bundling them with the installer. All assets are served from a single Cloudflare R2 bucket. The Rust backend reads one constant (`R2_BASE` in [setup.rs](../app/src-tauri/src/setup.rs)) and constructs every download URL from it. It is currently set to `https://anchor-assets.aidenpaleczny.com`.
 
 **Assets served from R2:**
 
@@ -33,7 +33,7 @@ The llama.cpp archives are the **unmodified release artifacts** from GitHub — 
 
 1. Log in at [dash.cloudflare.com](https://dash.cloudflare.com).
 2. In the left sidebar click **R2 Object Storage** → **Create bucket**.
-3. Name the bucket (e.g. `artifact-assets`).
+3. Name the bucket (e.g. `anchor-assets`).
 4. Select the region closest to your primary user base (or `Auto`).
 5. Click **Create bucket**.
 
@@ -46,10 +46,10 @@ The app downloads files over plain HTTPS with no authentication. You need public
 ### Option A — Custom domain (recommended for production)
 
 1. Open the bucket → **Settings** tab → **Custom Domains**.
-2. Click **Connect Domain** and enter the domain you control (this project uses `artifact-assets.aidenpaleczny.com`).
+2. Click **Connect Domain** and enter the domain you control (this project uses `anchor-assets.aidenpaleczny.com`).
 3. Cloudflare automatically creates the DNS record if the domain uses Cloudflare DNS.
 4. Wait for the domain to show **Active**.
-5. Your base URL will be `https://artifact-assets.aidenpaleczny.com` (or whatever you set) — this is the value of `R2_BASE` in `setup.rs`.
+5. Your base URL will be `https://anchor-assets.aidenpaleczny.com` (or whatever you set) — this is the value of `R2_BASE` in `setup.rs`.
 
 ### Option B — r2.dev public URL (development/testing only)
 
@@ -128,7 +128,7 @@ That's the entire update procedure: download, rename, upload to `binaries/`. The
 
 ## Step 6 — Build the Tesseract zip archives
 
-The app extracts each Tesseract zip into `{AppData}/com.aidenpaleczny.artifact/tesseract/`. After extraction the app expects this layout:
+The app extracts each Tesseract zip into `{AppData}/com.aidenpaleczny.anchor/tesseract/`. After extraction the app expects this layout:
 
 ```
 tesseract/
@@ -246,17 +246,17 @@ Upload the entire tree with Wrangler:
 
 ```bash
 # Upload everything (run from the directory containing the upload/ folder)
-wrangler r2 object put artifact-assets/binaries/llama-bin-win-cpu-x64.zip          --file upload/binaries/llama-bin-win-cpu-x64.zip
-wrangler r2 object put artifact-assets/binaries/llama-bin-win-cuda-x64.zip         --file upload/binaries/llama-bin-win-cuda-x64.zip
-wrangler r2 object put artifact-assets/binaries/cudart-llama-bin-win-cuda-x64.zip  --file upload/binaries/cudart-llama-bin-win-cuda-x64.zip
-wrangler r2 object put artifact-assets/binaries/llama-bin-macos-arm64.tar.gz       --file upload/binaries/llama-bin-macos-arm64.tar.gz
-wrangler r2 object put artifact-assets/windows/tesseract.zip                       --file upload/windows/tesseract.zip
-wrangler r2 object put artifact-assets/macos/tesseract.zip                         --file upload/macos/tesseract.zip
-wrangler r2 object put artifact-assets/models/mmproj-F16.gguf                      --file upload/models/mmproj-F16.gguf
-wrangler r2 object put artifact-assets/models/Qwen3.5-4B-Q4_K_M.gguf              --file upload/models/Qwen3.5-4B-Q4_K_M.gguf
+wrangler r2 object put anchor-assets/binaries/llama-bin-win-cpu-x64.zip          --file upload/binaries/llama-bin-win-cpu-x64.zip
+wrangler r2 object put anchor-assets/binaries/llama-bin-win-cuda-x64.zip         --file upload/binaries/llama-bin-win-cuda-x64.zip
+wrangler r2 object put anchor-assets/binaries/cudart-llama-bin-win-cuda-x64.zip  --file upload/binaries/cudart-llama-bin-win-cuda-x64.zip
+wrangler r2 object put anchor-assets/binaries/llama-bin-macos-arm64.tar.gz       --file upload/binaries/llama-bin-macos-arm64.tar.gz
+wrangler r2 object put anchor-assets/windows/tesseract.zip                       --file upload/windows/tesseract.zip
+wrangler r2 object put anchor-assets/macos/tesseract.zip                         --file upload/macos/tesseract.zip
+wrangler r2 object put anchor-assets/models/mmproj-F16.gguf                      --file upload/models/mmproj-F16.gguf
+wrangler r2 object put anchor-assets/models/Qwen3.5-4B-Q4_K_M.gguf              --file upload/models/Qwen3.5-4B-Q4_K_M.gguf
 ```
 
-Replace `artifact-assets` with your actual bucket name.
+Replace `anchor-assets` with your actual bucket name.
 
 For the large GGUF files (2.7 GB) Wrangler may be slow. As an alternative use `rclone` with the R2 S3-compatible API:
 
@@ -269,7 +269,7 @@ rclone config create r2 s3 \
   endpoint=https://ACCOUNT_ID.r2.cloudflarestorage.com
 
 # Then copy
-rclone copy upload/models/ r2:artifact-assets/models/ --progress
+rclone copy upload/models/ r2:anchor-assets/models/ --progress
 ```
 
 R2 API credentials are created under **R2 → Manage R2 API Tokens** in the Cloudflare dashboard. Grant **Object Read & Write** for the specific bucket.
@@ -282,7 +282,7 @@ After uploading, test each URL with curl (or a browser) before updating the app:
 
 ```bash
 # The project's R2_BASE (replace if you provisioned your own domain)
-R2_BASE="https://artifact-assets.aidenpaleczny.com"
+R2_BASE="https://anchor-assets.aidenpaleczny.com"
 
 curl -I "$R2_BASE/binaries/llama-bin-win-cpu-x64.zip"
 curl -I "$R2_BASE/windows/tesseract.zip"
@@ -303,7 +303,7 @@ All asset constants live in [app/src-tauri/src/setup.rs](../app/src-tauri/src/se
 `R2_BASE` is currently:
 
 ```rust
-const R2_BASE: &str = "https://artifact-assets.aidenpaleczny.com";
+const R2_BASE: &str = "https://anchor-assets.aidenpaleczny.com";
 ```
 
 If you provision your own bucket under a different domain, replace it with your public URL.
@@ -341,12 +341,12 @@ cd app
 npm run tauri dev
 ```
 
-The app should open the setup wizard on first launch (or after clearing the `{AppData}/com.aidenpaleczny.artifact/` directory). The wizard is **Welcome → (Configuration, Custom path only) → Install → Complete** (hardware is probed in the background on Welcome; download/verify/extract all happen in the single Install step). Walk through it and confirm:
+The app should open the setup wizard on first launch (or after clearing the `{AppData}/com.aidenpaleczny.anchor/` directory). The wizard is **Welcome → (Configuration, Custom path only) → Install → Complete** (hardware is probed in the background on Welcome; download/verify/extract all happen in the single Install step). Walk through it and confirm:
 
 - [ ] Hardware probe completes and the recommended backend is offered
 - [ ] The Install step lists every asset with correct sizes and an overall progress bar + time estimate
 - [ ] Progress advances during download; "Show details" reveals per-asset progress
-- [ ] Files land in the correct `{AppData}/com.aidenpaleczny.artifact/` subdirectories
+- [ ] Files land in the correct `{AppData}/com.aidenpaleczny.anchor/` subdirectories
 - [ ] SHA-256 verification passes for all assets (verified incrementally as they stream)
 - [ ] The main app launches after the wizard completes
 
@@ -354,12 +354,12 @@ To reset the wizard during testing:
 
 ```powershell
 # Windows
-Remove-Item -Recurse "$env:APPDATA\com.aidenpaleczny.artifact" -Force
+Remove-Item -Recurse "$env:APPDATA\com.aidenpaleczny.anchor" -Force
 ```
 
 ```bash
 # macOS
-rm -rf ~/Library/Application\ Support/com.aidenpaleczny.artifact
+rm -rf ~/Library/Application\ Support/com.aidenpaleczny.anchor
 ```
 
 ---

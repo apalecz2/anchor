@@ -21,7 +21,7 @@ use crate::paths::{
 };
 
 // R2 bucket base URL
-const R2_BASE: &str = "https://artifact-assets.aidenpaleczny.com";
+const R2_BASE: &str = "https://anchor-assets.aidenpaleczny.com";
 
 // HuggingFace fallback URLs for the two GGUF models, used only if the R2 primary
 // is unreachable. Pinned to an exact commit revision (not `main`) so the bytes
@@ -281,7 +281,7 @@ pub async fn download_file(
     let part_path = PathBuf::from(format!("{dest_path}.part"));
 
     let client = reqwest::Client::builder()
-        .user_agent("artifact-setup/1.0")
+        .user_agent("anchor-setup/1.0")
         .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
         .build()
         .map_err(|e| format!("client build failed: {e}"))?;

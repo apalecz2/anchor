@@ -9,14 +9,14 @@ import { fileURLToPath } from 'node:url';
 // It must be installed once on the host:  cargo install tauri-driver --locked
 //
 // The app is exercised as a RELEASE build with a test profile that points R2_BASE
-// at a local fixture asset server (set ARTIFACT_R2_BASE) so the setup wizard runs
+// at a local fixture asset server (set ANCHOR_R2_BASE) so the setup wizard runs
 // without multi-GB downloads. Build it first:  (cd ../app && npm run tauri build)
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Resolve the built app binary for this platform. Override with ARTIFACT_APP_BIN.
+// Resolve the built app binary for this platform. Override with ANCHOR_APP_BIN.
 const APP_BINARY =
-    process.env.ARTIFACT_APP_BIN ??
+    process.env.ANCHOR_APP_BIN ??
     path.resolve(
         __dirname,
         '..',

@@ -35,7 +35,7 @@ describe('CompleteStep', () => {
         expect(readSetting('hardwareBackend')).toBe('cuda');
         expect(invoke).toHaveBeenCalledWith('persist_backend', { backend: 'cuda' });
 
-        const launch = screen.getByRole('button', { name: /Launch Artifact/ });
+        const launch = screen.getByRole('button', { name: /Launch Anchor/ });
         await waitFor(() => expect(launch).toBeEnabled());
         fireEvent.click(launch);
         expect(onLaunch).toHaveBeenCalled();

@@ -34,7 +34,7 @@ export default function CompleteStep({ backend, onLaunch }: Props): React.ReactE
             <div>
                 <h2 className="font-display-sm text-display-sm text-on-surface">Setup complete</h2>
                 <p className="font-body-lg text-body-lg text-on-surface-variant mt-2 max-w-md">
-                    All components downloaded and verified. Artifact is ready to use.
+                    All components downloaded and verified. Anchor is ready to use.
                 </p>
             </div>
 
@@ -50,7 +50,7 @@ export default function CompleteStep({ backend, onLaunch }: Props): React.ReactE
                 className="flex items-center gap-2 px-8 py-3 rounded-lg bg-primary text-on-primary font-label-lg text-label-lg hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
                 <Icon name="rocket_launch" size={18} />
-                Launch Artifact
+                Launch Anchor
             </button>
         </div>
     );

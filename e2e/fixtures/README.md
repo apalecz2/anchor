@@ -13,7 +13,7 @@ everything tiny — **never** depend on the real 2.7 GB model or live R2/Hugging
 
 ## Fixture asset server
 
-The setup journey points `ARTIFACT_R2_BASE` at a local HTTP server that serves
+The setup journey points `ANCHOR_R2_BASE` at a local HTTP server that serves
 stand-in "binaries"/"models" — tiny files whose SHA-256 matches a **test build**
 of the asset manifest. This exercises the download/verify/extract/resume paths
 without large transfers. Reuse the same fixtures for the Tier 3 `httpmock` tests.

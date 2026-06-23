@@ -109,7 +109,7 @@
 - [x] Add PDFium to the asset manifest (Windows + macOS), download into `binaries/` with archive flatten, bind via `Pdfium::bind_to_library(<explicit path>)`, gate `check_setup_complete` on it, and pin its SHA-256 (fixes `CODE_REVIEW.md` C3)
 - [x] Fail closed in `verify_file_hash` on an empty/unpinned digest in release builds (debug skips with a warning) -- fixes the fail-open half of `CODE_REVIEW.md` C1
 - [x] Re-run Tesseract `PATH` / `TESSDATA_PREFIX` injection at `process_document` call time so OCR works in the wizard's first session without a restart (fixes `CODE_REVIEW.md` C2)
-- [x] Replace `R2_BASE` placeholder with the real asset domain (`artifact-assets.aidenpaleczny.com`)
+- [x] Replace `R2_BASE` placeholder with the real asset domain (`anchor-assets.aidenpaleczny.com`)
 - [x] Replace `HF_MODEL_URL` / `HF_MMPROJ_URL` placeholder constants with real HuggingFace URLs -- both point at `unsloth/Qwen3.5-4B-GGUF` resolve URLs pinned to commit `e87f176` (not `main`), so the fallback bytes can't drift from the SHA-256 pins (`setup.rs`)
 - [x] Build and upload the macOS Tesseract zip to R2 and pin it (Windows pinned). _(Linux is a later addition — not needed for now.)_ -- on R2 at `macos/tesseract.zip`, SHA-256 pinned in `get_tesseract_spec`
 - [x] Upload llama-server binaries per platform to R2 and pin hashes (Windows CPU/CUDA, macOS). _(Linux build deferred — later addition.)_

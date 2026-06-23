@@ -55,7 +55,7 @@ export default function About(): React.ReactElement {
                         Your documents.<br />Your data.<br />Your machine.
                     </h1>
                     <p className="font-body-lg text-body-lg text-on-surface-variant max-w-xl">
-                        Artifact transforms unstructured documents — handwritten notes, image-based tables, scanned
+                        Anchor transforms unstructured documents — handwritten notes, image-based tables, scanned
                         PDFs — into clean, structured data. Everything runs locally on your hardware. Nothing leaves
                         your machine.
                     </p>
@@ -88,7 +88,7 @@ export default function About(): React.ReactElement {
 
                 {/* ── Core Capabilities ── */}
                 <section className="flex flex-col gap-8">
-                    <h2 className="font-headline-lg text-headline-lg text-on-surface">What Artifact does</h2>
+                    <h2 className="font-headline-lg text-headline-lg text-on-surface">What Anchor does</h2>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <FeatureCard
                             icon="lock"
@@ -123,7 +123,7 @@ export default function About(): React.ReactElement {
                         <StepRow
                             number="1"
                             title="Ingest & validate"
-                            body="Drop a PDF, PNG, or JPEG. Artifact validates the format and checks whether the document contains extractable content."
+                            body="Drop a PDF, PNG, or JPEG. Anchor validates the format and checks whether the document contains extractable content."
                         />
                         <StepRow
                             number="2"
@@ -239,7 +239,7 @@ export default function About(): React.ReactElement {
                         </div>
                     </div>
                     <p className="font-body-md text-body-md text-on-surface-variant">
-                        Artifact dynamically caps and prioritizes threads to keep the UI responsive and leave
+                        Anchor dynamically caps and prioritizes threads to keep the UI responsive and leave
                         headroom for your OS and other applications. Runs natively on macOS and Windows.
                     </p>
                 </section>
