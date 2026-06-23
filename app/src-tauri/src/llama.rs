@@ -95,9 +95,13 @@ fn something_listening(port: u16) -> bool {
 fn kill_pid(pid: u32) {
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         // /T also terminates child processes spawned by llama-server.
+        // CREATE_NO_WINDOW so reaping an orphan at startup doesn't flash a console.
         let _ = Command::new("taskkill")
             .args(["/PID", &pid.to_string(), "/F", "/T"])
+            .creation_flags(CREATE_NO_WINDOW)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .output();

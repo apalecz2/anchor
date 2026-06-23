@@ -854,19 +854,23 @@ fn get_llama_server_spec(backend: &str) -> (&'static str, u64, &'static str, &'s
         );
     }
     if cfg!(target_os = "windows") {
+        // The Windows archives are re-packed to bundle the VC++ 2015–2022 runtime
+        // (vcruntime140*.dll, msvcp140*.dll) alongside llama-server.exe, so it runs on a
+        // clean Windows install with no Visual C++ Redistributable present (docs/fix-vcruntime.md).
+        // size_bytes + sha256 below pin those re-packed archives.
         return if backend == "cuda" {
             (
                 "llama.cpp server (CUDA / GPU)",
-                260_955_318,
+                267_375_219,
                 "llama-bin-win-cuda-x64.zip",
-                "4be0993b63ff501e3aa23e7f35e16e03a8b44404462792994cd66ce98915fa7e",
+                "e3a09d29971b652341707e0b04697a75d052f577a01740a8628233b745905389",
             )
         } else {
             (
                 "llama.cpp server (CPU)",
-                16_721_561,
+                17_727_250,
                 "llama-bin-win-cpu-x64.zip",
-                "d6af2cdf070fe3222c1ffc0cf9665d1d395aff32b985a29d8dc2e3ae1398d780",
+                "b4e52ee641ba414d0daae3064d6332c94f25bb6dcd4a286f536edb4c9c7c98fa",
             )
         };
     }

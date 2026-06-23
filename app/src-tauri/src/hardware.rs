@@ -8,6 +8,22 @@ use std::process::Command;
 
 use serde::Serialize;
 
+/// Build a `Command` that won't flash a console window on Windows. Anchor is a GUI
+/// app, so shelling out to a probe (PowerShell, nvidia-smi) would otherwise pop a
+/// visible console window on every launch during hardware detection. `CREATE_NO_WINDOW`
+/// suppresses it. No-op on macOS/Linux (no console is created there).
+fn hidden_command(program: &str) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 #[derive(Serialize)]
 pub struct HardwareInfo {
     pub gpu_name: Option<String>,
@@ -95,7 +111,7 @@ fn available_backends() -> Vec<String> {
 /// uint32 saturation. Returns None if nvidia-smi is absent or unparseable.
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 fn nvidia_smi_vram_mb() -> Option<u64> {
-    let out = Command::new("nvidia-smi")
+    let out = hidden_command("nvidia-smi")
         .args(["--query-gpu=memory.total", "--format=csv,noheader,nounits"])
         .output()
         .ok()?;
@@ -177,7 +193,7 @@ fn query_hardware_windows() -> (Option<String>, Option<String>, Option<u64>, u64
 
 #[cfg(target_os = "windows")]
 fn run_powershell(script: &str) -> Option<String> {
-    let out = Command::new("powershell")
+    let out = hidden_command("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
         .output()
         .ok()?;
@@ -186,7 +202,7 @@ fn run_powershell(script: &str) -> Option<String> {
 
 #[cfg(target_os = "macos")]
 fn query_hardware_macos() -> (Option<String>, Option<String>, Option<u64>, u64) {
-    let sp = Command::new("system_profiler")
+    let sp = hidden_command("system_profiler")
         .args(["SPDisplaysDataType", "-json"])
         .output()
         .ok()
@@ -206,7 +222,7 @@ fn query_hardware_macos() -> (Option<String>, Option<String>, Option<u64>, u64) 
         .and_then(|s| s.split_whitespace().next())
         .and_then(|n| n.parse::<u64>().ok());
 
-    let ram_bytes = Command::new("sysctl")
+    let ram_bytes = hidden_command("sysctl")
         .args(["-n", "hw.memsize"])
         .output()
         .ok()
@@ -227,7 +243,7 @@ fn query_hardware_macos() -> (Option<String>, Option<String>, Option<u64>, u64) 
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn query_hardware_linux() -> (Option<String>, Option<String>, Option<u64>, u64) {
-    let lspci = Command::new("lspci")
+    let lspci = hidden_command("lspci")
         .args(["-mm", "-d", "::0300"])
         .output()
         .ok()
