@@ -1,15 +1,14 @@
 name: tests
 
-# Mirrors TEST_PLAN §10. Fast Tiers 1–3 gate every PR; the gated/slow Rust suites
-# and Tier 4/5 run on the nightly + pre-release matrix so they never block the fast
-# feedback loop.
+# Mirrors TEST_PLAN §10. Fast Tiers 1–3 gate every PR; the gated/slow Rust suites and
+# the cross-platform build smoke run on demand (manual) so they never block the fast
+# feedback loop or burn runner minutes nightly — trigger them before a release.
 
 on:
   push:
     branches: [main]
   pull_request:
-  schedule:
-    - cron: '0 6 * * *' # nightly gated/E2E run
+  workflow_dispatch: # run the gated/cross-platform checks on demand (e.g. before a release)
 
 jobs:
   frontend:
@@ -52,8 +51,8 @@ jobs:
       - run: cargo test --lib
 
   gated-and-e2e:
-    name: Gated Rust + E2E (nightly / pre-release)
-    if: github.event_name == 'schedule'
+    name: Gated Rust + build smoke (manual / pre-release)
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false # report every OS leg; don't cancel mac when win fails (or vice versa)
@@ -84,10 +83,15 @@ jobs:
           PDFIUM_TGZ: ${{ runner.temp }}/pdfium.tgz
           TESSERACT_TEST: '1'
         run: cargo test --lib
-      # Tier 4 E2E: build the app, then drive it with tauri-driver + wdio.
-      - name: Install tauri-driver
-        run: cargo install tauri-driver --locked
-      - name: Build app + run E2E
-        run: |
-          cd app && npm ci && npm run tauri build
-          cd ../e2e && npm ci && npm run e2e
+      # Cross-platform build + bundle smoke: proves the app still compiles and packages
+      # (DMG on macOS, MSI/NSIS on Windows) on a clean runner.
+      - name: Build app (bundle smoke)
+        run: cd app && npm ci && npm run tauri build
+      # Tier 4 E2E (tauri-driver + WebdriverIO) is scaffolded in e2e/ but not yet
+      # implemented. Re-enable once the wdio specs are real AND e2e/package-lock.json is
+      # committed — `npm ci` requires a lockfile and will never generate one. Until then,
+      # running it only produces nightly noise (see docs/store-release-plan.md Phase 4).
+      # - name: Install tauri-driver
+      #   run: cargo install tauri-driver --locked
+      # - name: Run E2E
+      #   run: cd e2e && npm ci && npm run e2e
