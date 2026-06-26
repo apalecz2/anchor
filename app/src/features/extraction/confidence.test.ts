@@ -86,6 +86,15 @@ describe('cellTrust', () => {
         // blended = 0.4*1 + 0.6*0 = 0.4 < 0.65 -> low even with a perfect LLM
         expect(cellTrust('agree', 1, 1, null)).toBe('low');
     });
+
+    it('falls back to OCR alone when the LLM is unscored (null)', () => {
+        // No usable LLM signal: trust the OCR match. Strong OCR -> high, weak -> low.
+        expect(cellTrust('agree', null, null, 96)).toBe('high');
+        expect(cellTrust('agree', null, null, 70)).toBe('medium');
+        expect(cellTrust('agree', null, null, 40)).toBe('low');
+        // image-only with no LLM signal has nothing to vouch for it -> low
+        expect(cellTrust('image_only', null, null, null)).toBe('low');
+    });
 });
 
 describe('computeProvenanceCells', () => {
@@ -152,14 +161,14 @@ describe('computeProvenanceCells', () => {
         expect(cell.confidence.llmMin).toBeCloseTo(0.5, 5);
     });
 
-    it('falls back to llmMean/llmMin of 0 when a cell has no usable logprobs', () => {
+    it('scores llmMean/llmMin as null (unscored) when a cell has no usable logprobs', () => {
         const raw = 'Hi';
         const prov: CellProvenance[][] = [[
             { rowIndex: 0, colIndex: 0, value: 'Hi', wordIds: ['a'], matchStatus: 'matched' },
         ]];
         const cell = computeProvenanceCells(prov, [], raw, [wordA])[0][0];
-        expect(cell.confidence.llmMean).toBe(0);
-        expect(cell.confidence.llmMin).toBe(0);
+        expect(cell.confidence.llmMean).toBeNull();
+        expect(cell.confidence.llmMin).toBeNull();
     });
 
     it('maps each logprob offset to the cell whose [start,end) contains it', () => {
@@ -178,5 +187,44 @@ describe('computeProvenanceCells', () => {
         const cells = computeProvenanceCells(prov, logprobs, raw, []);
         expect(cells[0][0].confidence.llmMean).toBeCloseTo(0.9, 5);
         expect(cells[0][1].confidence.llmMean).toBeCloseTo(0.3, 5);
+    });
+
+    it('marks a single boundary-merged token cell as unscored, not low', () => {
+        // raw = "AB\tCD" -> cell0 content [0,2), cell1 content [3,5). The tokenizer
+        // emits the value with its leading tab fused on: "\tCD" starts on the tab
+        // (offset 2 < cell1 start 3). That token's probability reflects tokenizer
+        // segmentation, not value certainty, so it's excluded — leaving cell1 with
+        // no usable value logprob => llmMean null (unscored), NOT a misleading 0.8
+        // or 0%. cell0's "AB" starts at content start and scores normally.
+        const raw = 'AB\tCD';
+        const prov: CellProvenance[][] = [[
+            { rowIndex: 0, colIndex: 0, value: 'AB', wordIds: [], matchStatus: 'unmatched' },
+            { rowIndex: 0, colIndex: 1, value: 'CD', wordIds: [], matchStatus: 'unmatched' },
+        ]];
+        const logprobs: TokenLogprob[] = [
+            { token: 'AB', logprob: Math.log(0.9), charOffset: 0 },
+            { token: '\tCD', logprob: Math.log(0.3), charOffset: 2 },
+        ];
+        const cells = computeProvenanceCells(prov, logprobs, raw, []);
+        expect(cells[0][0].confidence.llmMean).toBeCloseTo(0.9, 5);
+        expect(cells[0][1].confidence.llmMean).toBeNull();
+    });
+
+    it('keeps the clean value tokens when only the first token is boundary-merged', () => {
+        // raw = "AB\tCDE" -> cell1 content [3,6). Tokens: "\tC" (boundary, offset 2)
+        // then "DE" (offset 4). The boundary token is dropped; "DE" still scores the
+        // cell, so a multi-token value keeps a real (high) confidence.
+        const raw = 'AB\tCDE';
+        const prov: CellProvenance[][] = [[
+            { rowIndex: 0, colIndex: 0, value: 'AB', wordIds: [], matchStatus: 'unmatched' },
+            { rowIndex: 0, colIndex: 1, value: 'CDE', wordIds: [], matchStatus: 'unmatched' },
+        ]];
+        const logprobs: TokenLogprob[] = [
+            { token: 'AB', logprob: Math.log(0.9), charOffset: 0 },
+            { token: '\tC', logprob: Math.log(0.2), charOffset: 2 },  // boundary -> excluded
+            { token: 'DE', logprob: Math.log(0.95), charOffset: 4 },
+        ];
+        const cells = computeProvenanceCells(prov, logprobs, raw, []);
+        expect(cells[0][1].confidence.llmMean).toBeCloseTo(0.95, 5);
     });
 });

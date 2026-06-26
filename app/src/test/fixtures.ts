@@ -44,8 +44,8 @@ export const provenanceCell = (
         agreement?: AgreementStatus;
         matchStatus?: ProvenanceCell['matchStatus'];
         wordIds?: string[];
-        llmMean?: number;
-        llmMin?: number;
+        llmMean?: number | null;
+        llmMin?: number | null;
         ocr?: number | null;
     } = {},
 ): ProvenanceCell => ({
@@ -55,8 +55,8 @@ export const provenanceCell = (
     wordIds: over.wordIds ?? [],
     matchStatus: over.matchStatus ?? 'matched',
     confidence: {
-        llmMean: over.llmMean ?? 0.9,
-        llmMin: over.llmMin ?? 0.9,
+        llmMean: 'llmMean' in over ? over.llmMean! : 0.9,
+        llmMin: 'llmMin' in over ? over.llmMin! : 0.9,
         ocr: over.ocr ?? 90,
         agreement: over.agreement ?? 'agree',
         trust: over.trust ?? 'high',

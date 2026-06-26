@@ -73,8 +73,18 @@ export function parseTSVWithOffsets(raw: string): {
     return { rows, cellRanges };
 }
 
-// Assign each logprob token to the cell whose char range contains its offset.
+// Assign each logprob token to a cell by maximum character-range overlap.
 // Returns tokenIndices[r][c] = list of indices into the logprobs array.
+//
+// A token spans [charOffset, charOffset + token.length). We credit it to the
+// cell its span overlaps most, rather than to whichever cell contains its start
+// offset. This matters because LLM tokenizers routinely merge a leading
+// delimiter into the following value token (e.g. "\t96" as one token). With
+// start-offset mapping that token's offset lands on the tab — a dead zone
+// between cells — so the value cell receives no tokens and scores a misleading
+// 0% confidence. Overlap mapping attributes "\t96" to the cell it actually
+// covers. Pure-delimiter tokens (e.g. a lone "\t") overlap no cell range and
+// remain unassigned, as intended.
 function mapLogprobsToCells(
     logprobs: TokenLogprob[],
     cellRanges: CellRange[][],
@@ -82,16 +92,25 @@ function mapLogprobsToCells(
     const result: number[][][] = cellRanges.map(row => row.map(() => []));
 
     for (let ti = 0; ti < logprobs.length; ti++) {
-        const { charOffset } = logprobs[ti];
-        outer: for (let r = 0; r < cellRanges.length; r++) {
+        const tokStart = logprobs[ti].charOffset;
+        const tokEnd = tokStart + logprobs[ti].token.length;
+
+        let bestOverlap = 0;
+        let bestR = -1;
+        let bestC = -1;
+        for (let r = 0; r < cellRanges.length; r++) {
             for (let c = 0; c < cellRanges[r].length; c++) {
                 const { start, end } = cellRanges[r][c];
-                if (charOffset >= start && charOffset < end) {
-                    result[r][c].push(ti);
-                    break outer;
+                const overlap = Math.min(tokEnd, end) - Math.max(tokStart, start);
+                if (overlap > bestOverlap) {
+                    bestOverlap = overlap;
+                    bestR = r;
+                    bestC = c;
                 }
             }
         }
+
+        if (bestR !== -1) result[bestR][bestC].push(ti);
     }
 
     return result;
@@ -102,14 +121,31 @@ const arithmeticMean = (values: number[]): number =>
 
 export const cellTrust = (
     agreement: AgreementStatus,
-    llmMean: number,
-    llmMin: number,
+    llmMean: number | null,
+    llmMin: number | null,
     ocrConfidence: number | null,
 ): TrustLevel => {
     if (agreement === "disagree") return "low";
-    if (agreement === "image_only") return llmMean >= 0.85 ? "medium" : "low";
-    const blended = 0.4 * llmMean + 0.6 * ((ocrConfidence ?? 0) / 100);
-    if (blended >= 0.85 && llmMin >= 0.5) return "high";
+
+    const ocrNorm = (ocrConfidence ?? 0) / 100;
+
+    if (agreement === "image_only") {
+        // No OCR to corroborate. With no LLM signal either, we can't vouch for it.
+        if (llmMean == null) return "low";
+        return llmMean >= 0.85 ? "medium" : "low";
+    }
+
+    // agree: when the LLM gave us no usable value signal (llmMean null), trust the
+    // OCR match alone rather than dragging the cell down — a strong OCR agreement is
+    // still trustworthy even though we can't read the model's certainty here.
+    if (llmMean == null) {
+        if (ocrNorm >= 0.85) return "high";
+        if (ocrNorm >= 0.65) return "medium";
+        return "low";
+    }
+
+    const blended = 0.4 * llmMean + 0.6 * ocrNorm;
+    if (blended >= 0.85 && (llmMin ?? 0) >= 0.5) return "high";
     if (blended >= 0.65) return "medium";
     return "low";
 };
@@ -131,21 +167,30 @@ export const computeProvenanceCells = (
     return cellProvenance.map((row, r) =>
         row.map((cell, c): ProvenanceCell => {
             const indices = tokenIndicesMap[r]?.[c] ?? [];
-            // Exclude tokens that arrived without a logprob — averaging them in as 0
-            // (probability 1.0) would falsely inflate confidence. A cell with no
-            // usable logprobs falls through to llmMean/llmMin = 0 below.
+            const cellStart = cellRanges[r]?.[c]?.start ?? 0;
+            // Exclude two kinds of tokens from the value score:
+            //  - boundary-merged tokens, whose start falls in the delimiter gap
+            //    before this cell (charOffset < cellStart). These fuse a leading
+            //    "\t"/"\n" onto the word, so their probability reflects the model's
+            //    formatting/segmentation choice, not value certainty — averaging it
+            //    in makes a correct cell read as low confidence.
+            //  - tokens that arrived without a logprob (null), which we have no
+            //    signal for; treating them as logprob 0 (prob 1.0) would inflate.
+            // A cell left with no usable value logprobs scores null ("unscored"),
+            // distinct from a genuine low score, so the UI can render it neutral.
             const tokenLogprobs = indices
+                .filter(i => logprobs[i].charOffset >= cellStart)
                 .map(i => logprobs[i].logprob)
                 .filter((lp): lp is number => lp != null);
 
             // Geometric mean of per-token probabilities
             const llmMean = tokenLogprobs.length > 0
                 ? Math.exp(arithmeticMean(tokenLogprobs))
-                : 0;
+                : null;
             // Minimum per-token probability — catches the "one shaky digit" case
             const llmMin = tokenLogprobs.length > 0
                 ? Math.exp(Math.min(...tokenLogprobs))
-                : 0;
+                : null;
 
             const ocrConfidences = cell.wordIds
                 .map(id => wordById.get(id)?.confidence)

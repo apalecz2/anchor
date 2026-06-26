@@ -63,8 +63,13 @@ export type AgreementStatus = "agree" | "disagree" | "image_only";
 export type TrustLevel = "high" | "medium" | "low";
 
 export type CellConfidence = {
-    llmMean: number;        // 0–1, geometric mean of per-token probs
-    llmMin: number;         // 0–1, minimum per-token prob
+    // 0–1, geometric mean / minimum of per-token probs. null when the cell has no
+    // usable *value* logprob — e.g. its entire content arrived as a single
+    // boundary-merged token (a leading "\t"/"\n" fused onto the word), whose
+    // probability reflects tokenizer segmentation, not value certainty. null means
+    // "unscored by the LLM" (render neutral), distinct from a real low score.
+    llmMean: number | null;
+    llmMin: number | null;
     ocr: number | null;     // 0–100, mean OCR confidence of matched words; null if unmatched
     agreement: AgreementStatus;
     trust: TrustLevel;

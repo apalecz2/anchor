@@ -28,10 +28,15 @@ function cellTooltip(cell: ProvenanceCell): string {
     if (cell.confidence.agreement === 'image_only') {
         return 'No matching OCR word — value read from image only';
     }
-    const llmPct = (cell.confidence.llmMean * 100).toFixed(0);
-    const ocrPct = cell.confidence.ocr != null ? cell.confidence.ocr.toFixed(0) : 'N/A';
+    // null llmMean = unscored (value arrived as a single boundary-merged token, so
+    // the logprob reflects tokenization, not value certainty) — show it as such
+    // rather than a misleading 0%/low number.
+    const llmStr = cell.confidence.llmMean != null
+        ? `${(cell.confidence.llmMean * 100).toFixed(0)}%`
+        : 'not scored';
+    const ocrPct = cell.confidence.ocr != null ? `${cell.confidence.ocr.toFixed(0)}%` : 'N/A';
     const prefix = cell.matchStatus === 'fuzzy' ? 'Approximate OCR match — verify value | ' : '';
-    return `${prefix}LLM confidence: ${llmPct}% | OCR confidence: ${ocrPct}%`;
+    return `${prefix}LLM confidence: ${llmStr} | OCR confidence: ${ocrPct}`;
 }
 
 function trustColor(cell: ProvenanceCell): string {
