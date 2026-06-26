@@ -50,6 +50,15 @@ const SideNavBar: FC<SideNavBarProps> = ({
     } | null>(null);
     const [sessionToDelete, setSessionToDelete] = useState<NavItem | null>(null);
 
+    // On small screens the sidebar is an off-canvas overlay (it has no narrow
+    // "rail" state like desktop does), so after acting on an item we collapse it
+    // to get out of the way. The md breakpoint is 768px, so mobile is ≤767px.
+    const handleItemSelect = () => {
+        if (!collapsed && window.matchMedia('(max-width: 767px)').matches) {
+            onToggleCollapse();
+        }
+    };
+
     useEffect(() => {
         if (!recentContextMenu) {
             return;
@@ -181,6 +190,7 @@ const SideNavBar: FC<SideNavBarProps> = ({
                                     className={sharedClassName}
                                     aria-current={isActive ? 'page' : undefined}
                                     title={collapsed ? item.label : undefined}
+                                    onClick={handleItemSelect}
                                 >
                                     {content}
                                 </Link>
@@ -191,7 +201,10 @@ const SideNavBar: FC<SideNavBarProps> = ({
                             <button
                                 key={item.id}
                                 type="button"
-                                onClick={item.onClick}
+                                onClick={() => {
+                                    item.onClick?.();
+                                    handleItemSelect();
+                                }}
                                 className={sharedClassName}
                                 aria-current={isActive ? 'page' : undefined}
                                 title={collapsed ? item.label : undefined}
@@ -250,6 +263,7 @@ const SideNavBar: FC<SideNavBarProps> = ({
                                             className={sharedClassName}
                                             aria-current={isActive ? 'page' : undefined}
                                             title={collapsed ? item.label : undefined}
+                                            onClick={handleItemSelect}
                                             onContextMenu={(event) => {
                                                 event.preventDefault();
                                                 setRecentContextMenu({
@@ -268,7 +282,10 @@ const SideNavBar: FC<SideNavBarProps> = ({
                                     <button
                                         key={item.id}
                                         type="button"
-                                        onClick={item.onClick}
+                                        onClick={() => {
+                                            item.onClick?.();
+                                            handleItemSelect();
+                                        }}
                                         className={sharedClassName}
                                         aria-current={isActive ? 'page' : undefined}
                                         title={collapsed ? item.label : undefined}

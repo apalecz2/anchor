@@ -68,6 +68,17 @@ export function SourceDocumentPane(props: SourceDocumentPaneProps): React.ReactE
         onHelp,
     } = props;
 
+    // A broken session: the page's cached image file is missing (the asset
+    // protocol 403s), so the <img> fires onError. Track that here to swap the
+    // viewer for a clear message instead of leaving a blank/broken pane.
+    const [imageLoadFailed, setImageLoadFailed] = React.useState(false);
+
+    // Reset whenever the source image changes (page switch, retry, or a new
+    // session), so a prior failure doesn't stick to a freshly-loaded image.
+    React.useEffect(() => {
+        setImageLoadFailed(false);
+    }, [fileUrl]);
+
     const commitPageInput = () => {
         const parsed = parseInt(pageInputValue, 10);
         if (!isNaN(parsed)) {
@@ -118,8 +129,16 @@ export function SourceDocumentPane(props: SourceDocumentPaneProps): React.ReactE
                 ) : dbError ? (
                     <div className="flex w-full flex-col items-center justify-center gap-3 text-error h-full">
                         <Icon name="error" size={28} />
-                        <p className="text-sm text-center max-w-sm">{dbError}</p>
+                        <p className="text-sm text-center max-w-sm overflow-auto">{dbError}</p>
                         <button onClick={retryProcessing} className="px-4 py-1 text-sm bg-primary text-on-primary rounded-lg hover:bg-primary/90">Retry</button>
+                    </div>
+                ) : imageLoadFailed ? (
+                    <div className="flex w-full flex-col items-center justify-center gap-3 text-error h-full">
+                        <Icon name="broken_image" size={28} />
+                        <p className="text-sm text-center max-w-sm overflow-auto">
+                            The source image for this page could not be loaded. The file may have been moved or deleted.
+                        </p>
+                        <button onClick={retryProcessing} className="px-4 py-1 text-sm bg-primary text-on-primary rounded-lg hover:bg-primary/90">Retry document</button>
                     </div>
                 ) : fileUrl && activePage ? (
                     <DocumentViewer
@@ -137,6 +156,7 @@ export function SourceDocumentPane(props: SourceDocumentPaneProps): React.ReactE
                         setTransform={setViewTransform}
                         onMinScaleChange={setMinZoom}
                         provenanceHighlightBox={provenanceHighlightBox}
+                        onLoadError={() => setImageLoadFailed(true)}
                     />
                 ) : activePage?.error ? (
                     <div className="flex w-full flex-col items-center justify-center gap-3 text-error h-full">

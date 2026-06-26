@@ -27,6 +27,8 @@ interface DocumentViewerProps {
     setTransform: React.Dispatch<React.SetStateAction<{ scale: number; x: number; y: number }>>;
     provenanceHighlightBox?: BoundingBox | null;
     onMinScaleChange?: (minScale: number) => void;
+    /** Fired when the source image fails to load (e.g. the file was moved/deleted). */
+    onLoadError?: () => void;
 }
 
 const getConfidenceColor = (confidence: number) => {
@@ -75,6 +77,7 @@ const DocumentViewer = forwardRef<DocumentViewerHandle, DocumentViewerProps>(fun
     setTransform,
     provenanceHighlightBox,
     onMinScaleChange,
+    onLoadError,
 }: DocumentViewerProps, ref) {
     const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
     // Whether the loaded document is dark overall, so highlights contrast with it.
@@ -367,6 +370,7 @@ const DocumentViewer = forwardRef<DocumentViewerHandle, DocumentViewerProps>(fun
                     src={fileUrl}
                     alt="Document"
                     onLoad={handleImageLoad}
+                    onError={onLoadError}
                     className="block max-h-[80vh] w-auto max-w-none pointer-events-none select-none"
                 />
 
