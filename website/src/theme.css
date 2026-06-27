@@ -1,0 +1,176 @@
+@import "tailwindcss";
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Theme tokens reused verbatim from the Anchor app (app/src/App.css) so the
+   marketing site is pixel-identical to the product. Keep these in sync if the
+   app's palette or type scale changes.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Dark mode is toggled by adding `.dark` to <html> — same scheme as the app. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+	--color-background: var(--background);
+	--color-on-background: var(--on-background);
+	--color-surface: var(--surface);
+	--color-on-surface: var(--on-surface);
+	--color-surface-bright: var(--surface-bright);
+	--color-surface-dim: var(--surface-dim);
+	--color-surface-variant: var(--surface-variant);
+	--color-surface-container-lowest: var(--surface-container-lowest);
+	--color-surface-container-low: var(--surface-container-low);
+	--color-surface-container: var(--surface-container);
+	--color-surface-container-high: var(--surface-container-high);
+	--color-surface-container-highest: var(--surface-container-highest);
+	--color-outline: var(--outline);
+	--color-outline-variant: var(--outline-variant);
+	--color-primary: var(--primary);
+	--color-on-primary: var(--on-primary);
+	--color-primary-container: var(--primary-container);
+	--color-on-primary-container: var(--on-primary-container);
+	--color-inverse-surface: var(--inverse-surface);
+	--color-inverse-on-surface: var(--inverse-on-surface);
+	--color-inverse-primary: var(--inverse-primary);
+	--color-on-surface-variant: var(--on-surface-variant);
+	--color-error: var(--error);
+	--color-on-error: var(--on-error);
+	--color-error-container: var(--error-container);
+	--color-on-error-container: var(--on-error-container);
+
+	/* Confidence-heatmap accents — used by the product preview mock. These
+	   mirror the trust colours used in the app's output table. */
+	--color-trust-high: var(--trust-high);
+	--color-trust-medium: var(--trust-medium);
+	--color-trust-low: var(--trust-low);
+
+	--spacing-unit: 0.25rem;
+	--spacing-gutter: 1.5rem;
+	--spacing-margin-page: 2.5rem;
+
+	--font-display-lg: "Source Serif 4", Georgia, serif;
+	--font-headline-lg: "Source Serif 4", Georgia, serif;
+	--font-headline-md: "Source Serif 4", Georgia, serif;
+	--font-body-lg: "Source Serif 4", Georgia, serif;
+	--font-body-md: "Source Serif 4", Georgia, serif;
+	--font-body-sm: "Inter", system-ui, sans-serif;
+	--font-label-md: "Inter", system-ui, sans-serif;
+	--font-mono-data: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+
+	--text-display-lg: 3rem;
+	--text-display-lg--line-height: 1.05;
+	--text-headline-lg: 2rem;
+	--text-headline-lg--line-height: 1.2;
+	--text-headline-md: 1.5rem;
+	--text-headline-md--line-height: 1.25;
+	--text-body-lg: 1.125rem;
+	--text-body-lg--line-height: 1.65;
+	--text-body-md: 1rem;
+	--text-body-md--line-height: 1.6;
+	--text-body-sm: 0.875rem;
+	--text-body-sm--line-height: 1.5;
+	--text-label-md: 0.875rem;
+	--text-label-md--line-height: 1.4;
+	--text-mono-data: 0.875rem;
+	--text-mono-data--line-height: 1.4;
+
+	--animate-fade-in: fade-in 0.2s ease-out both;
+}
+
+@keyframes fade-in {
+	from { opacity: 0; }
+	to { opacity: 1; }
+}
+
+:root {
+	color-scheme: light;
+	--background: #faf9f7;
+	--on-background: #1a1c1b;
+	--surface: #faf9f7;
+	--on-surface: #1a1c1b;
+	--surface-bright: #ffffff;
+	--surface-dim: #dadad8;
+	--surface-variant: #e3e2e0;
+	--surface-container-lowest: #ffffff;
+	--surface-container-low: #f4f3f1;
+	--surface-container: #efeeec;
+	--surface-container-high: #e9e8e6;
+	--surface-container-highest: #e3e2e0;
+	--outline: #747878;
+	--outline-variant: #c4c7c7;
+	--primary: #000000;
+	--on-primary: #ffffff;
+	--primary-container: #1c1b1b;
+	--on-primary-container: #858383;
+	--inverse-surface: #2f3130;
+	--inverse-on-surface: #f1f1ef;
+	--inverse-primary: #c8c6c5;
+	--on-surface-variant: #444748;
+	--error: #ba1a1a;
+	--on-error: #ffffff;
+	--error-container: #ffdad6;
+	--on-error-container: #93000a;
+
+	--trust-high: #1f7a4d;
+	--trust-medium: #b8860b;
+	--trust-low: #ba1a1a;
+}
+
+html.dark {
+	color-scheme: dark;
+	--background: #131313;
+	--on-background: #e5e2e1;
+	--surface: #131313;
+	--on-surface: #e5e2e1;
+	--surface-bright: #3a3939;
+	--surface-dim: #131313;
+	--surface-variant: #353534;
+	--surface-container-lowest: #0e0e0e;
+	--surface-container-low: #1c1b1b;
+	--surface-container: #201f1f;
+	--surface-container-high: #2a2a2a;
+	--surface-container-highest: #353534;
+	--outline: #8e9192;
+	--outline-variant: #444748;
+	--primary: #fdfdfc;
+	--on-primary: #2f3131;
+	--primary-container: #e0e0e0;
+	--on-primary-container: #626363;
+	--inverse-surface: #e5e2e1;
+	--inverse-on-surface: #313030;
+	--inverse-primary: #5d5f5f;
+	--on-surface-variant: #c4c7c8;
+	--error: #ffb4ab;
+	--on-error: #690005;
+	--error-container: #93000a;
+	--on-error-container: #ffdad6;
+
+	--trust-high: #4ade80;
+	--trust-medium: #e0b341;
+	--trust-low: #ffb4ab;
+}
+
+@layer base {
+	button:not(:disabled),
+	[role="button"]:not(:disabled) {
+		cursor: pointer;
+	}
+
+	/* Smooth in-page anchor scrolling for the nav. */
+	html {
+		scroll-behavior: smooth;
+	}
+}
+
+html,
+body,
+#root {
+	min-height: 100%;
+}
+
+body {
+	margin: 0;
+	background: var(--background);
+	color: var(--on-background);
+	font-family: var(--font-body-md);
+	-webkit-font-smoothing: antialiased;
+}
