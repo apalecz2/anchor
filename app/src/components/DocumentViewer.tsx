@@ -371,7 +371,12 @@ const DocumentViewer = forwardRef<DocumentViewerHandle, DocumentViewerProps>(fun
                     alt="Document"
                     onLoad={handleImageLoad}
                     onError={onLoadError}
-                    className="block max-h-[80vh] w-auto max-w-none pointer-events-none select-none"
+                    // Render at the image's intrinsic size; the transform scale handles
+                    // all sizing. A viewport-relative cap (e.g. max-h-[80vh]) would make
+                    // the layout size — and therefore the meaning of a given zoom scale —
+                    // change when the window is resized, which shifted the fit/min bounds
+                    // and stopped the user from zooming out to 50% after a resize.
+                    className="block w-auto max-w-none pointer-events-none select-none"
                 />
 
                 {naturalSize.width > 0 && (() => {

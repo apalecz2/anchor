@@ -124,8 +124,8 @@ export function ExtractionOutputPane(props: ExtractionOutputPaneProps): React.Re
                             : 'No readable text found.'}
                     </div>
                 ) : outputView === 'raw' ? (
-                    <>
-                        <div className="mb-4 flex items-start gap-2 rounded-lg border border-outline-variant bg-surface-variant/40 px-3 py-2 text-sm text-on-surface-variant">
+                    <div className="flex h-full flex-col">
+                        <div className="mb-4 flex shrink-0 items-start gap-2 rounded-lg border border-outline-variant bg-surface-variant/40 px-3 py-2 text-sm text-on-surface-variant">
                             <Icon name="info" size={18} className="shrink-0" />
                             <span>
                                 This is an intermediate result — a quick first-pass extraction that may
@@ -137,10 +137,13 @@ export function ExtractionOutputPane(props: ExtractionOutputPaneProps): React.Re
 
                         {/* Output card: a bordered surface with a labeled header makes
                             clear this block is the extraction output, and gives the
-                            copy action a logical home next to the text it copies. */}
+                            copy action a logical home next to the text it copies. The
+                            `fill` keeps the header (and copy action) pinned while the
+                            detected text scrolls inside the card. */}
                         <OutputCard
                             icon="notes"
                             title="Detected text"
+                            fill
                             bodyClassName="space-y-2 px-5 py-4 font-body-md text-on-surface leading-relaxed"
                             action={<CopyButton onCopy={handleCopyRawText} />}
                         >
@@ -150,37 +153,43 @@ export function ExtractionOutputPane(props: ExtractionOutputPaneProps): React.Re
                                         const isWordSelected = selectedWordId === word.wordId;
                                         const isWordHovered = highlightedWordId === word.wordId;
                                         return (
-                                            <span
-                                                key={`${lineIndex}-${word.wordId}`}
-                                                ref={isWordSelected ? selectedWordRef : undefined}
-                                                className={`mr-2 inline-block cursor-pointer rounded px-0.5 transition-colors ${
-                                                    isWordSelected
-                                                        ? 'font-bold bg-surface-variant dark:bg-surface-container-low'
-                                                        : isWordHovered
-                                                            ? 'bg-surface-variant/80 dark:bg-surface-container-high'
-                                                            : ''
-                                                }`}
-                                                onMouseEnter={() => setHighlightedWordId(word.wordId)}
-                                                onMouseLeave={() => setHighlightedWordId(null)}
-                                                onFocus={() => setHighlightedWordId(word.wordId)}
-                                                onBlur={() => setHighlightedWordId(null)}
-                                                onClick={() => {
-                                                    // Don't hijack a drag-to-copy text selection into a word click.
-                                                    const sel = window.getSelection();
-                                                    if (sel && !sel.isCollapsed) return;
-                                                    selectWord(word.wordId);
-                                                }}
-                                                tabIndex={0}
-                                            >
-                                                {word.text}
+                                            // The inter-word space is rendered as a real text
+                                            // node *between* the spans (not inside them): trailing
+                                            // whitespace inside an inline-block box gets trimmed
+                                            // from a manual cursor selection, so words copied via
+                                            // drag-select would run together without it.
+                                            <React.Fragment key={`${lineIndex}-${word.wordId}`}>
+                                                <span
+                                                    ref={isWordSelected ? selectedWordRef : undefined}
+                                                    className={`inline-block cursor-pointer rounded px-0.5 transition-colors ${
+                                                        isWordSelected
+                                                            ? 'font-bold bg-surface-variant dark:bg-surface-container-low'
+                                                            : isWordHovered
+                                                                ? 'bg-surface-variant/80 dark:bg-surface-container-high'
+                                                                : ''
+                                                    }`}
+                                                    onMouseEnter={() => setHighlightedWordId(word.wordId)}
+                                                    onMouseLeave={() => setHighlightedWordId(null)}
+                                                    onFocus={() => setHighlightedWordId(word.wordId)}
+                                                    onBlur={() => setHighlightedWordId(null)}
+                                                    onClick={() => {
+                                                        // Don't hijack a drag-to-copy text selection into a word click.
+                                                        const sel = window.getSelection();
+                                                        if (sel && !sel.isCollapsed) return;
+                                                        selectWord(word.wordId);
+                                                    }}
+                                                    tabIndex={0}
+                                                >
+                                                    {word.text}
+                                                </span>
                                                 {wordIndex < line.length - 1 ? ' ' : ''}
-                                            </span>
+                                            </React.Fragment>
                                         );
                                     })}
                                 </p>
                             ))}
                         </OutputCard>
-                    </>
+                    </div>
                 ) : (
                     <div className="flex h-full w-full flex-col">
                         {/* When a table is already shown, surface a failed re-extract or a
