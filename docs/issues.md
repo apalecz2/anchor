@@ -12,22 +12,39 @@
    persisted, but the UI gives no "saved" affordance, so the user can't tell their work is
    safe. Needs a save-state indicator.
 
-### Llama
 
-1. **Ctrl-C during image processing orphans the llama-server process.** Killing the app
-   with Ctrl-C in dev (rather than closing the window) doesn't fire `WindowEvent::CloseRequested`,
-   so the in-process shutdown never runs and the server keeps holding RAM.
-   - **Mitigated, not eliminated:** `sweep_orphan_server` reaps a server orphaned by a
-     crash/`taskkill`/Ctrl-C on the *next* startup, and a normal window close stops it
-     immediately (`lib.rs` `WindowEvent::CloseRequested` → `stop_llama_server_process`). The
-     gap is only the window between a dev Ctrl-C and the next launch.
 
-2. **Verify the llama-server starts in a packaged (built) release.** This was originally
-   filed as "the sidecar doesn't start in the built version." The architecture has since
-   moved off a bundled Tauri sidecar entirely: the first-run wizard downloads `llama-server`
-   into AppData and the app launches it from an explicit `llamaServerPath`. That very likely
-   resolves the original failure, but it has **not been re-confirmed on a clean packaged
-   build** — verify end-to-end before closing.
+### From VM
+
+1. Install steps ui need to scale to smaller device sizes better
+5. Entire app should scale better on small screens
+
+
+
+### Misc:
+
+- Fix image zoom issues
+- Add excel export
+
+
+
+
+
+
+
+
+
+
+### Website:
+- Product preview -- make more like the actual app (use screenshot?)
+- Add excel export support before promising on site
+- Icons to monochrome
+- Lies? Check hallucinations against actual app and ground it
+
+
+
+
+
 
 ---
 

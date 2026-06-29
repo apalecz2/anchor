@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { readSetting, writeSetting, type Theme } from '../lib/settings';
 import { useTheme } from '../hooks/useTheme';
 import { requestSetupRerun } from '../features/setup/useSetupCheck';
@@ -83,6 +83,12 @@ export default function Settings(): React.ReactElement {
     const [modelPath, setModelPath] = useState(() => readSetting('modelPath'));
     const [mmprojPath, setMmprojPath] = useState(() => readSetting('mmprojPath'));
     const [pathsSaved, setPathsSaved] = useState(false);
+
+    const [appVersion, setAppVersion] = useState<string | null>(null);
+
+    useEffect(() => {
+        import('@tauri-apps/api/app').then(({ getVersion }) => getVersion()).then(setAppVersion).catch(() => {});
+    }, []);
 
     const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
     const [deleting, setDeleting] = useState(false);
@@ -268,6 +274,12 @@ export default function Settings(): React.ReactElement {
                         </SettingRow>
                     </div>
                 </Section>
+
+                {appVersion && (
+                    <p className="font-body-sm text-body-sm text-on-surface-variant/40 text-center pb-2">
+                        Anchor v{appVersion}
+                    </p>
+                )}
 
             </div>
 
