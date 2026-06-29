@@ -60,7 +60,19 @@ const SUPPORTED_FILE_TYPES: Record<string, FileTypeSpec> = {
 export default function Dashboard(): React.ReactElement {
     const [isDragging, setIsDragging] = useState(false);
     const [fileError, setFileError] = useState<string | null>(null);
+    const [tipsModalOpen, setTipsModalOpen] = useState(false);
+    // Tracks the dismiss-in-progress phase: the modal stays mounted while its
+    // exit animation plays, then unmounts on animationend so closing is as smooth
+    // as opening (a bare unmount would pop it off-screen instantly).
+    const [tipsClosing, setTipsClosing] = useState(false);
     const navigate = useNavigate();
+
+    const openTips = () => {
+        setTipsClosing(false);
+        setTipsModalOpen(true);
+    };
+
+    const closeTips = () => setTipsClosing(true);
 
     // Call after the user selects a file to create a session and navigate to it.
     // One file per session: a session maps to a single document (a multi-page PDF
@@ -198,16 +210,40 @@ export default function Dashboard(): React.ReactElement {
             <div className="absolute inset-0 pointer-events-none opacity-[0.03] bg-[radial-gradient(circle_at_center,var(--tw-gradient-stops))] from-primary via-transparent to-transparent"></div>
 
             <div className="max-w-2xl w-full flex flex-col items-center text-center z-10">
-                <h2 className="font-display-lg text-display-lg text-primary mb-4 tracking-tight">Extract Intelligence.</h2>
+                <h2 className="font-display-lg text-display-lg text-primary mb-4 tracking-tight">Turn documents into data.</h2>
                 <p className="font-body-lg text-body-lg text-on-surface-variant mb-12 max-w-lg">
-                    Drop your documents here. Anchor will analyze and extract structured data locally, ensuring complete privacy.
+                    Drop a PDF or image. Anchor reads what's there, verifies it against the source, and gives you the structured data.
                 </p>
+
+                {/* Tips button */}
+                <button
+                    onClick={openTips}
+                    className="mb-12 px-4 py-3 rounded-lg bg-surface-container-high hover:bg-surface-container border border-outline-variant hover:border-primary hover:shadow-md flex items-center gap-3 w-full max-w-lg transition-all duration-200 group"
+                >
+                    <Icon
+                        name="lightbulb"
+                        size={20}
+                        className="text-primary shrink-0 group-hover:scale-110 transition-transform duration-300 group-hover:animate-pulse"
+                    />
+                    <p className="font-body-md text-body-md text-on-surface text-left flex-1">
+                        <span className="font-semibold">Tips:</span> Learn how to get the best extraction results.
+                    </p>
+                    {/* Explicit "open" affordance so it reads as clickable, not just a banner. */}
+                    <span className="flex items-center gap-1 shrink-0 text-primary font-label-md text-label-md font-semibold">
+                        View
+                        <Icon
+                            name="chevron_right"
+                            size={20}
+                            className="transition-transform duration-200 group-hover:translate-x-1"
+                        />
+                    </span>
+                </button>
 
                 {/* Drag & Drop Zone */}
                 <div
                     className={`w-full border border-dashed rounded-xl p-16 flex flex-col items-center justify-center cursor-pointer hover:bg-surface-container-low mb-8 relative group transition-all duration-300 ${isDragging
-                            ? 'bg-surface-container-high border-primary'
-                            : 'border-outline-variant bg-surface-bright'
+                        ? 'bg-surface-container-high border-primary'
+                        : 'border-outline-variant bg-surface-bright'
                         }`}
                     onDragEnter={handleDragEnter}
                     onDragOver={handleDragOver}
@@ -250,6 +286,141 @@ export default function Dashboard(): React.ReactElement {
                     </span>
                 </div>
             </div>
+
+            {/* Tips Modal */}
+            {tipsModalOpen && (
+                <>
+                    {/* Dimming backdrop — fixed so it fades over the entire app
+                        (sidebar z-40 and theme toggle z-50 included); its z sits
+                        above both so they dim rather than punch through. */}
+                    <div
+                        className={`fixed inset-0 bg-black/50 z-60 ${tipsClosing ? 'animate-fade-out' : 'animate-fade-in'}`}
+                        onClick={closeTips}
+                    />
+
+                    {/* Centering layer — absolute within the dashboard <main> so the
+                        modal centers on the dashboard content rather than being
+                        offset by the sidebar. Sits above the backdrop. */}
+                    <div
+                        className="absolute inset-0 flex items-center justify-center z-70 p-4"
+                        onClick={closeTips}
+                    >
+                    <div
+                        className={`bg-surface rounded-2xl shadow-lg max-w-md w-full border border-outline-variant max-h-[90vh] overflow-y-auto ${tipsClosing ? 'animate-modal-out' : 'animate-modal-in'}`}
+                        onClick={(e) => e.stopPropagation()}
+                        onAnimationEnd={() => {
+                            // Unmount only after the exit animation finishes; the
+                            // entrance animation also fires this, so guard on the phase.
+                            if (tipsClosing) {
+                                setTipsModalOpen(false);
+                                setTipsClosing(false);
+                            }
+                        }}
+                    >
+                        {/* Modal Header */}
+                        <div className="sticky top-0 flex items-center justify-between p-6 border-b border-outline-variant bg-surface">
+                            <div className="flex items-center gap-3">
+                                <Icon name="lightbulb" size={24} className="text-primary" />
+                                <h3 className="font-headline-md text-headline-md text-primary">Best practices</h3>
+                            </div>
+                            <button
+                                onClick={closeTips}
+                                className="flex h-9 w-9 items-center justify-center shrink-0 hover:bg-surface-container rounded-lg transition-colors"
+                            >
+                                <Icon name="close" size={20} className="text-on-surface-variant" />
+                            </button>
+                        </div>
+
+                        {/* Modal Content */}
+                        <div className="p-6 space-y-6">
+                            {/* Image quality section */}
+                            <div>
+                                <h4 className="font-headline-sm text-headline-sm text-on-surface mb-3 flex items-center gap-2">
+                                    <Icon name="image" size={18} className="text-primary" />
+                                    Image quality
+                                </h4>
+                                <ul className="space-y-2 ml-7">
+                                    <li className="font-body-sm text-body-sm text-on-surface-variant flex gap-3">
+                                        <span className="text-primary flex-shrink-0 font-bold">•</span>
+                                        <span>Use high-definition screenshots or PDFs. Avoid phone photos or blurry scans</span>
+                                    </li>
+                                    <li className="font-body-sm text-body-sm text-on-surface-variant flex gap-3">
+                                        <span className="text-primary flex-shrink-0 font-bold">•</span>
+                                        <span>Ensure tables are well-lit with no glare or shadows</span>
+                                    </li>
+                                    <li className="font-body-sm text-body-sm text-on-surface-variant flex gap-3">
+                                        <span className="text-primary flex-shrink-0 font-bold">•</span>
+                                        <span>Zoom in on the table before screenshotting </span>
+                                    </li>
+                                </ul>
+                            </div>
+
+                            {/* Composition section */}
+                            <div>
+                                <h4 className="font-headline-sm text-headline-sm text-on-surface mb-3 flex items-center gap-2">
+                                    <Icon name="crop" size={18} className="text-primary" />
+                                    Composition
+                                </h4>
+                                <ul className="space-y-2 ml-7">
+                                    <li className="font-body-sm text-body-sm text-on-surface-variant flex gap-3">
+                                        <span className="text-primary flex-shrink-0 font-bold">•</span>
+                                        <span>Crop images tightly around the table, and minimize empty space around it</span>
+                                    </li>
+                                    <li className="font-body-sm text-body-sm text-on-surface-variant flex gap-3">
+                                        <span className="text-primary flex-shrink-0 font-bold">•</span>
+                                        <span>Ensure the header row is at the top of the image so Anchor knows what each column contains</span>
+                                    </li>
+                                </ul>
+                            </div>
+
+                            {/* Content section */}
+                            <div>
+                                <h4 className="font-headline-sm text-headline-sm text-on-surface mb-3 flex items-center gap-2">
+                                    <Icon name="table_chart" size={18} className="text-primary" />
+                                    Table content
+                                </h4>
+                                <ul className="space-y-2 ml-7">
+                                    <li className="font-body-sm text-body-sm text-on-surface-variant flex gap-3">
+                                        <span className="text-primary flex-shrink-0 font-bold">•</span>
+                                        <span>Clear borders and cell separation help Anchor understand structure</span>
+                                    </li>
+                                    <li className="font-body-sm text-body-sm text-on-surface-variant flex gap-3">
+                                        <span className="text-primary flex-shrink-0 font-bold">•</span>
+                                        <span>Handwritten tables work, but typed text extracts more reliably</span>
+                                    </li>
+                                </ul>
+                            </div>
+
+                            {/* Multi-page section */}
+                            <div>
+                                <h4 className="font-headline-sm text-headline-sm text-on-surface mb-3 flex items-center gap-2">
+                                    <Icon name="description" size={18} className="text-primary" />
+                                    Files
+                                </h4>
+                                <ul className="space-y-2 ml-7">
+                                    <li className="font-body-sm text-body-sm text-on-surface-variant flex gap-3">
+                                        <span className="text-primary flex-shrink-0 font-bold">•</span>
+                                        <span>Multi-page PDFs are supported; each page is processed</span>
+                                    </li>
+                                </ul>
+                            </div>
+                        </div>
+                        
+
+                        {/* Modal Footer */}
+                        <div className="border-t border-outline-variant p-6">
+                            <button
+                                onClick={closeTips}
+                                className="w-full px-4 py-3 rounded-lg bg-primary text-on-primary font-label-lg text-label-lg font-semibold hover:opacity-90 transition-opacity"
+                            >
+                                Got it
+                            </button>
+                        </div>
+                    </div>
+                    </div>
+                </>
+            )}
+
         </main>
     );
 }

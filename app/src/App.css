@@ -67,6 +67,9 @@
 	--text-mono-data--line-height: 1.4;
 
 	--animate-fade-in: fade-in 0.2s ease-out both;
+	--animate-fade-out: fade-out 0.15s ease-in both;
+	--animate-modal-in: modal-in 0.2s ease-out both;
+	--animate-modal-out: modal-out 0.15s ease-in both;
 }
 
 /* Used to fade routed content in on navigation so switching pages/sessions
@@ -74,6 +77,23 @@
 @keyframes fade-in {
 	from { opacity: 0; }
 	to { opacity: 1; }
+}
+
+@keyframes fade-out {
+	from { opacity: 1; }
+	to { opacity: 0; }
+}
+
+/* Modal entrance/exit: fade plus a subtle scale/rise so dialogs settle into
+   place rather than snapping on, and retract the same way when dismissed. */
+@keyframes modal-in {
+	from { opacity: 0; transform: scale(0.96) translateY(8px); }
+	to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes modal-out {
+	from { opacity: 1; transform: scale(1) translateY(0); }
+	to { opacity: 0; transform: scale(0.96) translateY(8px); }
 }
 
 :root {
