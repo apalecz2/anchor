@@ -3,49 +3,49 @@ import { ANCHOR_PATH } from './components/AnchorMark';
 /* ─────────────────────────────────────────────────────────────────────────
    Runtime favicon painter.
 
-   The static /favicon.svg uses a `prefers-color-scheme` media query, which
-   tracks the OS theme. But the page theme can be overridden by the in-app
-   toggle, so the OS-driven favicon would desync from the page whenever a
-   visitor picks a theme different from their system setting.
+   The favicon lives in the browser's tab strip, which is painted by the
+   browser chrome following the OS / browser theme — NOT the page theme. The
+   in-app toggle can put the page in a theme that differs from the system, so
+   if the bare-glyph favicon tracked the page it could end up the same colour
+   as the tab strip and vanish.
 
-   To keep them locked together, we repaint the favicon from the page's own
-   resolved theme — the `dark` class on <html> — and observe that class so
-   every change (toggle click or live system change) updates the tab icon too.
-   The bare anchor glyph mirrors the page's anchor colour: ink in light, paper
-   in dark.
+   To stay visible, the favicon always contrasts with the *system* theme:
+   ink anchor on a light tab strip, paper anchor on a dark one. We drive it
+   from `prefers-color-scheme` and repaint on system-theme changes so it keeps
+   up live, independent of whatever theme the page is currently showing.
    ───────────────────────────────────────────────────────────────────────── */
 
 const INK = '#16202E';
 const PAPER = '#F3F1EA';
 
-function faviconHref(isDark: boolean): string {
-    const fill = isDark ? PAPER : INK;
+function faviconHref(systemDark: boolean): string {
+    // Dark tab strip → paper glyph; light tab strip → ink glyph.
+    const fill = systemDark ? PAPER : INK;
     const svg =
         `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960">` +
         `<path fill="${fill}" d="${ANCHOR_PATH}"/></svg>`;
     return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
-/** Replace the SVG favicon link with one coloured for the given theme. We
- *  recreate the node (rather than only setting href) because some browsers
+/** Replace the SVG favicon link with one coloured for the given system theme.
+ *  We recreate the node (rather than only setting href) because some browsers
  *  won't repaint the tab icon on an in-place href change. PNG fallbacks in
  *  index.html are left untouched for browsers without SVG-favicon support. */
-function paintFavicon(isDark: boolean): void {
+function paintFavicon(systemDark: boolean): void {
     document.querySelectorAll('link[rel~="icon"][type="image/svg+xml"]').forEach((n) => n.remove());
     const link = document.createElement('link');
     link.rel = 'icon';
     link.type = 'image/svg+xml';
-    link.href = faviconHref(isDark);
+    link.href = faviconHref(systemDark);
     document.head.appendChild(link);
 }
 
-/** Keep the favicon in sync with the page theme for the life of the page.
- *  Returns a teardown that disconnects the observer. */
-export function syncFaviconToTheme(): () => void {
-    const root = document.documentElement;
-    const update = () => paintFavicon(root.classList.contains('dark'));
+/** Keep the favicon contrasting with the OS / browser theme for the life of
+ *  the page. Returns a teardown that removes the listener. */
+export function syncFaviconToSystemTheme(): () => void {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const update = () => paintFavicon(mq.matches);
     update();
-    const observer = new MutationObserver(update);
-    observer.observe(root, { attributes: true, attributeFilter: ['class'] });
-    return () => observer.disconnect();
+    mq.addEventListener('change', update);
+    return () => mq.removeEventListener('change', update);
 }

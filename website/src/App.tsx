@@ -1,7 +1,7 @@
 import React from 'react';
 import Icon from './components/Icon';
 import AnchorMark from './components/AnchorMark';
-import { syncFaviconToTheme } from './favicon';
+import { syncFaviconToSystemTheme } from './favicon';
 
 /* ─────────────────────────────────────────────────────────────────────────
    Project links. These are the only values you'll likely need to edit before
@@ -345,8 +345,9 @@ function DownloadCard({
 /* ── Page ────────────────────────────────────────────────────────────────── */
 
 export default function App(): React.ReactElement {
-    // Keep the browser-tab favicon locked to the page theme (toggle or system).
-    React.useEffect(() => syncFaviconToTheme(), []);
+    // Keep the browser-tab favicon contrasting with the OS / browser theme so
+    // it stays visible even when the page theme is toggled away from the system.
+    React.useEffect(() => syncFaviconToSystemTheme(), []);
 
     return (
         <div id="top" className="relative bg-surface min-h-screen">
