@@ -1,5 +1,7 @@
 import React from 'react';
 import Icon from './components/Icon';
+import AnchorMark from './components/AnchorMark';
+import { syncFaviconToTheme } from './favicon';
 
 /* ─────────────────────────────────────────────────────────────────────────
    Project links. These are the only values you'll likely need to edit before
@@ -28,23 +30,47 @@ const NAV = [
 function Logo(): React.ReactElement {
     return (
         <a href="#top" className="flex items-center gap-2 text-on-surface no-underline">
-            <img src="/anchor-icon.png" alt="" aria-hidden className="w-8 h-8 rounded-[7px]" />
+            <AnchorMark className="w-9 h-9 rounded-lg" />
             <span className="font-headline-md text-headline-md leading-none">Anchor</span>
         </a>
     );
 }
 
 function ThemeToggle(): React.ReactElement {
+    // Seed from whatever the pre-paint script in index.html already resolved
+    // (saved choice, else system), so the toggle agrees with what's on screen.
     const [dark, setDark] = React.useState(() => document.documentElement.classList.contains('dark'));
 
+    // Mirror the current value onto <html>. We deliberately do NOT write
+    // localStorage here — only an explicit toggle persists a choice, so a
+    // visitor who never touches the toggle keeps following their system setting.
     React.useEffect(() => {
         document.documentElement.classList.toggle('dark', dark);
     }, [dark]);
 
+    // Until the visitor makes an explicit choice, track OS theme changes live
+    // (e.g. the system flips to dark on schedule). Once a choice is stored, the
+    // saved value wins and system changes are ignored.
+    React.useEffect(() => {
+        const mq = window.matchMedia('(prefers-color-scheme: dark)');
+        const onChange = (e: MediaQueryListEvent) => {
+            if (!localStorage.getItem('theme')) setDark(e.matches);
+        };
+        mq.addEventListener('change', onChange);
+        return () => mq.removeEventListener('change', onChange);
+    }, []);
+
+    const toggle = () =>
+        setDark((d) => {
+            const next = !d;
+            localStorage.setItem('theme', next ? 'dark' : 'light');
+            return next;
+        });
+
     return (
         <button
             type="button"
-            onClick={() => setDark((d) => !d)}
+            onClick={toggle}
             aria-label={dark ? 'Switch to light theme' : 'Switch to dark theme'}
             className="w-9 h-9 rounded-full border border-outline-variant bg-surface-container flex items-center justify-center text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors"
         >
@@ -319,6 +345,9 @@ function DownloadCard({
 /* ── Page ────────────────────────────────────────────────────────────────── */
 
 export default function App(): React.ReactElement {
+    // Keep the browser-tab favicon locked to the page theme (toggle or system).
+    React.useEffect(() => syncFaviconToTheme(), []);
+
     return (
         <div id="top" className="relative bg-surface min-h-screen">
             {/* Atmospheric background — matches the app's Dashboard / About page. */}
@@ -379,7 +408,7 @@ export default function App(): React.ReactElement {
                             { stat: '0', label: 'Files sent to the cloud' },
                             { stat: '$0', label: 'Cost to download' },
                             { stat: '100%', label: 'Runs offline on your PC' },
-                            { stat: 'CSV', label: 'Opens right in Excel' },
+                            { stat: 'Excel', label: 'Export to CSV, open in Excel' },
                         ].map(({ stat, label }) => (
                             <div key={label} className="rounded-[10px] border border-outline-variant bg-surface-container p-5 text-center">
                                 <p className="font-display-lg text-headline-lg text-primary">{stat}</p>
@@ -632,7 +661,7 @@ export default function App(): React.ReactElement {
                 <footer className="border-t border-outline-variant">
                     <div className="max-w-6xl mx-auto px-5 sm:px-8 lg:px-[--spacing-margin-page] py-10 flex flex-col sm:flex-row items-center justify-between gap-4">
                         <div className="flex items-center gap-2 text-on-surface-variant">
-                            <img src="/anchor-icon.png" alt="" aria-hidden className="w-7 h-7 rounded-md" />
+                            <AnchorMark className="w-6 h-6 rounded-md" />
                             <span className="font-body-md text-body-md">Anchor · local-first AI data extraction</span>
                         </div>
                         <div className="flex items-center gap-5 font-label-md text-label-md text-on-surface-variant">
