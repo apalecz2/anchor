@@ -663,7 +663,7 @@ export default function App(): React.ReactElement {
                     <div className="max-w-6xl mx-auto px-5 sm:px-8 lg:px-[--spacing-margin-page] py-10 flex flex-col sm:flex-row items-center justify-between gap-4">
                         <div className="flex items-center gap-2 text-on-surface-variant">
                             <AnchorMark className="w-6 h-6 rounded-md" />
-                            <span className="font-body-md text-body-md">Anchor · local-first AI data extraction</span>
+                            <span className="font-body-md text-body-md">Anchor · Local AI Data Extraction</span>
                         </div>
                         <div className="flex items-center gap-5 font-label-md text-label-md text-on-surface-variant">
                             <a href={LINKS.github} target="_blank" rel="noreferrer" className="hover:text-on-surface transition-colors no-underline">GitHub</a>

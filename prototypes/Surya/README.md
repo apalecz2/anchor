@@ -93,6 +93,36 @@ The prompt is the model's **training-time contract** — copied verbatim from th
 surya source. Don't paraphrase it. Other documented modes are wired up behind
 `--mode layout|table|block` for experimentation.
 
+## Logprobs spike (`logprobs-test.mjs`)
+
+Answers the key question before committing to Surya as a second extraction engine:
+**does llama-server return per-token logprobs for Surya in the shape the app's
+confidence heatmap needs?**
+
+The app's heatmap (`confidence.ts`) is fed by the streamed shape
+`choices[0].logprobs.content[].logprob`. The spike reproduces that exact
+request + parse and reports whether the contract holds.
+
+```bash
+# OCR a page and check logprobs (spawns the server itself)
+node logprobs-test.mjs <image.png>
+
+# Request top-5 alternative tokens per position too
+node logprobs-test.mjs image.png --top-logprobs 5
+
+# Attach to a server you already started with `node surya.mjs serve --port 8099`
+node logprobs-test.mjs --connect --port 8099 image.png
+```
+
+Output is printed to stderr (token count, how many carried a numeric logprob,
+mean/min/max, first 15 tokens) plus a one-line **VERDICT**:
+
+- **PASS** — every token carried a logprob; Surya is heatmap-compatible.
+- **PARTIAL** — some tokens lacked logprobs; the heatmap degrades gracefully.
+- **FAIL** — no logprobs at all; full provenance scoring isn't available for Surya.
+
+The full token stream is also written to `out/<image>.logprobs.json` for inspection.
+
 ## Limitations (it's an MVP)
 
 - Images only (PNG/JPEG/WebP). PDFs would need a render-to-image step — the app

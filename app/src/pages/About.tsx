@@ -163,7 +163,7 @@ export default function About(): React.ReactElement {
                         <StepRow
                             number="9"
                             title="Export"
-                            body="Save verified data as CSV. The model is unloaded from RAM after the job completes to free resources."
+                            body="Save verified data as CSV, HTML, Markdown, or plain text. The model is unloaded from RAM after the job completes to free resources."
                         />
                     </div>
                 </section>
@@ -222,25 +222,24 @@ export default function About(): React.ReactElement {
                     <h2 className="font-headline-lg text-headline-lg text-on-surface">Adapts to your hardware</h2>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div className="rounded-[10px] border border-outline-variant bg-surface-container p-6 flex flex-col gap-3">
-                            <p className="font-label-md text-label-md text-on-surface-variant uppercase tracking-wider">Low-end mode</p>
-                            <h3 className="font-headline-md text-headline-md text-on-surface">8 GB RAM minimum</h3>
+                            <p className="font-label-md text-label-md text-on-surface-variant uppercase tracking-wider">GPU acceleration</p>
+                            <h3 className="font-headline-md text-headline-md text-on-surface">Automatic detection</h3>
                             <p className="font-body-md text-body-md text-on-surface-variant">
-                                Vision models are disabled. A lightweight ~2B LLM handles formatting and cleanup,
-                                paired with Tesseract for text extraction.
+                                On first run, Anchor detects your graphics card and downloads the matching
+                                accelerated build — NVIDIA (CUDA), AMD (ROCm), or Apple Silicon (Metal).
                             </p>
                         </div>
                         <div className="rounded-[10px] border border-outline-variant bg-surface-container p-6 flex flex-col gap-3">
-                            <p className="font-label-md text-label-md text-on-surface-variant uppercase tracking-wider">High-end mode</p>
-                            <h3 className="font-headline-md text-headline-md text-on-surface">Full pipeline</h3>
+                            <p className="font-label-md text-label-md text-on-surface-variant uppercase tracking-wider">CPU fallback</p>
+                            <h3 className="font-headline-md text-headline-md text-on-surface">Runs on any machine</h3>
                             <p className="font-body-md text-body-md text-on-surface-variant">
-                                Full vision models with larger context windows. Richer multi-modal understanding
-                                for complex tables, mixed layouts, and handwritten content.
+                                No GPU required — Anchor runs the full pipeline on your CPU, and a GPU build
+                                automatically falls back to CPU if acceleration can't initialize.
                             </p>
                         </div>
                     </div>
                     <p className="font-body-md text-body-md text-on-surface-variant">
-                        Anchor dynamically caps and prioritizes threads to keep the UI responsive and leave
-                        headroom for your OS and other applications. Runs natively on macOS and Windows.
+                        The AI model and platform binaries (~3.5 GB) are downloaded once on first launch and SHA-256 verified.
                     </p>
                 </section>
 
