@@ -53,3 +53,6 @@ zip = "2"
 flate2 = "1"
 tar = "0.4"
 
+# Excel (XLSX) export
+rust_xlsxwriter = "0.96"
+

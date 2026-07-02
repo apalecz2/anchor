@@ -1,3 +1,4 @@
+mod export;
 mod hardware;
 mod llama;
 mod ocr;
@@ -84,6 +85,8 @@ pub fn run() {
             // Document processing
             ocr::process_document,
             ocr::cancel_process_document,
+            // Export
+            export::export_xlsx,
             // Llama server
             llama::resolve_llama_server_path,
             llama::start_llama_server,

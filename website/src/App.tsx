@@ -409,7 +409,7 @@ export default function App(): React.ReactElement {
                             { stat: '0', label: 'Files sent to the cloud' },
                             { stat: '$0', label: 'Cost to download' },
                             { stat: '100%', label: 'Runs offline on your PC' },
-                            { stat: 'Excel', label: 'Export to CSV, open in Excel' },
+                            { stat: 'Excel', label: 'Export straight to Excel' },
                         ].map(({ stat, label }) => (
                             <div key={label} className="rounded-[10px] border border-outline-variant bg-surface-container p-5 text-center">
                                 <p className="font-display-lg text-headline-lg text-primary">{stat}</p>
@@ -445,7 +445,7 @@ export default function App(): React.ReactElement {
                             <FeatureCard
                                 icon="table_chart"
                                 title="Tables become spreadsheets"
-                                body="Anchor focuses on one job and does it well: reading the tables in your documents and turning them into clean rows and columns. Export to CSV — ready to open in Excel — plus Markdown, HTML, or plain text, and keep working."
+                                body="Anchor focuses on one job and does it well: reading the tables in your documents and turning them into clean rows and columns. Export straight to Excel or CSV, plus Markdown, HTML, or plain text, and keep working."
                             />
                             <FeatureCard
                                 icon="lock"
@@ -476,7 +476,7 @@ export default function App(): React.ReactElement {
                             <StepRow number="1" title="Drop in your file" body="Add a PDF or a photo of the page: a transcript, an invoice, a statement, anything with a table on it." />
                             <StepRow number="2" title="Anchor reads the table" body="On-device AI reads the page and lays the data out into clean rows and columns. This all happens on your computer." />
                             <StepRow number="3" title="Glance and verify" body="Cells are color-coded by confidence. Click one to see exactly where it came from on the original page, and fix anything flagged." />
-                            <StepRow number="4" title="Export your table" body="Save the finished table as CSV (opens right in Excel), Markdown, HTML, or plain text and carry on with your work." />
+                            <StepRow number="4" title="Export your table" body="Save the finished table as Excel, CSV, Markdown, HTML, or plain text and carry on with your work." />
                         </div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                             <div>
@@ -490,7 +490,8 @@ export default function App(): React.ReactElement {
                             <div>
                                 <p className="font-label-md text-label-md text-on-surface-variant mb-3 uppercase tracking-wider">Output formats</p>
                                 <div className="flex flex-wrap gap-2">
-                                    <FormatBadge icon="table_chart" label="CSV" />
+                                    <FormatBadge icon="table_chart" label="Excel" />
+                                    <FormatBadge icon="table_view" label="CSV" />
                                     <FormatBadge icon="code" label="HTML" />
                                     <FormatBadge icon="notes" label="Markdown" />
                                     <FormatBadge icon="article" label="Plain text" />
@@ -530,7 +531,7 @@ export default function App(): React.ReactElement {
                             <StepRow number="6" title="Stage 2: Provenance matching" body="A deterministic algorithm walks the cells and OCR words in parallel. Each cell is linked to its source word. Even when dozens share identical values, sequence position disambiguates them." />
                             <StepRow number="7" title="Confidence scoring" body="Three signals per cell (AI log-probability as mean and minimum, OCR word confidence, and source agreement) blend into a trust level that drives the color heatmap." />
                             <StepRow number="8" title="Human verification" body="The table color-codes every cell by trust. Click a cell to highlight its source region; cells with no OCR match get an unverified badge, and approximate matches a lowered-confidence badge." />
-                            <StepRow number="9" title="Export" body="Save verified data as CSV, HTML, Markdown, or plain text. The model is unloaded from RAM once it's been idle to free resources." />
+                            <StepRow number="9" title="Export" body="Save verified data as Excel, CSV, HTML, Markdown, or plain text. The model is unloaded from RAM once it's been idle to free resources." />
                         </div>
                     </section>
 

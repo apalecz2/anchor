@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import type { ProvenanceCell } from '../extraction/types';
 import { parseCSV } from '../llama/promptUtils';
-import { toCsv, toHtml, toMarkdown, toPlainText, saveWithDialog } from './exportUtils';
+import { toCsv, toHtml, toMarkdown, toPlainText, saveWithDialog, saveXlsxWithDialog } from './exportUtils';
 import type { SaveFormat } from './exportUtils';
 import Icon from '../../components/Icon';
 
@@ -26,18 +26,29 @@ function normalizeRows(
     return [];
 }
 
-type ExportFormatKey = 'csv' | 'html' | 'md' | 'txt';
+type ExportFormatKey = 'csv' | 'xlsx' | 'html' | 'md' | 'txt';
 
-const FORMAT_CONFIG: Record<ExportFormatKey, {
+interface TextFormatEntry {
+    kind: 'text';
     label: string;
     icon: string;
     serialize: (r: string[][]) => string;
     saveFormat: SaveFormat;
-}> = {
-    csv:  { label: 'CSV',        icon: 'table_view',  serialize: toCsv,       saveFormat: { ext: 'csv',  label: 'CSV files',      filters: [{ name: 'CSV',      extensions: ['csv']  }] } },
-    html: { label: 'HTML',       icon: 'code',        serialize: toHtml,      saveFormat: { ext: 'html', label: 'HTML files',     filters: [{ name: 'HTML',     extensions: ['html'] }] } },
-    md:   { label: 'Markdown',   icon: 'article',     serialize: toMarkdown,  saveFormat: { ext: 'md',   label: 'Markdown files', filters: [{ name: 'Markdown', extensions: ['md']   }] } },
-    txt:  { label: 'Plain text', icon: 'text_fields', serialize: toPlainText, saveFormat: { ext: 'txt',  label: 'Text files',     filters: [{ name: 'Text',     extensions: ['txt']  }] } },
+}
+
+interface BinaryFormatEntry {
+    kind: 'binary';
+    label: string;
+    icon: string;
+    saveFormat: SaveFormat;
+}
+
+const FORMAT_CONFIG: Record<ExportFormatKey, TextFormatEntry | BinaryFormatEntry> = {
+    csv:  { kind: 'text',   label: 'CSV',        icon: 'table_view',  serialize: toCsv,      saveFormat: { ext: 'csv',  label: 'CSV files',   filters: [{ name: 'CSV',   extensions: ['csv']  }] } },
+    xlsx: { kind: 'binary', label: 'Excel',      icon: 'table_chart', saveFormat: { ext: 'xlsx', label: 'Excel files', filters: [{ name: 'Excel', extensions: ['xlsx'] }] } },
+    html: { kind: 'text',   label: 'HTML',       icon: 'code',        serialize: toHtml,     saveFormat: { ext: 'html', label: 'HTML files',  filters: [{ name: 'HTML', extensions: ['html'] }] } },
+    md:   { kind: 'text',   label: 'Markdown',   icon: 'article',     serialize: toMarkdown, saveFormat: { ext: 'md',   label: 'Markdown files', filters: [{ name: 'Markdown', extensions: ['md']   }] } },
+    txt:  { kind: 'text',   label: 'Plain text', icon: 'text_fields', serialize: toPlainText, saveFormat: { ext: 'txt', label: 'Text files',  filters: [{ name: 'Text', extensions: ['txt']  }] } },
 };
 
 export function ExportMenu({ provenanceCells, savedCsv, fileStem, disabled, openUp }: ExportMenuProps) {
@@ -60,8 +71,12 @@ export function ExportMenu({ provenanceCells, savedCsv, fileStem, disabled, open
     const handleExport = async (key: ExportFormatKey) => {
         setOpen(false);
         if (!hasData) return;
-        const { serialize, saveFormat } = FORMAT_CONFIG[key];
-        await saveWithDialog(fileStem, serialize(rows), saveFormat);
+        const format = FORMAT_CONFIG[key];
+        if (format.kind === 'text') {
+            await saveWithDialog(fileStem, format.serialize(rows), format.saveFormat);
+        } else {
+            await saveXlsxWithDialog(fileStem, rows, format.saveFormat);
+        }
     };
 
     const handleCopy = () => {

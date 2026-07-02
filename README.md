@@ -9,7 +9,7 @@ A local-first desktop application for extracting structured data from non-machin
 3. **Extract** -- a local vision LLM (Qwen3.5-4B via llama.cpp) reads the image and spatially-arranged OCR text and produces a clean TSV table.
 4. **Provenance** -- a deterministic code pass walks the CSV cells and OCR words in parallel to link each output cell back to its source region in the document.
 5. **Verify** -- a split-pane UI shows the document on the left and the extracted table on the right; clicking any cell highlights its source on the document. Cells are color-coded by a confidence score derived from LLM token log-probabilities, Tesseract word confidence, and source agreement.
-6. **Export** -- save the verified table as CSV, HTML, Markdown, or plain text (or copy it as Markdown).
+6. **Export** -- save the verified table as XLSX, CSV, HTML, Markdown, or plain text (or copy it as Markdown).
 
 All document processing runs on-device — no document data ever leaves the machine. The only network activity is the one-time first-run setup wizard, which downloads the OCR engine, llama-server binary, and GGUF model files (~3.5 GB total), plus loopback HTTP calls to the local llama-server, which binds a fresh ephemeral port on `127.0.0.1`.
 

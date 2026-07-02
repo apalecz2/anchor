@@ -10,7 +10,11 @@ import { provenanceCell as provCell } from '../../test/fixtures';
 // the Tauri fs/dialog plugins.
 vi.mock('./exportUtils', async () => {
     const actual = await vi.importActual<typeof import('./exportUtils')>('./exportUtils');
-    return { ...actual, saveWithDialog: vi.fn().mockResolvedValue(true) };
+    return {
+        ...actual,
+        saveWithDialog: vi.fn().mockResolvedValue(true),
+        saveXlsxWithDialog: vi.fn().mockResolvedValue(true),
+    };
 });
 
 const rows: ProvenanceCell[][] = [[provCell('Name'), provCell('Age')], [provCell('Al'), provCell('30')]];
@@ -51,6 +55,20 @@ describe('ExportMenu', () => {
                 expect.objectContaining({ ext: 'csv' }),
             ),
         );
+    });
+
+    it('exports xlsx via saveXlsxWithDialog with raw rows, not a serialized string', async () => {
+        render(<ExportMenu provenanceCells={rows} savedCsv={null} fileStem="report" />);
+        fireEvent.click(screen.getByRole('button', { name: /Export/ }));
+        fireEvent.click(screen.getByText('Excel'));
+        await waitFor(() =>
+            expect(exportUtils.saveXlsxWithDialog).toHaveBeenCalledWith(
+                'report',
+                [['Name', 'Age'], ['Al', '30']],
+                expect.objectContaining({ ext: 'xlsx' }),
+            ),
+        );
+        expect(exportUtils.saveWithDialog).not.toHaveBeenCalled();
     });
 
     it('prefers provenance rows over savedCsv', async () => {

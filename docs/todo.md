@@ -51,7 +51,6 @@
 
 ## Out of Scope / Later Additions
 
-- [ ] XLSX export (requires adding a library dependency)
 - [ ] OCR language selection (currently hardcoded to `"eng"`)
 
 
@@ -86,6 +85,7 @@
 
 - [x] Export button and format selector in the Session page output panel
 - [x] CSV export (minimum viable -- serialize the extracted table)
+- [x] XLSX export -- `export_xlsx` Tauri command (`rust_xlsxwriter`) writes the workbook directly to the chosen path; header row bolded, columns autofit
 - [x] HTML export
 - [x] Markdown export
 - [x] Plain text export

@@ -86,22 +86,44 @@ export interface SaveFormat {
     filters: { name: string; extensions: string[] }[];
 }
 
-/** Open the OS native Save As dialog and write content to the chosen path. Returns false if user cancelled. */
+/** Open the OS native Save As dialog; returns the chosen path, or null if the user cancelled. */
+async function pickSavePath(stem: string, format: SaveFormat): Promise<string | null> {
+    const { save } = await import('@tauri-apps/plugin-dialog');
+    return save({
+        defaultPath: `${stem}.${format.ext}`,
+        filters: format.filters,
+    });
+}
+
+/** Open the OS native Save As dialog and write text content to the chosen path. Returns false if user cancelled. */
 export async function saveWithDialog(
     stem: string,
     content: string,
     format: SaveFormat
 ): Promise<boolean> {
-    const { save } = await import('@tauri-apps/plugin-dialog');
-    const { writeTextFile } = await import('@tauri-apps/plugin-fs');
-
-    const path = await save({
-        defaultPath: `${stem}.${format.ext}`,
-        filters: format.filters,
-    });
-
+    const path = await pickSavePath(stem, format);
     if (!path) return false;
 
+    const { writeTextFile } = await import('@tauri-apps/plugin-fs');
     await writeTextFile(path, content);
+    return true;
+}
+
+/**
+ * Open the OS native Save As dialog and write an XLSX workbook to the chosen path.
+ * The workbook itself is built on the Rust side (`export_xlsx`) via `rust_xlsxwriter`,
+ * since XLSX is a binary zip/XML format best left to a dedicated writer rather than
+ * hand-rolled in the frontend. Returns false if the user cancelled.
+ */
+export async function saveXlsxWithDialog(
+    stem: string,
+    rows: string[][],
+    format: SaveFormat
+): Promise<boolean> {
+    const path = await pickSavePath(stem, format);
+    if (!path) return false;
+
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('export_xlsx', { rows, destPath: path });
     return true;
 }
