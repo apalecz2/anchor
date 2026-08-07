@@ -8,6 +8,7 @@
 - note on poor quality extractions -- "try fixing the OCR on the left for better results"
 - text overlaps on smaller screens in the formatted table view
 - mac the grade test image doesn't align columns correctly
+- call to action buttons for the installation options on welcome to anchor page
 
 
 ### Build / Packaging

@@ -11,14 +11,18 @@ import { copyrightYears } from './copyright';
 const LINKS = {
     /** Public repository. */
     github: 'https://github.com/apalecz2/anchor',
-    /** GitHub Releases page: the Windows and macOS download (docs/release.md §2). */
+    /** GitHub Releases page (docs/release.md §2). Used directly for the footer
+     *  "Releases" link; the Download cards prefer a direct asset URL resolved
+     *  by useLatestReleaseAssets and fall back to this page only if that
+     *  resolution fails (offline, rate-limited, asset renamed). */
     releases: 'https://github.com/apalecz2/anchor/releases/latest',
     /** Microsoft Store listing, planned (docs/release.md §6). Leave empty until live. */
     microsoftStore: '',
-    /** macOS DMG. Same GitHub Releases page as Windows. The .app itself is a universal
-     *  build, but the AI runtime it downloads on first launch (llama-server, PDFium) is
-     *  Apple Silicon-only (see paths.rs::pdfium_spec / setup.rs::get_llama_server_spec) —
-     *  it does not actually run on Intel Macs. Unsigned for now. */
+    /** macOS DMG fallback — same caveat as `releases` above. The .app itself is
+     *  a universal build, but the AI runtime it downloads on first launch
+     *  (llama-server, PDFium) is Apple Silicon-only (see paths.rs::pdfium_spec /
+     *  setup.rs::get_llama_server_spec) — it does not actually run on Intel Macs.
+     *  Unsigned for now. */
     macDownload: 'https://github.com/apalecz2/anchor/releases/latest',
 };
 
@@ -28,6 +32,94 @@ const NAV = [
     { href: '#deep-dive', label: 'Architecture' },
     { href: '#download', label: 'Download' },
 ];
+
+/* ── Direct-download resolution ──────────────────────────────────────────── */
+
+/** GitHub Releases asset the Windows/macOS download cards should link to
+ * straight-away, resolved from the latest release. `null` means "not
+ * resolved yet (or resolution failed)" — callers fall back to LINKS.releases
+ * / LINKS.macDownload, which must always remain a working path to a
+ * download, since this fetch can fail (offline, rate-limited, CORS). */
+interface ReleaseAssetLinks {
+    windows: string | null;
+    mac: string | null;
+}
+
+const RELEASE_API_URL = 'https://api.github.com/repos/apalecz2/anchor/releases/latest';
+// Release filenames embed the version (e.g. Anchor_0.3.0_x64-setup.exe), so
+// there's no fixed asset name to link to directly — match by stable suffix
+// instead. Both are unique within a release (one NSIS installer, one dmg).
+const WINDOWS_ASSET_SUFFIX = 'x64-setup.exe';
+const MAC_ASSET_SUFFIX = '.dmg';
+
+// Cache the resolved links so a repeat visit doesn't re-hit the GitHub API
+// (anonymous requests are rate-limited to 60/hr per IP, shared across every
+// visitor behind the same NAT) and so navigating within the page doesn't
+// re-fetch. An hour is generous next to how often releases actually ship.
+const CACHE_KEY = 'anchor:latestReleaseAssets';
+const CACHE_TTL_MS = 60 * 60 * 1000;
+
+interface CachedReleaseAssets extends ReleaseAssetLinks {
+    fetchedAt: number;
+}
+
+function readReleaseAssetCache(): ReleaseAssetLinks | null {
+    try {
+        const raw = localStorage.getItem(CACHE_KEY);
+        if (!raw) return null;
+        const cached = JSON.parse(raw) as CachedReleaseAssets;
+        if (Date.now() - cached.fetchedAt > CACHE_TTL_MS) return null;
+        return { windows: cached.windows, mac: cached.mac };
+    } catch {
+        // Corrupt cache entry or localStorage unavailable (private browsing) —
+        // treat as a miss and re-resolve.
+        return null;
+    }
+}
+
+function writeReleaseAssetCache(links: ReleaseAssetLinks): void {
+    try {
+        localStorage.setItem(CACHE_KEY, JSON.stringify({ ...links, fetchedAt: Date.now() } satisfies CachedReleaseAssets));
+    } catch {
+        // Quota exceeded or unavailable — non-fatal, just skip caching.
+    }
+}
+
+/** Resolves the current release's installer URLs so the Download cards can
+ * skip the GitHub releases page and hand the browser a file directly. Reads
+ * a cached result first; otherwise hits the GitHub API once on mount. Never
+ * the only path to a download — see ReleaseAssetLinks above. */
+function useLatestReleaseAssets(): ReleaseAssetLinks {
+    const [links, setLinks] = React.useState<ReleaseAssetLinks>(() => readReleaseAssetCache() ?? { windows: null, mac: null });
+
+    React.useEffect(() => {
+        if (readReleaseAssetCache()) return; // state already seeded from cache above
+
+        let cancelled = false;
+        fetch(RELEASE_API_URL, { headers: { Accept: 'application/vnd.github+json' } })
+            .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`GitHub API responded ${res.status}`))))
+            .then((release: { assets?: { name: string; browser_download_url: string }[] }) => {
+                if (cancelled) return;
+                const assets = release.assets ?? [];
+                const resolved: ReleaseAssetLinks = {
+                    windows: assets.find((a) => a.name.endsWith(WINDOWS_ASSET_SUFFIX))?.browser_download_url ?? null,
+                    mac: assets.find((a) => a.name.endsWith(MAC_ASSET_SUFFIX))?.browser_download_url ?? null,
+                };
+                setLinks(resolved);
+                writeReleaseAssetCache(resolved);
+            })
+            .catch(() => {
+                // Network error, rate limit, or an unexpected response shape —
+                // leave links null so callers keep pointing at the releases page.
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    return links;
+}
 
 /* ── Header ──────────────────────────────────────────────────────────────── */
 
@@ -487,6 +579,7 @@ function DownloadCard({
     href,
     cta,
     note,
+    direct = false,
 }: {
     icon: string;
     platform: string;
@@ -494,6 +587,12 @@ function DownloadCard({
     href: string;
     cta: string;
     note?: string;
+    /** True once href points straight at a GitHub release asset (resolved by
+     * useLatestReleaseAssets) rather than the releases page — GitHub serves
+     * those with Content-Disposition: attachment, so the click downloads the
+     * file in place. target="_blank" is only needed for the page-link
+     * fallback; on a direct asset it just risks a flashed blank tab. */
+    direct?: boolean;
 }): React.ReactElement {
     const available = Boolean(href);
     return (
@@ -510,8 +609,7 @@ function DownloadCard({
             {available ? (
                 <a
                     href={href}
-                    target="_blank"
-                    rel="noreferrer"
+                    {...(direct ? {} : { target: '_blank', rel: 'noreferrer' })}
                     className="flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-full bg-primary text-on-primary font-label-md text-label-md font-semibold hover:opacity-90 transition-opacity no-underline"
                 >
                     <Icon name="download" size={16} />
@@ -683,6 +781,7 @@ export default function App(): React.ReactElement {
     // it stays visible even when the page theme is toggled away from the system.
     React.useEffect(() => syncFaviconToSystemTheme(), []);
     const platform = usePlatformLabel();
+    const releaseAssets = useLatestReleaseAssets();
 
     return (
         <div id="top" className="relative bg-surface min-h-screen">
@@ -960,7 +1059,8 @@ export default function App(): React.ReactElement {
                                 icon="window"
                                 platform="Windows"
                                 detail="Windows 10 (22H2+) or 11 · 64-bit"
-                                href={LINKS.releases}
+                                href={releaseAssets.windows ?? LINKS.releases}
+                                direct={Boolean(releaseAssets.windows)}
                                 cta="Download installer"
                                 note="Installer via GitHub Releases (Unsigned for now)."
                             />
@@ -980,7 +1080,8 @@ export default function App(): React.ReactElement {
                                 icon="laptop_mac"
                                 platform="macOS"
                                 detail="Apple Silicon (M-series) only"
-                                href={LINKS.macDownload}
+                                href={releaseAssets.mac ?? LINKS.macDownload}
+                                direct={Boolean(releaseAssets.mac)}
                                 cta="Download DMG"
                                 note="Installer via GitHub Releases (Unsigned for now)."
                             />
