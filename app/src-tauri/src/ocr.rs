@@ -21,6 +21,12 @@ use pdfium_render::prelude::*;
 
 use image::{DynamicImage, GenericImageView, GrayImage};
 
+// TEST SWAP (prototypes/OarOcr spike): pure-Rust OCR via ONNX Runtime instead
+// of Tesseract. Aliased because oar-ocr's BoundingBox (a polygon) is a
+// different type from this file's own BoundingBox (left/top/width/height).
+use oar_ocr::prelude::*;
+use oar_ocr::processors::BoundingBox as OarBox;
+
 use tauri::{Emitter, Manager};
 
 use crate::paths::pdfium_lib_name;
@@ -394,44 +400,77 @@ fn ocr_image_to_page(
     // it regardless of outcome so these copies never accumulate (they used to be
     // written into the persistent sessions/ folder, untracked, and pile up forever).
     let result = (|| -> Result<DocumentPageResult, String> {
-        let args = rusty_tesseract::Args {
-            lang: "eng".to_string(),
-            psm: Some(6), // single uniform block — better for tabular layouts
-            dpi: None, // let Tesseract estimate from image; the default 150 misrepresents upscaled content
-            ..Default::default()
-        };
+        // TEST SWAP: oar-ocr instead of Tesseract (prototypes/OarOcr). Rebuilt
+        // per call rather than cached/shared -- deliberately not optimized,
+        // this is a quick in-place swap to check box/text quality, not the
+        // real integration.
+        let engine = OAROCRBuilder::new(
+            "pp-ocrv6_small_det.onnx",
+            "pp-ocrv6_small_rec.onnx",
+            "ppocrv6_dict.txt",
+        )
+        .return_word_box(true)
+        .build()
+        .map_err(|error| format!("failed to build oar-ocr pipeline: {error}"))?;
 
-        let tesseract_image = rusty_tesseract::tesseract::input::Image::from_path(&ocr_path)
-            .map_err(|error| format!("failed to load image for ocr: {error}"))?;
+        let rgb_image = image::open(&ocr_path)
+            .map_err(|error| format!("failed to load image for ocr: {error}"))?
+            .to_rgb8();
 
-        let ocr_output =
-            rusty_tesseract::tesseract::output_data::image_to_data(&tesseract_image, &args)
-                .map_err(|error| format!("ocr failed: {error}"))?;
+        let mut results = engine
+            .predict(vec![rgb_image])
+            .map_err(|error| format!("ocr failed: {error}"))?;
+        let page_result = results.pop().ok_or("oar-ocr returned no page result")?;
 
-        let words = ocr_output
-            .data
-            .into_iter()
-            .filter(|item| item.level == 5 && !item.text.trim().is_empty())
-            .map(|item| OcrWord {
-                // The frontend assigns ids once, on first load, and persists them.
-                id: None,
-                text: item.text,
-                confidence: item.conf,
-                box_coords: BoundingBox {
-                    left: map_coord(item.left, scale),
-                    top: map_coord(item.top, scale),
-                    width: map_coord(item.width, scale),
-                    height: map_coord(item.height, scale),
-                },
-            })
-            .collect::<Vec<_>>();
+        let mut words = Vec::new();
+        let mut full_text_lines = Vec::new();
+        for region in &page_result.text_regions {
+            let Some((text, confidence)) = region.text_with_confidence() else {
+                continue;
+            };
+            full_text_lines.push(text.to_string());
+
+            match &region.word_boxes {
+                // oar-ocr's word_boxes is one box PER CHARACTER, not per word
+                // (see prototypes/OarOcr/README.md) -- reconstruct real word
+                // boxes by splitting on whitespace and unioning the runs.
+                // Confidence has no per-word signal, so every word inherits
+                // its parent line's score.
+                Some(char_boxes) => {
+                    let split = split_into_words(text, char_boxes);
+                    if split.is_empty() {
+                        words.push(oar_region_to_word(
+                            text,
+                            &region.bounding_box,
+                            confidence,
+                            scale,
+                        ));
+                    } else {
+                        for (word_text, word_box) in split {
+                            words.push(oar_region_to_word(
+                                &word_text,
+                                &word_box,
+                                confidence,
+                                scale,
+                            ));
+                        }
+                    }
+                }
+                None => words.push(oar_region_to_word(
+                    text,
+                    &region.bounding_box,
+                    confidence,
+                    scale,
+                )),
+            }
+        }
 
         Ok(DocumentPageResult {
             image_path: image_path.to_string_lossy().into_owned(),
             natural_width,
             natural_height,
             words,
-            text: ocr_output.output,
+            text: full_text_lines.join("\n"),
             error: None,
         })
     })();
@@ -439,6 +478,73 @@ fn ocr_image_to_page(
     let _ = fs::remove_file(&ocr_path);
 
     result
+}
+
+// ---- TEST SWAP helpers (prototypes/OarOcr) ----
+
+/// oar-ocr's `word_boxes` is one box per CHARACTER of the recognized line, not
+/// per word (see its `ctc_word_boxes`) -- split `text` on whitespace and union
+/// the corresponding run of character boxes into real word boxes.
+fn split_into_words(text: &str, char_boxes: &[OarBox]) -> Vec<(String, OarBox)> {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() != char_boxes.len() {
+        return Vec::new();
+    }
+
+    let mut words = Vec::new();
+    let mut cur_text = String::new();
+    let mut cur_boxes: Vec<&OarBox> = Vec::new();
+
+    for (ch, b) in chars.iter().zip(char_boxes.iter()) {
+        if ch.is_whitespace() {
+            if !cur_text.is_empty() {
+                words.push((std::mem::take(&mut cur_text), union_boxes(&cur_boxes)));
+                cur_boxes.clear();
+            }
+        } else {
+            cur_text.push(*ch);
+            cur_boxes.push(b);
+        }
+    }
+    if !cur_text.is_empty() {
+        words.push((cur_text, union_boxes(&cur_boxes)));
+    }
+    words
+}
+
+fn union_boxes(boxes: &[&OarBox]) -> OarBox {
+    let mut x_min = f32::INFINITY;
+    let mut y_min = f32::INFINITY;
+    let mut x_max = f32::NEG_INFINITY;
+    let mut y_max = f32::NEG_INFINITY;
+    for b in boxes {
+        x_min = x_min.min(b.x_min());
+        y_min = y_min.min(b.y_min());
+        x_max = x_max.max(b.x_max());
+        y_max = y_max.max(b.y_max());
+    }
+    OarBox::from_coords(x_min, y_min, x_max, y_max)
+}
+
+/// Maps an oar-ocr box (in preprocessed-image pixels) + line-level confidence
+/// into an `OcrWord` in the original image's coordinate space, via the same
+/// `map_coord` scale-division Tesseract's path uses.
+fn oar_region_to_word(text: &str, region_box: &OarBox, confidence: f32, scale: f32) -> OcrWord {
+    let left = region_box.x_min();
+    let top = region_box.y_min();
+    let width = region_box.x_max() - left;
+    let height = region_box.y_max() - top;
+    OcrWord {
+        id: None,
+        text: text.to_string(),
+        confidence: confidence * 100.0, // oar-ocr is 0-1; OcrWord/Tesseract is 0-100
+        box_coords: BoundingBox {
+            left: map_coord(left.round() as i32, scale),
+            top: map_coord(top.round() as i32, scale),
+            width: map_coord(width.round() as i32, scale),
+            height: map_coord(height.round() as i32, scale),
+        },
+    }
 }
 
 /// User-facing error returned when a job is aborted via `cancel_process_document`.

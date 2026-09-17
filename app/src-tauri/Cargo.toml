@@ -59,6 +59,11 @@ pdfium-render = "0.8.10"
 
 # Tesseract OCR wrapper
 rusty-tesseract = "1.1.9"
+# TEST SWAP (prototypes/OarOcr spike): pure-Rust OCR via ONNX Runtime, no Python.
+# auto-download fetches+hash-verifies the PP-OCRv6 models from ModelScope at
+# first run instead of the app's own pinned asset manifest -- fine for this
+# quick in-app test, not for a real integration (see prototype README).
+oar-ocr = { version = "0.9", features = ["auto-download"] }
 # Pre-OCR preprocessing: grayscale + Lanczos upscale (see ocr.rs::preprocess_for_ocr)
 image = "0.25.10"
 
