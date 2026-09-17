@@ -57,12 +57,15 @@ tauri-plugin-clipboard-manager = "2"
 # PDF to Image conversion (Requires downloading the pdfium binaries)
 pdfium-render = "0.8.10" 
 
-# Tesseract OCR wrapper
+# Tesseract OCR wrapper -- one of the two engines catalog::OcrEngine selects
+# between (TESSERACT_QWEN and the other tesseract-grounded presets).
 rusty-tesseract = "1.1.9"
-# TEST SWAP (prototypes/OarOcr spike): pure-Rust OCR via ONNX Runtime, no Python.
-# auto-download fetches+hash-verifies the PP-OCRv6 models from ModelScope at
-# first run instead of the app's own pinned asset manifest -- fine for this
-# quick in-app test, not for a real integration (see prototype README).
+# Pure-Rust OCR via ONNX Runtime, no Python -- the other OcrEngine (OAR_OCR_QWEN,
+# the debug-build default). auto-download fetches+hash-verifies the PP-OCRv6
+# models from ModelScope at first run instead of the app's own pinned asset
+# manifest; setup.rs's oar_ocr_* assets are pinned for the real path, but
+# ocr.rs still resolves models by name through this feature until that's
+# wired through (see prototypes/OarOcr/README.md and catalog::OAR_OCR_QWEN).
 oar-ocr = { version = "0.9", features = ["auto-download"] }
 # Pre-OCR preprocessing: grayscale + Lanczos upscale (see ocr.rs::preprocess_for_ocr)
 image = "0.25.10"

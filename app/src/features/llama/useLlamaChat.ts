@@ -64,7 +64,7 @@ const CANCELLED_MESSAGE = 'Extraction was cancelled.';
  *  yet, which is what keeps this cutover behaviour-identical. */
 const PHASE_FOR_STEP: Record<string, ExtractionPhase> = {
     render: 'preparing',
-    ground_tesseract: 'preparing',
+    ground_ocr: 'preparing',
     ground_model: 'preparing',
     // Mapping the table runs a model, but it is still preparation for the table the
     // user is waiting to see — 'generating' is the phase where output starts arriving.

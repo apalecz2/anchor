@@ -171,7 +171,7 @@ fn step_label(step: &Step) -> String {
     // through to the generic label.
     match step {
         Step::Render { .. } => "Reading the page".into(),
-        Step::GroundTesseract { .. } => "Finding text on the page".into(),
+        Step::GroundOcr { .. } => "Finding text on the page".into(),
         Step::GroundModel { model_id, .. } => match catalog::any_model(model_id) {
             Some(m) => format!("Reading the page ({})", m.label),
             None => "Reading the page".into(),
@@ -194,7 +194,7 @@ fn step_label(step: &Step) -> String {
 fn step_kind(step: &Step) -> &'static str {
     match step {
         Step::Render { .. } => "render",
-        Step::GroundTesseract { .. } => "ground_tesseract",
+        Step::GroundOcr { .. } => "ground_ocr",
         Step::GroundModel { .. } => "ground_model",
         Step::GroundGrid { .. } => "ground_grid",
         Step::Structure { .. } => "structure",
@@ -388,12 +388,14 @@ async fn run_page(
         );
 
         match step {
-            // Rendering and Tesseract already ran in `process_document`; their
+            // Rendering and OCR already ran in `process_document`; their
             // results arrive as this call's arguments. Splitting them out is what
             // lets the executor be async while pdfium stays on a blocking thread.
             Step::Render { .. } => {}
 
-            Step::GroundTesseract { .. } => {
+            // Whichever engine (`OcrEngine`) `process_document` actually ran is
+            // irrelevant here -- both give the same `OcrWord` shape.
+            Step::GroundOcr { .. } => {
                 grounded = sanitize_words_for_provenance(words, natural_height);
                 spatial_text = build_table_text(&grounded, natural_height);
             }
@@ -603,7 +605,7 @@ pub fn cancel_extraction_pipeline(pipeline: tauri::State<'_, PipelineState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::catalog::{GpuLayers, PromptId, TesseractSpec, TESSERACT_QWEN};
+    use crate::pipeline::catalog::{GpuLayers, OcrEngine, PromptId, TesseractSpec, TESSERACT_QWEN};
 
     #[test]
     fn step_labels_name_the_model_actually_running() {
@@ -618,14 +620,14 @@ mod tests {
         );
         assert_eq!(step_kind(&structure), "structure");
 
-        let ground = Step::GroundTesseract {
-            tesseract: TesseractSpec {
+        let ground = Step::GroundOcr {
+            engine: OcrEngine::Tesseract(TesseractSpec {
                 psm: 6,
                 lang: "eng",
-            },
+            }),
         };
         assert_eq!(step_label(&ground), "Finding text on the page");
-        assert_eq!(step_kind(&ground), "ground_tesseract");
+        assert_eq!(step_kind(&ground), "ground_ocr");
     }
 
     /// An unknown model must degrade to a generic label rather than panicking on an
@@ -756,13 +758,17 @@ mod tests {
     /// for it rather than discovering `GroundGrid` falls through.
     #[test]
     fn the_shipped_and_pending_presets_are_runnable_by_this_executor() {
-        for preset in [&TESSERACT_QWEN, &catalog::TESSERACT_SURYA_QWEN] {
+        for preset in [
+            &TESSERACT_QWEN,
+            &catalog::OAR_OCR_QWEN,
+            &catalog::TESSERACT_SURYA_QWEN,
+        ] {
             for step in preset.steps {
                 assert!(
                     matches!(
                         step,
                         Step::Render { .. }
-                            | Step::GroundTesseract { .. }
+                            | Step::GroundOcr { .. }
                             | Step::GroundGrid { .. }
                             | Step::Structure { .. }
                     ),

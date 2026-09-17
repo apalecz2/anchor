@@ -292,13 +292,41 @@ pub struct TesseractSpec {
     pub lang: &'static str,
 }
 
+/// oar-ocr's settings (see `prototypes/OarOcr`): pure Rust, ONNX Runtime via
+/// `ort`, no Python, no Tesseract. `det_model`/`rec_model`/`dict` are names
+/// resolved through the crate's own auto-download registry (ModelScope,
+/// SHA-256-verified against hashes pinned inside the crate) rather than paths.
+#[derive(Serialize, Debug, Clone, Copy)]
+pub struct OarOcrSpec {
+    pub det_model: &'static str,
+    pub rec_model: &'static str,
+    pub dict: &'static str,
+    /// oar-ocr's `word_boxes` output is one box per CHARACTER, not per word
+    /// (see its `ctc_word_boxes`) — `ocr.rs` groups them into words itself
+    /// when this is set. There is no per-word confidence either way; every
+    /// word inherits its parent line's score.
+    pub word_box: bool,
+}
+
+/// Which classical (non-LLM) engine grounds a page's words. Distinct from
+/// `ModelRole::Ground`, which is for vision models served through
+/// `llama-server` — neither engine here has a chat-completion shape, which is
+/// why this stays a bespoke step rather than a `ModelSpec`.
+#[derive(Serialize, Debug, Clone, Copy)]
+#[serde(tag = "engine", rename_all = "snake_case")]
+pub enum OcrEngine {
+    Tesseract(TesseractSpec),
+    OarOcr(OarOcrSpec),
+}
+
 #[derive(Serialize, Debug, Clone, Copy)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Step {
     /// Rasterize the page. PDFs render at `target_width`; images are used as-is.
     Render { target_width: u32 },
-    /// Ground on Tesseract: per-word text and pixel boxes.
-    GroundTesseract { tesseract: TesseractSpec },
+    /// Ground on a classical OCR engine: per-word text and pixel boxes. Which
+    /// engine is a preset's choice (`OcrEngine`), not a fixed part of the step.
+    GroundOcr { engine: OcrEngine },
     /// Ground on a model that reports its own locations.
     GroundModel {
         model_id: &'static str,
@@ -342,7 +370,7 @@ impl Step {
     /// don't involve a model.
     pub fn required_role(&self) -> Option<ModelRole> {
         match self {
-            Step::Render { .. } | Step::GroundTesseract { .. } => None,
+            Step::Render { .. } | Step::GroundOcr { .. } => None,
             Step::GroundModel { .. } | Step::GroundGrid { .. } => Some(ModelRole::Ground),
             Step::Structure { .. } => Some(ModelRole::Structure),
             Step::Verify { .. } => Some(ModelRole::Verify),
@@ -351,7 +379,7 @@ impl Step {
 
     pub fn model_id(&self) -> Option<&'static str> {
         match self {
-            Step::Render { .. } | Step::GroundTesseract { .. } => None,
+            Step::Render { .. } | Step::GroundOcr { .. } => None,
             Step::GroundModel { model_id, .. }
             | Step::GroundGrid { model_id, .. }
             | Step::Structure { model_id, .. }
@@ -365,10 +393,7 @@ impl Step {
     /// contributes geometry to whatever already supplied the items, so counting it
     /// here would make a words-plus-grid preset look like it grounds twice.
     pub fn supplies_items(&self) -> bool {
-        matches!(
-            self,
-            Step::GroundTesseract { .. } | Step::GroundModel { .. }
-        )
+        matches!(self, Step::GroundOcr { .. } | Step::GroundModel { .. })
     }
 
     /// Whether this step produces row/column bands.
@@ -406,7 +431,10 @@ impl PipelinePreset {
     pub fn grounding(&self) -> Grounding {
         for step in self.steps {
             match step {
-                Step::GroundTesseract { .. } => return Grounding::Word,
+                // Word-level regardless of which engine: Tesseract and oar-ocr
+                // both give per-word boxes (see `OcrEngine`), just via
+                // different pre/post-processing.
+                Step::GroundOcr { .. } => return Grounding::Word,
                 Step::GroundModel { model_id, .. } => {
                     return model(model_id).map_or(Grounding::None, |m| m.caps.grounding)
                 }
@@ -434,10 +462,20 @@ impl PipelinePreset {
         ids
     }
 
+    /// The classical OCR engine this preset grounds words on, if any.
+    pub fn ocr_engine(&self) -> Option<&OcrEngine> {
+        self.steps.iter().find_map(|s| match s {
+            Step::GroundOcr { engine } => Some(engine),
+            _ => None,
+        })
+    }
+
     pub fn uses_tesseract(&self) -> bool {
-        self.steps
-            .iter()
-            .any(|s| matches!(s, Step::GroundTesseract { .. }))
+        matches!(self.ocr_engine(), Some(OcrEngine::Tesseract(_)))
+    }
+
+    pub fn uses_oar_ocr(&self) -> bool {
+        matches!(self.ocr_engine(), Some(OcrEngine::OarOcr(_)))
     }
 }
 
@@ -690,7 +728,7 @@ pub const MODELS: &[ModelSpec] = &[QWEN_3_5_4B];
 /// compares against.
 pub const TESSERACT_QWEN: PipelinePreset = PipelinePreset {
     id: "tesseract-qwen3.5-4b",
-    label: "Fast",
+    label: "Fast (Tesseract)",
     description: "Tesseract reads the page, Qwen3.5 4B builds the table. Lowest memory use.",
     version: 1,
     requires: Requirements {
@@ -701,11 +739,57 @@ pub const TESSERACT_QWEN: PipelinePreset = PipelinePreset {
         Step::Render {
             target_width: RENDER_TARGET_WIDTH,
         },
-        Step::GroundTesseract {
-            tesseract: TesseractSpec {
+        Step::GroundOcr {
+            engine: OcrEngine::Tesseract(TesseractSpec {
                 psm: 6,
                 lang: "eng",
-            },
+            }),
+        },
+        Step::Structure {
+            model_id: QWEN_3_5_4B.id,
+            prompt: PromptId::QwenTsvExtract,
+            residency: Residency::Exclusive,
+        },
+    ],
+};
+
+/// oar-ocr (pure Rust, ONNX Runtime, no Python, no Tesseract) instead of
+/// Tesseract for word-level grounding, then Qwen builds the table. See
+/// `prototypes/OarOcr` for the feasibility spike this reproduces: same
+/// word/line counts as the Python RapidOCR spike on the sample invoice, and
+/// no separate native OCR-engine binary for the setup wizard to fetch (`ort`
+/// links ONNX Runtime statically at `cargo build` time on Windows — not
+/// verified on macOS).
+///
+/// **Debug-only for now**, same reason as [`SURYA_OCR_2`]: `auto-download`
+/// fetches oar-ocr's PP-OCRv6 models from ModelScope directly, bypassing the
+/// app's own pinned asset manifest entirely — fine for local testing, not for
+/// a shipped install (the Microsoft Store 10.2.2 claim needs every byte
+/// pinned and verified by *this app*, not fetched live from a third party at
+/// first run). Wiring it through `setup.rs`'s manifest — mirroring the real
+/// files' hashes to R2 like every other asset — is the change that lifts this
+/// gate; see `setup.rs`'s oar-ocr asset entries.
+pub const OAR_OCR_QWEN: PipelinePreset = PipelinePreset {
+    id: "oar-ocr-qwen3.5-4b",
+    label: "Fast (Rust OCR)",
+    description: "A pure-Rust OCR engine reads the page (no Tesseract), Qwen3.5 4B builds \
+the table. Better word accuracy in testing; same memory use as the Tesseract preset.",
+    version: 1,
+    requires: Requirements {
+        min_ram_mb: USABLE_8GB,
+        min_vram_mb: None,
+    },
+    steps: &[
+        Step::Render {
+            target_width: RENDER_TARGET_WIDTH,
+        },
+        Step::GroundOcr {
+            engine: OcrEngine::OarOcr(OarOcrSpec {
+                det_model: "pp-ocrv6_small_det.onnx",
+                rec_model: "pp-ocrv6_small_rec.onnx",
+                dict: "ppocrv6_dict.txt",
+                word_box: true,
+            }),
         },
         Step::Structure {
             model_id: QWEN_3_5_4B.id,
@@ -745,11 +829,11 @@ Qwen3.5 4B builds the table. Better on dense or irregular tables.",
         Step::Render {
             target_width: RENDER_TARGET_WIDTH,
         },
-        Step::GroundTesseract {
-            tesseract: TesseractSpec {
+        Step::GroundOcr {
+            engine: OcrEngine::Tesseract(TesseractSpec {
                 psm: 6,
                 lang: "eng",
-            },
+            }),
         },
         Step::GroundGrid {
             model_id: SURYA_OCR_2.id,
@@ -771,7 +855,7 @@ Qwen3.5 4B builds the table. Better on dense or irregular tables.",
 /// in the recommendation ladder. A preset added in the wrong position silently becomes
 /// the recommendation for machines that should have got something else.
 #[cfg(debug_assertions)]
-pub const PRESETS: &[PipelinePreset] = &[TESSERACT_SURYA_QWEN, TESSERACT_QWEN];
+pub const PRESETS: &[PipelinePreset] = &[TESSERACT_SURYA_QWEN, OAR_OCR_QWEN, TESSERACT_QWEN];
 #[cfg(not(debug_assertions))]
 pub const PRESETS: &[PipelinePreset] = &[TESSERACT_QWEN];
 
@@ -796,11 +880,11 @@ Anchor cannot verify this model or vouch for its output.",
         Step::Render {
             target_width: RENDER_TARGET_WIDTH,
         },
-        Step::GroundTesseract {
-            tesseract: TesseractSpec {
+        Step::GroundOcr {
+            engine: OcrEngine::Tesseract(TesseractSpec {
                 psm: 6,
                 lang: "eng",
-            },
+            }),
         },
         Step::Structure {
             model_id: CUSTOM_MODEL_ID,
@@ -811,6 +895,14 @@ Anchor cannot verify this model or vouch for its output.",
 };
 
 /// The preset used when nothing else is selected.
+///
+/// oar-ocr is preferred (tested more accurate than Tesseract) but stays
+/// debug-only until its assets are pinned through `setup.rs`'s manifest
+/// rather than fetched live from ModelScope — see [`OAR_OCR_QWEN`]. A release
+/// build falls back to the Tesseract preset until that lands.
+#[cfg(debug_assertions)]
+pub const DEFAULT_PRESET_ID: &str = OAR_OCR_QWEN.id;
+#[cfg(not(debug_assertions))]
 pub const DEFAULT_PRESET_ID: &str = TESSERACT_QWEN.id;
 
 /// A model Anchor ships and installs. Excludes [`CUSTOM_GGUF`] on purpose — callers
@@ -1055,9 +1147,23 @@ mod tests {
     #[test]
     fn default_preset_exists_and_is_word_grounded() {
         let p = preset(DEFAULT_PRESET_ID).expect("default preset must be in the catalog");
-        assert!(p.uses_tesseract());
+        // Debug (test) builds default to oar-ocr; release falls back to
+        // Tesseract until oar-ocr's assets are pinned through setup.rs.
+        if cfg!(debug_assertions) {
+            assert!(p.uses_oar_ocr());
+        } else {
+            assert!(p.uses_tesseract());
+        }
         assert_eq!(p.grounding(), Grounding::Word);
         assert_eq!(p.model_ids(), vec!["qwen3.5-4b"]);
+    }
+
+    #[test]
+    fn oar_ocr_preset_is_word_grounded_and_uses_qwen() {
+        assert!(OAR_OCR_QWEN.uses_oar_ocr());
+        assert!(!OAR_OCR_QWEN.uses_tesseract());
+        assert_eq!(OAR_OCR_QWEN.grounding(), Grounding::Word);
+        assert_eq!(OAR_OCR_QWEN.model_ids(), vec!["qwen3.5-4b"]);
     }
 
     #[test]
@@ -1203,11 +1309,11 @@ mod tests {
     const RENDER: Step = Step::Render {
         target_width: RENDER_TARGET_WIDTH,
     };
-    const TESS: Step = Step::GroundTesseract {
-        tesseract: TesseractSpec {
+    const TESS: Step = Step::GroundOcr {
+        engine: OcrEngine::Tesseract(TesseractSpec {
             psm: 6,
             lang: "eng",
-        },
+        }),
     };
     const STRUCT_QWEN: Step = Step::Structure {
         model_id: "qwen3.5-4b",
@@ -1729,8 +1835,16 @@ mod tests {
     fn steps_serialize_with_a_kind_tag() {
         let json = serde_json::to_string(&TESSERACT_QWEN).expect("preset must serialize");
         assert!(json.contains(r#""kind":"render""#));
-        assert!(json.contains(r#""kind":"ground_tesseract""#));
+        assert!(json.contains(r#""kind":"ground_ocr""#));
+        assert!(json.contains(r#""engine":"tesseract""#));
         assert!(json.contains(r#""kind":"structure""#));
         assert!(json.contains(r#""model_id":"qwen3.5-4b""#));
+    }
+
+    #[test]
+    fn oar_ocr_step_serializes_with_its_engine_tag() {
+        let json = serde_json::to_string(&OAR_OCR_QWEN).expect("preset must serialize");
+        assert!(json.contains(r#""kind":"ground_ocr""#));
+        assert!(json.contains(r#""engine":"oar_ocr""#));
     }
 }

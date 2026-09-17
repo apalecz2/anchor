@@ -116,7 +116,8 @@ export function useDocumentExtraction(sessionId: string | undefined, activePageI
 
                 const rustResult = await invoke<ExtractionResult>('process_document', {
                     sessionId,
-                    filePath: dbResult[0].file_path
+                    filePath: dbResult[0].file_path,
+                    presetId: null // the catalog's default until a picker exists (mirrors useLlamaChat.ts)
                 });
 
                 // The user cancelled while the backend was still working: drop the

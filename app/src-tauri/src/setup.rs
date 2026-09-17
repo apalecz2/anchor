@@ -71,6 +71,21 @@ fn asset_installed(asset_id: &str, data_dir: &Path) -> bool {
             tesseract.join(tesseract_exe_name()).exists()
                 && tesseract.join("tessdata").join("eng.traineddata").exists()
         }
+        "oar_ocr_det" => data_dir
+            .join("models")
+            .join("oar-ocr")
+            .join(OAR_OCR_DET_FILENAME)
+            .exists(),
+        "oar_ocr_rec" => data_dir
+            .join("models")
+            .join("oar-ocr")
+            .join(OAR_OCR_REC_FILENAME)
+            .exists(),
+        "oar_ocr_dict" => data_dir
+            .join("models")
+            .join("oar-ocr")
+            .join(OAR_OCR_DICT_FILENAME)
+            .exists(),
         _ => false,
     }
 }
@@ -107,6 +122,11 @@ fn required_assets(backend: Option<&str>, preset: &PipelinePreset) -> Vec<&'stat
     let mut required = vec!["llama_server"];
     if preset.uses_tesseract() {
         required.push("tesseract");
+    }
+    if preset.uses_oar_ocr() {
+        required.push("oar_ocr_det");
+        required.push("oar_ocr_rec");
+        required.push("oar_ocr_dict");
     }
     // pdfium is required wherever we ship one (Windows + macOS) — PDF rendering
     // depends on it. Gated on pdfium_spec so platforms without an asset (Linux)
@@ -1252,6 +1272,79 @@ fn get_tesseract_spec(data_dir: &Path) -> AssetManifestEntry {
     }
 }
 
+// oar-ocr's PP-OCRv6 "small" det/rec/dict files (see prototypes/OarOcr and
+// catalog::OAR_OCR_QWEN). Filenames match what `ocr.rs` will pass as file
+// paths to `OAROCRBuilder::new` once wired through — deliberately NOT the
+// bare names the crate's own `auto-download` would resolve via ModelScope,
+// so these bytes are pinned and verified by this app like every other asset.
+const OAR_OCR_DET_FILENAME: &str = "pp-ocrv6_small_det.onnx";
+const OAR_OCR_REC_FILENAME: &str = "pp-ocrv6_small_rec.onnx";
+const OAR_OCR_DICT_FILENAME: &str = "ppocrv6_dict.txt";
+
+/// oar-ocr's three model files, pinned the same way Tesseract's zip is.
+///
+/// ⚠️ Same caveat as `SURYA_OCR_2` in the catalog: these hashes and sizes are
+/// **measured from the real files** (downloaded via the crate's own
+/// `auto-download` during the `prototypes/OarOcr` spike and re-hashed here),
+/// but the R2 objects they name are **not uploaded yet**. That's why
+/// `OAR_OCR_QWEN` is debug-only in the catalog — a release build never asks
+/// for these and would 404 partway through setup if it did. Uploading these
+/// three objects under `models/oar-ocr/` and dropping that `cfg` is the whole
+/// of what ships this preset for real, matching Surya's own note.
+fn get_oar_ocr_asset_specs(data_dir: &Path) -> Vec<AssetManifestEntry> {
+    let dest_dir = data_dir.join("models").join("oar-ocr");
+    vec![
+        AssetManifestEntry {
+            asset_id: "oar_ocr_det".into(),
+            label: "Rust OCR: text detection model (9.4 MB)".into(),
+            size_bytes: 9_880_512,
+            dest_path: dest_dir
+                .join(OAR_OCR_DET_FILENAME)
+                .to_string_lossy()
+                .into_owned(),
+            sha256: "d73e0058b7a8086bbd57f3d10b8bcd4ff95363f67e06e2762b5e814fe9c9410e".into(),
+            url_primary: format!("{R2_BASE}/models/oar-ocr/{OAR_OCR_DET_FILENAME}"),
+            url_fallback: None,
+            extract_to_dir: None,
+            flatten_marker: None,
+            installed: false,
+            version: Some("PP-OCRv6-small".into()),
+        },
+        AssetManifestEntry {
+            asset_id: "oar_ocr_rec".into(),
+            label: "Rust OCR: text recognition model (20 MB)".into(),
+            size_bytes: 21_159_378,
+            dest_path: dest_dir
+                .join(OAR_OCR_REC_FILENAME)
+                .to_string_lossy()
+                .into_owned(),
+            sha256: "5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634".into(),
+            url_primary: format!("{R2_BASE}/models/oar-ocr/{OAR_OCR_REC_FILENAME}"),
+            url_fallback: None,
+            extract_to_dir: None,
+            flatten_marker: None,
+            installed: false,
+            version: Some("PP-OCRv6-small".into()),
+        },
+        AssetManifestEntry {
+            asset_id: "oar_ocr_dict".into(),
+            label: "Rust OCR: character dictionary".into(),
+            size_bytes: 74_947,
+            dest_path: dest_dir
+                .join(OAR_OCR_DICT_FILENAME)
+                .to_string_lossy()
+                .into_owned(),
+            sha256: "b5f2bfe2bdd9448429e3e82b51c789775d9b42f2403d082b00662eb77e401c5d".into(),
+            url_primary: format!("{R2_BASE}/models/oar-ocr/{OAR_OCR_DICT_FILENAME}"),
+            url_fallback: None,
+            extract_to_dir: None,
+            flatten_marker: None,
+            installed: false,
+            version: Some("PP-OCRv6-small".into()),
+        },
+    ]
+}
+
 #[tauri::command]
 pub fn get_asset_manifest(
     app_handle: tauri::AppHandle,
@@ -1329,6 +1422,13 @@ pub fn get_asset_manifest(
         .uses_tesseract()
         .then(|| get_tesseract_spec(&data_dir));
 
+    // Same for oar-ocr's three files, in the pipeline's other grounding case.
+    let oar_ocr = if preset.uses_oar_ocr() {
+        get_oar_ocr_asset_specs(&data_dir)
+    } else {
+        Vec::new()
+    };
+
     // Every file of every model the preset names, pinned. A model file with no entry
     // in MODEL_ASSETS is a hard error rather than a silent omission: shipping a
     // preset whose weights nobody pinned would produce an install that looks complete
@@ -1362,6 +1462,7 @@ pub fn get_asset_manifest(
     assets.extend(cudart);
     assets.extend(pdfium);
     assets.extend(tesseract);
+    assets.extend(oar_ocr);
     assets.extend(models);
 
     // Flag assets whose final artifact is already on disk so the wizard can skip
@@ -1686,6 +1787,10 @@ mod tests {
             assert!(required.contains(&"llama_server"));
             // Tesseract exactly when the preset grounds on it.
             assert_eq!(required.contains(&"tesseract"), preset.uses_tesseract());
+            // oar-ocr's three files, same rule, other engine.
+            assert_eq!(required.contains(&"oar_ocr_det"), preset.uses_oar_ocr());
+            assert_eq!(required.contains(&"oar_ocr_rec"), preset.uses_oar_ocr());
+            assert_eq!(required.contains(&"oar_ocr_dict"), preset.uses_oar_ocr());
             // Every file of every model the preset names.
             for id in preset.model_ids() {
                 for file in catalog::model(id).unwrap().files {
@@ -1748,6 +1853,18 @@ mod tests {
         assert!(required.contains(&"llama_server"));
     }
 
+    /// The oar-ocr preset demands its own three files and Tesseract's zip
+    /// exactly when the reverse — same rule as the Tesseract-omission test
+    /// above, mirrored for the other engine.
+    #[test]
+    fn required_assets_demands_oar_ocr_and_omits_tesseract_for_that_preset() {
+        let required = required_assets(Some("cpu"), &catalog::OAR_OCR_QWEN);
+        assert!(required.contains(&"oar_ocr_det"));
+        assert!(required.contains(&"oar_ocr_rec"));
+        assert!(required.contains(&"oar_ocr_dict"));
+        assert!(!required.contains(&"tesseract"));
+    }
+
     /// The gap this closes: `cudart` used to be omitted unconditionally, so a CUDA
     /// install whose cudart download failed passed `check_setup_complete`, skipped
     /// the wizard, and then could not start llama-server.
@@ -1795,6 +1912,15 @@ mod tests {
         fs::write(tess.join("eng.traineddata"), b"x").unwrap();
         fs::write(models.join(MODEL_FILENAME), b"x").unwrap();
         fs::write(models.join(MMPROJ_FILENAME), b"x").unwrap();
+        // The debug-build default preset grounds on oar-ocr, not Tesseract (see
+        // catalog::DEFAULT_PRESET_ID), so a "complete" fixture needs its files too —
+        // the Tesseract ones above are just along for the ride, unused by `required_assets`
+        // for this preset but harmless to have on disk.
+        let oar_ocr_dir = models.join("oar-ocr");
+        fs::create_dir_all(&oar_ocr_dir).unwrap();
+        fs::write(oar_ocr_dir.join(OAR_OCR_DET_FILENAME), b"x").unwrap();
+        fs::write(oar_ocr_dir.join(OAR_OCR_REC_FILENAME), b"x").unwrap();
+        fs::write(oar_ocr_dir.join(OAR_OCR_DICT_FILENAME), b"x").unwrap();
 
         let complete = |backend: Option<&str>| {
             required_assets(backend, default_preset())
