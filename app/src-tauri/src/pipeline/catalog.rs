@@ -281,6 +281,24 @@ pub enum Step {
         prompt: PromptId,
         residency: Residency,
     },
+    /// Ask a model for the table's row and column **bands** — geometry only, no text.
+    ///
+    /// This is not a third way to ground a page; it is a separate axis, and keeping it
+    /// separate is what the P0 spike argues for. Surya's bands were exact (13 × 6, a
+    /// perfect column tiling) while its own HTML was internally inconsistent about the
+    /// same table — it collapsed two columns under one header and dropped a value. So
+    /// the useful pairing is not "Surya instead of Tesseract" but **Tesseract's words
+    /// with Surya's grid**: each source used for the thing it is actually good at.
+    ///
+    /// The consequence for provenance is direct. Box precision stays at word level
+    /// (better than cell), while `detectColumnSeparators` and the gap-based line split
+    /// — the inference behind every Provenance/Matching post-mortem in `issues.md` —
+    /// are replaced by ground truth.
+    GroundGrid {
+        model_id: &'static str,
+        prompt: PromptId,
+        residency: Residency,
+    },
     /// Produce the table.
     Structure {
         model_id: &'static str,
@@ -301,7 +319,7 @@ impl Step {
     pub fn required_role(&self) -> Option<ModelRole> {
         match self {
             Step::Render { .. } | Step::GroundTesseract { .. } => None,
-            Step::GroundModel { .. } => Some(ModelRole::Ground),
+            Step::GroundModel { .. } | Step::GroundGrid { .. } => Some(ModelRole::Ground),
             Step::Structure { .. } => Some(ModelRole::Structure),
             Step::Verify { .. } => Some(ModelRole::Verify),
         }
@@ -311,16 +329,27 @@ impl Step {
         match self {
             Step::Render { .. } | Step::GroundTesseract { .. } => None,
             Step::GroundModel { model_id, .. }
+            | Step::GroundGrid { model_id, .. }
             | Step::Structure { model_id, .. }
             | Step::Verify { model_id, .. } => Some(model_id),
         }
     }
 
-    pub fn is_grounding(&self) -> bool {
+    /// Whether this step produces the located *text* provenance matches against.
+    ///
+    /// Exactly one step per preset must, which is why `GroundGrid` is excluded: it
+    /// contributes geometry to whatever already supplied the items, so counting it
+    /// here would make a words-plus-grid preset look like it grounds twice.
+    pub fn supplies_items(&self) -> bool {
         matches!(
             self,
             Step::GroundTesseract { .. } | Step::GroundModel { .. }
         )
+    }
+
+    /// Whether this step produces row/column bands.
+    pub fn supplies_grid(&self) -> bool {
+        matches!(self, Step::GroundGrid { .. })
     }
 }
 
@@ -343,8 +372,13 @@ pub struct PipelinePreset {
 }
 
 impl PipelinePreset {
-    /// Derived from the grounding step rather than stored as a field, so the two
-    /// cannot drift apart.
+    /// How precisely a cell can be traced back to the page.
+    ///
+    /// Derived from the step that supplies the *items* rather than stored as a field,
+    /// so the two cannot drift apart. A `GroundGrid` step deliberately does not affect
+    /// this: bands say where the table's rows and columns are, not where a value's
+    /// glyphs are, so a preset pairing Tesseract's words with a model's grid still
+    /// highlights at word precision — which is finer than `Cell`, not coarser.
     pub fn grounding(&self) -> Grounding {
         for step in self.steps {
             match step {
@@ -356,6 +390,11 @@ impl PipelinePreset {
             }
         }
         Grounding::None
+    }
+
+    /// Whether a model reports this preset's table grid instead of it being inferred.
+    pub fn declares_grid(&self) -> bool {
+        self.steps.iter().any(Step::supplies_grid)
     }
 
     /// Every distinct model this preset needs installed.
@@ -439,6 +478,80 @@ pub const QWEN_3_5_4B: ModelSpec = ModelSpec {
     },
 };
 
+/// Surya-OCR-2, used **only** for the row/column bands its `table` mode reports.
+///
+/// Its `ocr` mode also returns text, and that text is deliberately not used yet: in
+/// the P0 spike the same page came back with exact geometry and an internally
+/// inconsistent `<table>` (two columns collapsed under one header, a value dropped).
+/// `roles` therefore lists `Ground` alone, and `output_format` is the band JSON —
+/// a preset asking this model to structure a table is rejected by `validate_catalog`.
+///
+/// Sampling mirrors the prototype's serve mode: greedy, so the same page yields the
+/// same bands twice. Logprobs stay on because the grounder's own token confidences are
+/// what a future text-grounding tier would score cells with (`pipeline/surya.rs`
+/// already records the offsets for it).
+pub const SURYA_OCR_2: ModelSpec = ModelSpec {
+    id: "surya-ocr-2",
+    label: "Surya OCR 2 (layout)",
+    family: "surya",
+    files: &[
+        ModelFile {
+            role: FileRole::Weights,
+            asset_id: "surya_ocr2_gguf",
+            relative_path: "surya-ocr-2/surya-ocr-2-Q8_0.gguf",
+        },
+        ModelFile {
+            role: FileRole::Mmproj,
+            asset_id: "surya_ocr2_mmproj_gguf",
+            relative_path: "surya-ocr-2/mmproj-surya-ocr-2-F16.gguf",
+        },
+    ],
+    launch: LaunchSpec {
+        // Bands are a couple of hundred tokens (192 for a 13-row transcript in the P0
+        // run), so a large window buys nothing and costs KV cache on a machine that is
+        // about to hold a second model as well.
+        ctx: 4096,
+        image_min_tokens: None,
+        parallel: 1,
+        gpu_layers: GpuLayers::AllWhenGpu,
+        // Surya ships its own chat template; without --jinja llama.cpp falls back to a
+        // generic one and the model answers in prose instead of the trained format.
+        jinja: true,
+        alias: None,
+    },
+    request: RequestSpec {
+        system_prompt: None,
+        temperature: 0.0,
+        top_p: 1.0,
+        top_k: Some(1),
+        presence_penalty: None,
+        stop: &[],
+        enable_thinking: None,
+        logprobs: true,
+        top_logprobs: 0,
+    },
+    caps: Capabilities {
+        vision: true,
+        logprobs: true,
+        grounding: Grounding::Cell,
+        output_format: OutputFormat::SuryaTableJson,
+    },
+    roles: &[ModelRole::Ground],
+    footprint: Footprint {
+        weights_mb: 1_100, // ~650M params at Q8_0 plus its vision projector
+        min_ram_mb: 16_384,
+        min_vram_mb: None,
+    },
+};
+
+/// Every model the app can run.
+///
+/// [`SURYA_OCR_2`] is **not here yet**, and its absence is enforced rather than
+/// accidental: `setup.rs` pins the bytes of every listed model's files, and a test
+/// asserts that list and this one cover each other exactly. Surya joins this array in
+/// the same change that adds its SHA-256 pins — not before, because a model the
+/// catalog offers and the installer cannot verify is exactly what the pinning
+/// invariant exists to prevent.
 pub const MODELS: &[ModelSpec] = &[QWEN_3_5_4B];
 
 /// Today's pipeline, expressed as data. Running this preset must reproduce the
@@ -467,6 +580,54 @@ pub const TESSERACT_QWEN: PipelinePreset = PipelinePreset {
             model_id: QWEN_3_5_4B.id,
             prompt: PromptId::QwenTsvExtract,
             residency: Residency::Exclusive,
+        },
+    ],
+};
+
+/// Tesseract's words with Surya's grid, then Qwen builds the table.
+///
+/// The preset the P0 spike actually argues for. Tesseract is good at reading words and
+/// bad at inferring where the columns are; Surya is the reverse — its bands were exact
+/// while its own table markup contradicted them. Pairing them uses each for its strong
+/// half, and costs one extra model call of about 200 tokens per page.
+///
+/// Both model steps are `Shared` rather than `Exclusive`, and that is a correctness
+/// requirement, not a tuning choice: the executor runs steps per page, so evicting
+/// between them would unload and reload multi-gigabyte weights *twice per page* on a
+/// long document. The 16 GB floor is what pays for holding both — hence the RAM
+/// requirement above what either model needs alone.
+///
+/// **Not in [`PRESETS`] yet** — it names [`SURYA_OCR_2`], whose downloads are not
+/// pinned. It is validated by a test in the meantime so it cannot rot while it waits.
+pub const TESSERACT_SURYA_QWEN: PipelinePreset = PipelinePreset {
+    id: "tesseract-surya-qwen3.5-4b",
+    label: "Accurate",
+    description: "Tesseract reads the page, Surya maps the table's rows and columns, \
+Qwen3.5 4B builds the table. Better on dense or irregular tables.",
+    version: 1,
+    requires: Requirements {
+        min_ram_mb: 16_384,
+        min_vram_mb: None,
+    },
+    steps: &[
+        Step::Render {
+            target_width: RENDER_TARGET_WIDTH,
+        },
+        Step::GroundTesseract {
+            tesseract: TesseractSpec {
+                psm: 6,
+                lang: "eng",
+            },
+        },
+        Step::GroundGrid {
+            model_id: SURYA_OCR_2.id,
+            prompt: PromptId::SuryaTableBands,
+            residency: Residency::Shared,
+        },
+        Step::Structure {
+            model_id: QWEN_3_5_4B.id,
+            prompt: PromptId::QwenTsvExtract,
+            residency: Residency::Shared,
         },
     ],
 };
@@ -568,12 +729,40 @@ pub fn validate_catalog(
             _ => errors.push(format!("preset `{}` must start with a render step", p.id)),
         }
 
-        let grounding_steps = p.steps.iter().filter(|s| s.is_grounding()).count();
+        let grounding_steps = p.steps.iter().filter(|s| s.supplies_items()).count();
         if grounding_steps != 1 {
             errors.push(format!(
                 "preset `{}` must have exactly one grounding step, found {grounding_steps}",
                 p.id
             ));
+        }
+
+        let grid_steps = p.steps.iter().filter(|s| s.supplies_grid()).count();
+        if grid_steps > 1 {
+            errors.push(format!(
+                "preset `{}` has {grid_steps} grid steps; a table has one grid",
+                p.id
+            ));
+        }
+        // A grid step refines the items an earlier step produced, so it has to run
+        // after them and before anything consumes the pair.
+        if let Some(grid_at) = p.steps.iter().position(Step::supplies_grid) {
+            let items_at = p.steps.iter().position(Step::supplies_items);
+            if items_at.is_none_or(|items| items >= grid_at) {
+                errors.push(format!(
+                    "preset `{}` asks for a grid before anything grounded the page",
+                    p.id
+                ));
+            }
+            if p.steps[..grid_at]
+                .iter()
+                .any(|s| matches!(s, Step::Structure { .. }))
+            {
+                errors.push(format!(
+                    "preset `{}` asks for a grid after the table was already built",
+                    p.id
+                ));
+            }
         }
 
         if !p.steps.iter().any(|s| matches!(s, Step::Structure { .. })) {
@@ -618,6 +807,14 @@ pub fn validate_catalog(
                 errors.push(format!(
                     "preset `{}` grounds on model `{id}`, which reports no locations",
                     p.id
+                ));
+            }
+            // Bands are a strictly stronger claim than "reports locations": a model
+            // that can only outline blocks has no rows or columns to give.
+            if matches!(step, Step::GroundGrid { .. }) && spec.caps.grounding != Grounding::Cell {
+                errors.push(format!(
+                    "preset `{}` asks model `{id}` for a table grid, but it reports {:?} boxes",
+                    p.id, spec.caps.grounding
                 ));
             }
         }
@@ -953,6 +1150,191 @@ mod tests {
         let models = [QWEN_3_5_4B, GROUNDER];
         validate_catalog(&[bad(OK)], &models).expect("a ground→structure→verify preset is valid");
         assert_eq!(bad(OK).grounding(), Grounding::None); // `grounder` isn't in the real MODELS
+    }
+
+    // ---- the grid axis ----
+
+    /// The preset waiting on Surya's pins must stay valid while it waits, or it rots
+    /// into a change nobody can land without first debugging it.
+    #[test]
+    fn the_unshipped_grid_preset_is_valid_against_its_models() {
+        let models = [QWEN_3_5_4B, SURYA_OCR_2];
+        if let Err(errors) = validate_catalog(&[TESSERACT_SURYA_QWEN], &models) {
+            panic!(
+                "the words-plus-grid preset is invalid:\n  {}",
+                errors.join("\n  ")
+            );
+        }
+    }
+
+    /// The point of the pairing: Tesseract's words *and* a declared grid. Box
+    /// precision must stay at `word` — bands say where the columns are, not where a
+    /// value's glyphs are, so reporting `cell` here would make the UI draw a coarser
+    /// highlight than it actually has.
+    #[test]
+    fn a_grid_step_declares_a_grid_without_changing_box_precision() {
+        assert!(TESSERACT_SURYA_QWEN.declares_grid());
+        assert_eq!(TESSERACT_SURYA_QWEN.grounding(), Grounding::Word);
+        assert!(TESSERACT_SURYA_QWEN.uses_tesseract());
+
+        // Today's preset declares no grid, so it keeps inferring one.
+        assert!(!TESSERACT_QWEN.declares_grid());
+    }
+
+    /// Both models stay resident. Evicting between them would unload and reload
+    /// multi-gigabyte weights *twice per page*, because the executor runs steps per
+    /// page — which would make the accurate preset slower than re-typing the table.
+    #[test]
+    fn the_grid_preset_keeps_both_models_resident() {
+        for step in TESSERACT_SURYA_QWEN.steps {
+            match step {
+                Step::GroundGrid { residency, .. } | Step::Structure { residency, .. } => {
+                    assert!(
+                        matches!(residency, Residency::Shared),
+                        "a two-model preset must not swap per step: {step:?}"
+                    );
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(
+            TESSERACT_SURYA_QWEN.model_ids(),
+            vec!["surya-ocr-2", "qwen3.5-4b"]
+        );
+    }
+
+    /// Surya is a grounder, not a structurer. Its `ocr` mode does return text, and the
+    /// P0 spike found that text internally inconsistent with its own geometry — so the
+    /// catalog withholds the role rather than trusting it not to be asked.
+    #[test]
+    fn surya_may_only_ground() {
+        assert!(SURYA_OCR_2.allows(ModelRole::Ground));
+        assert!(!SURYA_OCR_2.allows(ModelRole::Structure));
+        assert!(!SURYA_OCR_2.allows(ModelRole::Verify));
+
+        let errs = errors_for(
+            bad(&[
+                RENDER,
+                TESS,
+                Step::Structure {
+                    model_id: "surya-ocr-2",
+                    prompt: PromptId::QwenTsvExtract,
+                    residency: Residency::Shared,
+                },
+            ]),
+            &[QWEN_3_5_4B, SURYA_OCR_2],
+        );
+        assert_reports(&errs, "for a Structure step");
+    }
+
+    /// Surya needs `--jinja`: without its own chat template llama.cpp applies a
+    /// generic one and the model answers in prose instead of the trained band format.
+    #[test]
+    fn a_vision_grounder_ships_a_projector_and_its_own_template() {
+        // Written as a rule over a list rather than assertions on the constant: clippy
+        // folds a field read on a `const` into a literal and rejects the assertion as
+        // tautological, and a rule is what the next grounding model needs anyway.
+        const GROUNDERS: &[ModelSpec] = &[SURYA_OCR_2];
+        for m in GROUNDERS {
+            assert!(m.launch.jinja, "`{}` needs its own chat template", m.id);
+            assert!(m.caps.vision, "`{}` reads pages", m.id);
+            assert!(
+                m.file(FileRole::Mmproj).is_some(),
+                "`{}` is vision-capable and needs a projector",
+                m.id
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_a_grid_step_on_a_model_that_cannot_report_bands() {
+        // Block-level boxes are not rows and columns. A model that only outlines
+        // regions has no grid to give, and accepting one would produce a confident
+        // grid built from nothing.
+        const BLOCKY: ModelSpec = ModelSpec {
+            id: "blocky",
+            caps: Capabilities {
+                vision: false,
+                logprobs: true,
+                grounding: Grounding::Block,
+                output_format: OutputFormat::SuryaHtml,
+            },
+            ..GROUNDER
+        };
+        let errs = errors_for(
+            bad(&[
+                RENDER,
+                TESS,
+                Step::GroundGrid {
+                    model_id: "blocky",
+                    prompt: PromptId::SuryaTableBands,
+                    residency: Residency::Shared,
+                },
+                STRUCT_QWEN,
+            ]),
+            &[QWEN_3_5_4B, BLOCKY],
+        );
+        assert_reports(&errs, "asks model `blocky` for a table grid");
+    }
+
+    #[test]
+    fn rejects_a_grid_step_before_anything_grounded_the_page() {
+        const GRID: Step = Step::GroundGrid {
+            model_id: "grounder",
+            prompt: PromptId::SuryaTableBands,
+            residency: Residency::Shared,
+        };
+        let models = [QWEN_3_5_4B, GROUNDER];
+        assert_reports(
+            &errors_for(bad(&[RENDER, GRID, TESS, STRUCT_QWEN]), &models),
+            "before anything grounded the page",
+        );
+    }
+
+    #[test]
+    fn rejects_a_grid_step_after_the_table_was_built() {
+        const GRID: Step = Step::GroundGrid {
+            model_id: "grounder",
+            prompt: PromptId::SuryaTableBands,
+            residency: Residency::Shared,
+        };
+        let models = [QWEN_3_5_4B, GROUNDER];
+        assert_reports(
+            &errors_for(bad(&[RENDER, TESS, STRUCT_QWEN, GRID]), &models),
+            "after the table was already built",
+        );
+    }
+
+    #[test]
+    fn rejects_two_grid_steps() {
+        const GRID: Step = Step::GroundGrid {
+            model_id: "grounder",
+            prompt: PromptId::SuryaTableBands,
+            residency: Residency::Shared,
+        };
+        let models = [QWEN_3_5_4B, GROUNDER];
+        assert_reports(
+            &errors_for(bad(&[RENDER, TESS, GRID, GRID, STRUCT_QWEN]), &models),
+            "a table has one grid",
+        );
+    }
+
+    /// A grid step must not be mistaken for a second *grounding* step — that rule
+    /// counts the sources of located text, and a grid contributes none.
+    #[test]
+    fn a_grid_step_does_not_count_as_a_second_grounding_step() {
+        let models = [QWEN_3_5_4B, GROUNDER];
+        const OK: &[Step] = &[
+            RENDER,
+            TESS,
+            Step::GroundGrid {
+                model_id: "grounder",
+                prompt: PromptId::SuryaTableBands,
+                residency: Residency::Shared,
+            },
+            STRUCT_QWEN,
+        ];
+        validate_catalog(&[bad(OK)], &models).expect("words plus a declared grid is valid");
     }
 
     #[test]

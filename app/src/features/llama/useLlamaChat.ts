@@ -66,6 +66,9 @@ const PHASE_FOR_STEP: Record<string, ExtractionPhase> = {
     render: 'preparing',
     ground_tesseract: 'preparing',
     ground_model: 'preparing',
+    // Mapping the table runs a model, but it is still preparation for the table the
+    // user is waiting to see — 'generating' is the phase where output starts arriving.
+    ground_grid: 'preparing',
     structure: 'generating',
     verify: 'generating',
 };
@@ -101,6 +104,7 @@ export const useLlamaChat = () => {
     const requestTableFormat = async (
         _fileUrl: string,
         ocrWords: OcrWord[],
+        naturalWidth: number,
         naturalHeight: number,
         sessionId: string,
         pageIndex: number,
@@ -145,6 +149,9 @@ export const useLlamaChat = () => {
                 pageIndex,
                 imagePath,
                 words: ocrWords,
+                // Both dimensions: a grounding model reports boxes normalized 0–1000
+                // per axis, so converting them to page pixels needs the width too.
+                naturalWidth,
                 naturalHeight,
                 backend: readSetting('hardwareBackend'),
                 boostTokens: options?.boostTokens ?? false,

@@ -597,6 +597,22 @@ describe('grounding dispatch', () => {
         expect(declared[1][1].wordIds).toEqual([words[4].id]);
     });
 
+    it('uses a declared grid with word-precision items — the pairing that ships', () => {
+        // Grounding tier and grid source are separate axes, and this is the
+        // combination that matters: Tesseract's words (fine boxes, poor column
+        // inference) with a model's bands (exact geometry, unreliable text). Keying
+        // the declared grid on the `cell` tier would have ruled it out.
+        const words = abutting();
+        const cells = matchCellsToOcr(TSV, words, 1000, {
+            grounding: 'word',
+            grid: tightGrid,
+        });
+        expect(cells[0][0].matchStatus).toBe('multi_word');
+        expect(cells[0][0].wordIds).toEqual([words[0].id, words[2].id]);
+        // Without the grid the same word-grounded page loses the wrapped cell.
+        expect(matchCellsToOcr(TSV, words, 1000)[0][0].matchStatus).toBe('unmatched');
+    });
+
     it('does not infer a grid for block or ungrounded pages', () => {
         // Region boxes have no whitespace channels between words and no visual lines,
         // so inferring column geometry from them would be reading structure out of

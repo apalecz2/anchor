@@ -782,9 +782,11 @@ function verifyEmptyCellsPass(
 }
 
 export type MatchOptions = {
-    /** Defaults to `word` — the tier every shipped preset grounds at. */
+    /** Box precision of whatever located the source text. Defaults to `word` — the
+     *  tier every shipped preset grounds at. */
     grounding?: GroundingKind;
-    /** The bands a `cell`-grounded model reported, in page pixels. */
+    /** Row/column bands a model reported, in page pixels. Independent of `grounding`:
+     *  the best preset pairs word-precision boxes with a model-declared grid. */
     grid?: DeclaredGrid | null;
 };
 
@@ -794,17 +796,22 @@ export type MatchOptions = {
  * The three tiers ask for genuinely different treatment, and the difference is about
  * what is *known*, not about quality:
  *
- *  - `word` — nothing is known about the grid, so infer it, exactly as before. This
- *    path must stay byte-identical; it is what every shipped preset runs.
- *  - `cell` — the grid was reported. Use it, and fall back to inference if it turns
- *    out not to describe this TSV (see `buildDeclaredTableGrid`). Falling back to
- *    inference rather than straight to the reading-order walk matters: a declined
- *    grid is a mismatch between two descriptions of the page, not evidence that the
- *    page has no columns.
  *  - `block` / `none` — there is nothing to infer a grid *from*. Region boxes have no
  *    whitespace channels between words and no visual lines, so `detectColumnSeparators`
  *    would be reading structure out of noise. The reading-order walk and the fuzzy
  *    pass handle these, and the UI renders their highlights as approximate.
+ *  - `word` / `cell` — a grid is worth having. Use a **declared** one whenever the run
+ *    supplied it, and infer otherwise.
+ *
+ * Note that the declared grid is keyed on being *present*, not on the grounding tier.
+ * Those are two different axes and conflating them would rule out the combination that
+ * is actually best: Tesseract's words (fine box precision, poor column inference) with
+ * a model's bands (exact geometry, unreliable text). That preset grounds at `word` and
+ * still has a declared grid — see `Step::GroundGrid` in the catalog.
+ *
+ * A declared grid that turns out not to describe this TSV falls back to *inference*,
+ * not to the reading-order walk: a declined grid means two descriptions of the page
+ * disagree, which is not evidence that the page has no columns.
  */
 function resolveGrid(
     csvRows: string[][],
@@ -815,7 +822,7 @@ function resolveGrid(
     const grounding = options?.grounding ?? 'word';
     if (grounding === 'block' || grounding === 'none') return null;
 
-    if (grounding === 'cell' && options?.grid) {
+    if (options?.grid) {
         const declared = buildDeclaredTableGrid(csvRows, ocrWords, options.grid);
         if (declared) return declared;
     }

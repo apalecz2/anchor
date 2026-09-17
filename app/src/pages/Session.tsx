@@ -252,6 +252,7 @@ function SessionContent(): React.ReactElement {
             const result = await requestTableFormat(
                 fileUrl,
                 activePage.words,
+                activePage.natural_width,
                 activePage.natural_height,
                 id,
                 activePageIndex,

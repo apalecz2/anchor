@@ -1,23 +1,26 @@
 //! Walks a preset's steps for one page.
 //!
-//! This is the manifest-driven replacement for the orchestration currently living in
-//! `app/src/features/llama/useLlamaChat.ts`. It derives the prompt inputs, ensures
-//! the right model is resident, streams the completion, and hands back a
-//! [`PageArtifact`].
+//! This is the extraction path. It derives the prompt inputs, ensures the right models
+//! are resident, streams the completion, and hands back a [`PageArtifact`]; the
+//! orchestration it replaced used to live in `app/src/features/llama/useLlamaChat.ts`,
+//! which is now a thin caller.
 //!
 //! # What stays in TypeScript
 //!
 //! Provenance matching and confidence scoring. They are pure, heavily tested, and
 //! have no residency or cancellation concerns, so the seam is drawn just before
 //! them: the executor returns the *inputs* those stages need — the sanitized words
-//! the model was actually shown, the raw output, and per-token logprobs with UTF-16
-//! offsets — and the frontend scores them exactly as it does today.
+//! the model was actually shown, any grid a model reported, the raw output, and
+//! per-token logprobs with UTF-16 offsets — and the frontend scores them.
 //!
-//! # Status
+//! # Steps that are built but unreachable
 //!
-//! Registered but not yet called by the UI; the TypeScript path remains the default
-//! while the two are compared. Steps that no shipped preset uses yet
-//! (`GroundModel`, `Verify`) report a clear error rather than pretending to run.
+//! `GroundGrid` runs, but the only preset using it is not in `catalog::PRESETS` yet
+//! (its model's downloads are unpinned). `GroundModel` — grounding a page's *text* on
+//! a model rather than Tesseract — reports a clear error instead of pretending to run:
+//! the P0 spike found Surya's own table markup inconsistent with its geometry, so
+//! there is no model to implement it against yet. `Verify` shares the structuring
+//! path but no preset asks for a second pass.
 
 use std::sync::{
     atomic::{AtomicU64, Ordering},
@@ -38,7 +41,7 @@ use crate::pipeline::client::{
     build_request_body, stream_completion, ContentPart, TokenLogprob, CANCELLED_MESSAGE,
 };
 use crate::pipeline::prompt::{build_table_text, sanitize_words_for_provenance};
-use crate::pipeline::surya::DeclaredGrid;
+use crate::pipeline::surya::{self, DeclaredGrid};
 
 /// Text deltas are coalesced to this interval. Each emit is a JSON serialize plus an
 /// IPC post, and a table can run to thousands of tokens — matching `setup.rs`'s
@@ -171,6 +174,10 @@ fn step_label(step: &Step) -> String {
             Some(m) => format!("Reading the page ({})", m.label),
             None => "Reading the page".into(),
         },
+        Step::GroundGrid { model_id, .. } => match catalog::model(model_id) {
+            Some(m) => format!("Mapping the table ({})", m.label),
+            None => "Mapping the table".into(),
+        },
         Step::Structure { model_id, .. } => match catalog::model(model_id) {
             Some(m) => format!("Building the table ({})", m.label),
             None => "Building the table".into(),
@@ -187,6 +194,7 @@ fn step_kind(step: &Step) -> &'static str {
         Step::Render { .. } => "render",
         Step::GroundTesseract { .. } => "ground_tesseract",
         Step::GroundModel { .. } => "ground_model",
+        Step::GroundGrid { .. } => "ground_grid",
         Step::Structure { .. } => "structure",
         Step::Verify { .. } => "verify",
     }
@@ -251,6 +259,32 @@ fn is_healthy_body(text: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Bring a model up, wait for it to answer, and hand back its base URL.
+///
+/// Shared by every model step so the residency decision and the readiness wait cannot
+/// diverge between them — a step that skipped the health poll would stream at a server
+/// still memory-mapping its weights.
+async fn resident_model_url(
+    app_handle: &tauri::AppHandle,
+    servers: &AppState,
+    model: &ModelSpec,
+    data_dir: &std::path::Path,
+    backend: &str,
+    residency: Residency,
+    token: &CancellationToken,
+) -> Result<String, String> {
+    let spec = launch_spec_for(model, data_dir)?;
+    let handle = ensure_server(app_handle, servers, &spec, backend, residency)?;
+    let base_url = format!("http://127.0.0.1:{}", handle.port);
+    wait_for_health(&base_url, token).await?;
+    Ok(base_url)
+}
+
+/// Output budget for a grid request. The P0 run answered a 13-row transcript in 192
+/// tokens; this leaves room for a table several times that before truncation, while
+/// still capping a model that decides to narrate instead of answering.
+const GRID_MAX_TOKENS: u32 = 1024;
+
 /// Poll `/health` until the server answers, or the run is cancelled.
 async fn wait_for_health(base_url: &str, token: &CancellationToken) -> Result<(), String> {
     let client = reqwest::Client::new();
@@ -289,14 +323,16 @@ async fn run_page(
     page_index: u32,
     image_path: &str,
     words: &[OcrWord],
+    natural_width: i32,
     natural_height: i32,
     backend: &str,
     boost_tokens: bool,
 ) -> Result<PageArtifact, String> {
     let data_dir = crate::paths::resolve_data_dir(app_handle)?;
 
-    // Filled in by the grounding step, consumed by the structuring step.
+    // Filled in by the grounding steps, consumed by the structuring step.
     let mut grounded: Vec<OcrWord> = Vec::new();
+    let mut grid: Option<DeclaredGrid> = None;
     let mut spatial_text = String::new();
     let mut artifact: Option<PageArtifact> = None;
 
@@ -327,11 +363,54 @@ async fn run_page(
                 spatial_text = build_table_text(&grounded, natural_height);
             }
 
+            Step::GroundGrid {
+                model_id,
+                prompt,
+                residency,
+            } => {
+                let model = catalog::model(model_id)
+                    .ok_or_else(|| format!("unknown model `{model_id}`"))?;
+                let base_url = resident_model_url(
+                    app_handle, servers, model, &data_dir, backend, *residency, token,
+                )
+                .await?;
+
+                let body = build_request_body(
+                    model,
+                    vec![
+                        ContentPart::ImageUrl(image_data_url(image_path)?),
+                        ContentPart::Text(catalog::prompt_text(*prompt).to_owned()),
+                    ],
+                    GRID_MAX_TOKENS,
+                );
+
+                // No delta events from this step. The streaming pane shows the table
+                // being written; a burst of JSON coordinates through it would read as
+                // the model producing garbage.
+                let result = stream_completion(&base_url, body, token, |_| {}).await?;
+
+                // A page with no table, or a model that answered in prose, is not a
+                // failure: the grid is an *improvement* on inference, so losing it
+                // costs this page the improvement and nothing else. `parse_bands` is
+                // tolerant and `declared_grid` returns None rather than a bad grid, so
+                // both outcomes land here as a quiet fall back to inferring.
+                let bands = surya::parse_bands(&result.content);
+                grid = surya::declared_grid(
+                    &bands,
+                    f64::from(natural_width),
+                    f64::from(natural_height),
+                );
+            }
+
             Step::Structure {
-                model_id, prompt, ..
+                model_id,
+                prompt,
+                residency,
             }
             | Step::Verify {
-                model_id, prompt, ..
+                model_id,
+                prompt,
+                residency,
             } => {
                 let model = catalog::model(model_id)
                     .ok_or_else(|| format!("unknown model `{model_id}`"))?;
@@ -340,11 +419,10 @@ async fn run_page(
                 let budget = estimate_budget(model, &prompt_text);
                 let max_tokens = resolve_max_tokens(budget, grounded.len(), boost_tokens);
 
-                let spec = launch_spec_for(model, &data_dir)?;
-                let handle =
-                    ensure_server(app_handle, servers, &spec, backend, Residency::Exclusive)?;
-                let base_url = format!("http://127.0.0.1:{}", handle.port);
-                wait_for_health(&base_url, token).await?;
+                let base_url = resident_model_url(
+                    app_handle, servers, model, &data_dir, backend, *residency, token,
+                )
+                .await?;
 
                 let body = build_request_body(
                     model,
@@ -404,9 +482,7 @@ async fn run_page(
                     preset_version: preset.version,
                     grounding: preset.grounding(),
                     grounded_items: grounded.clone(),
-                    // Only `GroundModel` can report bands, and no shipped preset uses
-                    // it yet; `GroundTesseract` grounds at word precision instead.
-                    grid: None,
+                    grid: grid.clone(),
                     truncated: result.finish_reason.as_deref() == Some("length"),
                     raw_model_output: result.content,
                     logprobs: result.logprobs,
@@ -441,6 +517,7 @@ pub async fn run_extraction_pipeline(
     page_index: u32,
     image_path: String,
     words: Vec<OcrWord>,
+    natural_width: i32,
     natural_height: i32,
     backend: String,
     boost_tokens: Option<bool>,
@@ -460,6 +537,7 @@ pub async fn run_extraction_pipeline(
         page_index,
         &image_path,
         &words,
+        natural_width,
         natural_height,
         &backend,
         boost_tokens.unwrap_or(false),
@@ -624,18 +702,70 @@ mod tests {
         );
     }
 
+    /// Every step kind a preset uses must be one `run_page` handles; an unhandled kind
+    /// would only surface at runtime, part-way through a real extraction.
+    ///
+    /// The unshipped words-plus-grid preset is checked alongside the default one, so
+    /// the phase that finally pins Surya's downloads finds the executor already ready
+    /// for it rather than discovering `GroundGrid` falls through.
     #[test]
-    fn the_default_preset_is_runnable_by_this_executor() {
-        // Every step kind the default preset uses must be one `run_page` handles;
-        // an unhandled kind would only surface at runtime otherwise.
-        for step in TESSERACT_QWEN.steps {
+    fn the_shipped_and_pending_presets_are_runnable_by_this_executor() {
+        for preset in [&TESSERACT_QWEN, &catalog::TESSERACT_SURYA_QWEN] {
+            for step in preset.steps {
+                assert!(
+                    matches!(
+                        step,
+                        Step::Render { .. }
+                            | Step::GroundTesseract { .. }
+                            | Step::GroundGrid { .. }
+                            | Step::Structure { .. }
+                    ),
+                    "unhandled step kind in `{}`: {}",
+                    preset.id,
+                    step_kind(step)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_grid_step_is_labelled_and_named_for_the_ui() {
+        let step = Step::GroundGrid {
+            model_id: "qwen3.5-4b",
+            prompt: PromptId::SuryaTableBands,
+            residency: Residency::Shared,
+        };
+        assert_eq!(step_kind(&step), "ground_grid");
+        assert_eq!(step_label(&step), "Mapping the table (Qwen3.5 4B (vision))");
+
+        // Surya exists as a catalog constant but is not in `MODELS` until its
+        // downloads are pinned, so it resolves to no spec. The label must degrade to
+        // the generic string rather than panic — the progress UI is not worth
+        // crashing a run over.
+        let pending = Step::GroundGrid {
+            model_id: catalog::SURYA_OCR_2.id,
+            prompt: PromptId::SuryaTableBands,
+            residency: Residency::Shared,
+        };
+        assert_eq!(step_label(&pending), "Mapping the table");
+    }
+
+    /// The grid is an improvement on inference, so failing to get one costs the page
+    /// that improvement and nothing else. These are the shapes a model actually
+    /// returns when it cannot answer — none may produce a grid, and none may panic.
+    #[test]
+    fn an_unusable_band_response_yields_no_grid_rather_than_a_bad_one() {
+        for raw in [
+            "",
+            "I could not find a table on this page.",
+            "[]",
+            r#"[{"label":"Row","bbox":[0,0,1000,50]}]"#, // rows but no columns
+            r#"{"error": "no table"}"#,
+        ] {
+            let bands = surya::parse_bands(raw);
             assert!(
-                matches!(
-                    step,
-                    Step::Render { .. } | Step::GroundTesseract { .. } | Step::Structure { .. }
-                ),
-                "unhandled step kind in the default preset: {}",
-                step_kind(step)
+                surya::declared_grid(&bands, 2000.0, 2600.0).is_none(),
+                "{raw:?} must not produce a grid",
             );
         }
     }
