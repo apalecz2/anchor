@@ -173,6 +173,9 @@ pub fn sanitize_words_for_provenance(words: &[OcrWord], natural_height: i32) -> 
                 None
             } else {
                 Some(OcrWord {
+                    // Carried through, never regenerated: the frontend's stored
+                    // provenance references these ids.
+                    id: word.id.clone(),
                     text,
                     confidence: word.confidence,
                     box_coords: word.box_coords,
@@ -310,6 +313,7 @@ mod tests {
 
     fn word(text: &str, left: i32, top: i32, width: i32) -> OcrWord {
         OcrWord {
+            id: None,
             text: text.to_owned(),
             confidence: 90.0,
             box_coords: BoundingBox {
@@ -450,6 +454,21 @@ mod tests {
         // An all-pipe word survives with its original text so the model can still
         // resolve it against the image.
         assert_eq!(texts, vec!["Calc", "||", "Fine"]);
+    }
+
+    /// Word ids must survive sanitizing unchanged. The frontend stores these ids in
+    /// each cell's provenance, so a regenerated id would break click-to-highlight the
+    /// next time the session is opened — silently, and only after a reload.
+    #[test]
+    fn sanitize_carries_word_ids_through_unchanged() {
+        let mut words = vec![word("|Calc|", 0, 100, 60), word("Fine", 200, 100, 40)];
+        words[0].id = Some("w-alpha".into());
+        words[1].id = Some("w-beta".into());
+
+        let out = sanitize_words_for_provenance(&words, 1000);
+        assert_eq!(out[0].text, "Calc", "text is sanitized");
+        assert_eq!(out[0].id.as_deref(), Some("w-alpha"), "id is not");
+        assert_eq!(out[1].id.as_deref(), Some("w-beta"));
     }
 
     #[test]

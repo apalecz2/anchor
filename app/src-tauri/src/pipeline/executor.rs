@@ -224,11 +224,25 @@ fn launch_spec_for(model: &ModelSpec, data_dir: &std::path::Path) -> Result<Laun
     })
 }
 
-/// Poll `/health` until the server answers, or the run is cancelled.
+/// Whether a `/health` response body is llama.cpp's `{"status":"ok"}`.
 ///
-/// Asserts the `{"status":"ok"}` shape rather than trusting a bare 200: the port is
-/// ephemeral, but a 200 alone doesn't prove the responder is our llama-server rather
-/// than something else that grabbed the port.
+/// A 200 alone is not proof the responder is *our* server. The port is ephemeral and
+/// released a moment before the spawn binds it, so an unrelated local service can
+/// occupy it in between — and streaming completions at an impostor would be worse
+/// than failing to start. Split out from the polling loop so the check itself is
+/// testable without a socket.
+fn is_healthy_body(text: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|body| {
+            body.get("status")
+                .and_then(|s| s.as_str())
+                .map(|s| s == "ok")
+        })
+        .unwrap_or(false)
+}
+
+/// Poll `/health` until the server answers, or the run is cancelled.
 async fn wait_for_health(base_url: &str, token: &CancellationToken) -> Result<(), String> {
     let client = reqwest::Client::new();
     let deadline = Instant::now() + READINESS_TIMEOUT;
@@ -240,9 +254,7 @@ async fn wait_for_health(base_url: &str, token: &CancellationToken) -> Result<()
         if let Ok(response) = client.get(format!("{base_url}/health")).send().await {
             if response.status().is_success() {
                 if let Ok(text) = response.text().await {
-                    let body: serde_json::Value =
-                        serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
-                    if body.get("status").and_then(|s| s.as_str()) == Some("ok") {
+                    if is_healthy_body(&text) {
                         return Ok(());
                     }
                 }
@@ -507,6 +519,23 @@ mod tests {
         assert!(spec.chat_template_file.is_none());
         assert_eq!(spec.ctx, 8192);
         assert!(matches!(spec.gpu_layers, GpuLayers::AllWhenGpu));
+    }
+
+    /// Carried over from the frontend's `checkLlamaServerHealth` test (CR:M8) when
+    /// readiness moved into the executor. A 200 from *something* on the port is not
+    /// the same as a 200 from llama-server.
+    #[test]
+    fn only_llama_cpps_health_shape_counts_as_ready() {
+        assert!(is_healthy_body(r#"{"status":"ok"}"#));
+        assert!(is_healthy_body(r#"{"status":"ok","slots_idle":1}"#));
+
+        // An impostor that happened to grab the ephemeral port.
+        assert!(!is_healthy_body(r#"{"status":"loading model"}"#));
+        assert!(!is_healthy_body(r#"{"ok":true}"#));
+        assert!(!is_healthy_body("OK"));
+        assert!(!is_healthy_body("<html>It works!</html>"));
+        assert!(!is_healthy_body(""));
+        assert!(!is_healthy_body("null"));
     }
 
     #[test]

@@ -46,7 +46,6 @@ function SessionContent(): React.ReactElement {
         isExtracting,
         isCancelling,
         extractionPhase,
-        serverError: llamaError,
     } = useLlamaChat();
 
     // Defer the "Processing…" spinner: a cached session loads from the DB in well
@@ -400,7 +399,6 @@ function SessionContent(): React.ReactElement {
                 handleCopyTable={handleCopyTable}
                 hasTable={hasTable}
                 extractionError={extractionError}
-                llamaError={llamaError}
                 truncated={truncated}
                 contextOverflow={contextOverflow}
                 handleFormatTable={handleFormatTable}

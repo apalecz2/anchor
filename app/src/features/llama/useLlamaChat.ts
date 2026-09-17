@@ -1,17 +1,15 @@
 import { useContext, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { LlamaChatContext } from "./LlamaChatContext";
-import { readFileAsBase64 } from './promptUtils';
-import { extractTableFromImage } from './llamaClient';
-import { estimateExtractionBudget, MIN_OUTPUT_TOKENS } from './contextBudget';
 import { getDb } from '../../lib/db';
 import { touchSession } from '../sessions/touchSession';
-import { buildTableText } from '../../utils/ocrTransforms';
-import { sanitizeWordsForProvenance } from '../extraction/provenance';
 import { matchCellsToOcr } from '../extraction/provenance';
 import { parseTSVWithOffsets, computeProvenanceCells } from '../extraction/confidence';
 import { toCsv } from '../export/exportUtils';
+import { readSetting } from '../../lib/settings';
 import type { OcrWord } from '../ocr/types';
-import type { ProvenanceCell } from '../extraction/types';
+import type { ProvenanceCell, TokenLogprob } from '../extraction/types';
 
 type TableFormatResult = {
     csvContent: string;
@@ -26,9 +24,45 @@ type TableFormatResult = {
     contextOverflow: boolean;
 };
 
+/**
+ * What the Rust executor hands back for one page: the inputs the scoring stages
+ * need, and nothing they could derive for themselves.
+ *
+ * `groundedItems` are the words the model was *actually shown*, in the order it saw
+ * them — returned rather than re-derived here, because matching cells against a
+ * separately-derived list is how provenance silently mismatches.
+ */
+type PageArtifact = {
+    run_id: number;
+    preset_id: string;
+    preset_version: number;
+    grounding: 'none' | 'block' | 'word' | 'cell';
+    grounded_items: OcrWord[];
+    raw_model_output: string;
+    logprobs: TokenLogprob[];
+    finish_reason: string | null;
+    truncated: boolean;
+    context_overflow: boolean;
+};
+
 /** Coarse stage of an in-flight extraction, surfaced so the UI can show the user
  *  exactly what is happening (model load can take a while on first run). */
 export type ExtractionPhase = 'idle' | 'starting' | 'preparing' | 'generating' | 'finalizing';
+
+/** Backend cancellation sentinel — must match CANCELLED_MESSAGE in
+ *  src-tauri/src/pipeline/client.rs. A cancel is a neutral state, not a failure. */
+const CANCELLED_MESSAGE = 'Extraction was cancelled.';
+
+/** Map a pipeline step to the phase the progress stepper already renders. The
+ *  executor also sends a human-readable label per step; the stepper doesn't use it
+ *  yet, which is what keeps this cutover behaviour-identical. */
+const PHASE_FOR_STEP: Record<string, ExtractionPhase> = {
+    render: 'preparing',
+    ground_tesseract: 'preparing',
+    ground_model: 'preparing',
+    structure: 'generating',
+    verify: 'generating',
+};
 
 export const useLlamaChat = () => {
     const context = useContext(LlamaChatContext);
@@ -41,24 +75,25 @@ export const useLlamaChat = () => {
     const [isExtracting, setIsExtracting] = useState(false);
     const [extractionPhase, setExtractionPhase] = useState<ExtractionPhase>('idle');
     // Set the instant Cancel is clicked so the UI can acknowledge it immediately,
-    // even though the abort itself may take a moment to unwind the in-flight request
-    // (e.g. tearing down the streaming fetch, or finishing a non-abortable phase).
+    // even though the abort itself may take a moment to unwind (tearing down the
+    // streaming request, or finishing a non-abortable phase such as a model load).
     const [isCancelling, setIsCancelling] = useState(false);
-    // Holds the in-flight extraction's AbortController so the user can cancel it.
-    // Aborting rejects the streaming fetch (and our explicit checkpoints) with an
-    // AbortError, which the caller treats as a neutral cancel rather than a failure.
-    const abortRef = useRef<AbortController | null>(null);
+    // True while a run is in flight, so a cancel knows there is something to cancel.
+    const runningRef = useRef(false);
 
-    // Abort an in-flight table extraction. Flips isCancelling for instant feedback;
-    // no-ops when nothing is running so a stray click can't strand the cancelling UI.
+    // Ask the backend to abort the in-flight run. The executor races cancellation
+    // against the streaming read, so this stops mid-token rather than at the next
+    // page boundary.
     const cancelTableFormat = () => {
-        if (!abortRef.current) return;
+        if (!runningRef.current) return;
         setIsCancelling(true);
-        abortRef.current.abort();
+        void invoke('cancel_extraction_pipeline').catch(err =>
+            console.error('Failed to cancel extraction:', err),
+        );
     };
 
     const requestTableFormat = async (
-        fileUrl: string,
+        _fileUrl: string,
         ocrWords: OcrWord[],
         naturalHeight: number,
         sessionId: string,
@@ -75,109 +110,59 @@ export const useLlamaChat = () => {
         setStreamingContent('');
         setExtractionPhase('starting');
         setIsCancelling(false);
+        runningRef.current = true;
 
-        // Fresh controller per run; cancelTableFormat() aborts it. Checked at each
-        // phase boundary so a cancel during the long, un-abortable model load (or
-        // image read) still stops promptly instead of finishing the whole extraction.
-        const controller = new AbortController();
-        abortRef.current = controller;
-        const throwIfCancelled = () => {
-            if (controller.signal.aborted) {
-                throw new DOMException('Table formatting was cancelled.', 'AbortError');
-            }
-        };
+        // Deltas arrive as increments; the pane wants the accumulated text.
+        let streamed = '';
+        const unlisten: Array<() => void> = [];
 
         try {
-            // Always go through startServer: it returns immediately when the server is
-            // already warm (and cancels any pending idle unload from a prior extraction).
-            // Passing the signal lets a cancel abandon the model-load wait promptly.
-            const ready = await context.startServer(controller.signal);
-            // Check cancellation before the failure path: a cancel makes startServer
-            // return false, but that's a clean cancel — not a "failed to start" error.
-            throwIfCancelled();
-            if (!ready) {
-                // startServer surfaces the specific reason via `serverError`; throw a
-                // fallback so the caller still gets a message even on a stale read.
-                throw new Error('The local model server failed to start. Check that the model files exist and you have enough free RAM, then retry.');
-            }
+            const imagePath = await resolvePageImagePath(sessionId, pageIndex);
 
-            setExtractionPhase('preparing');
-            // Stage 1 setup — sanitize words, build spatial layout text for the prompt
-            const sanitizedWords = sanitizeWordsForProvenance(ocrWords, naturalHeight);
-            const spatialText = buildTableText(sanitizedWords, naturalHeight);
-
-            const prompt = [
-                'Return only TSV (tab-separated values).',
-                'First row must be the column headers.',
-                'No reasoning, no explanation, no code fences, no markdown.',
-                'Separate each column with a tab character. Do not use commas as delimiters.',
-                'If two adjacent values belong to the same visual column (e.g. a department code and a course number), output them as one field joined by a space.',
-                'Use the attached image as the primary reference and the OCR text below as a guide.',
-                '',
-                'OCR text:',
-                spatialText,
-            ].join('\n');
-
-            // Budget ~4 tokens per cell; word count is a proxy for table density. Then
-            // clamp to the context room the prompt actually leaves — asking for more
-            // output than fits just guarantees a `length` truncation (design review F3).
-            const TOKENS_PER_CELL = 4;
-            const desiredTokens = Math.max(MIN_OUTPUT_TOKENS, sanitizedWords.length * TOKENS_PER_CELL);
-            const budget = estimateExtractionBudget(prompt);
-            // A boosted retry asks for the whole remaining window; a normal run uses the
-            // per-cell estimate. Either way the value is capped to what actually fits.
-            const targetTokens = options?.boostTokens ? budget.availableOutputTokens : desiredTokens;
-            const maxTokens = Math.max(MIN_OUTPUT_TOKENS, Math.min(targetTokens, budget.availableOutputTokens));
-            const contextOverflow = budget.overflow;
-
-            // Load image as base64
-            const response = await fetch(fileUrl, { signal: controller.signal });
-            const blob = await response.blob();
-            const imageData = await readFileAsBase64(
-                new File([blob], "page.png", { type: blob.type || 'image/png' })
+            unlisten.push(
+                await listen<{ kind: string }>('pipeline:step', event => {
+                    const phase = PHASE_FOR_STEP[event.payload.kind];
+                    if (phase) setExtractionPhase(phase);
+                }),
+            );
+            unlisten.push(
+                await listen<{ text_delta: string }>('pipeline:delta', event => {
+                    streamed += event.payload.text_delta;
+                    setStreamingContent(streamed);
+                }),
             );
 
-            const messages = [{
-                role: 'user' as const,
-                content: [
-                    { type: 'image_url' as const, image_url: { url: `data:${blob.type || 'image/png'};base64,${imageData}` } },
-                    { type: 'text' as const, text: prompt },
-                ],
-            }];
-
-            // Stage 1 — LLM extracts CSV from image + spatial OCR text
-            setExtractionPhase('generating');
-            const { content: rawContent, logprobs, finishReason } = await extractTableFromImage({
-                messages,
-                maxTokens,
-                onContentDelta: setStreamingContent,
-                signal: controller.signal,
+            // Stage 1 — the executor derives the prompt inputs, ensures the right
+            // model is resident, and streams the completion.
+            const artifact = await invoke<PageArtifact>('run_extraction_pipeline', {
+                presetId: null, // the catalog's default until a picker exists
+                pageIndex,
+                imagePath,
+                words: ocrWords,
+                naturalHeight,
+                backend: readSetting('hardwareBackend'),
+                boostTokens: options?.boostTokens ?? false,
             });
 
-            // `finish_reason: "length"` means the model ran out of token budget before
-            // emitting the full table — surface it so the user knows rows may be missing.
-            const truncated = finishReason === 'length';
-
-            // Stage 2 — parse, match to OCR, score confidence, persist.
             setExtractionPhase('finalizing');
 
-            // A cancel that lands during generation may not interrupt the synchronous
-            // finalize work below — bail before doing any of it (and before the DB write)
-            // so a late cancel can't persist a table the user asked to discard.
-            throwIfCancelled();
-
-            // Parse the raw output while preserving char offsets for logprob mapping
-            const { rows: csvRows } = parseTSVWithOffsets(rawContent);
+            // Stage 2 — parse, match to source, score confidence, persist. Unchanged:
+            // these stay in TypeScript because they are pure and heavily tested.
+            const { rows: csvRows } = parseTSVWithOffsets(artifact.raw_model_output);
             if (csvRows.length === 0) {
                 throw new Error('The model did not return a parseable table. Try re-extracting, or check that the page contains tabular data.');
             }
 
-            // Stage 2a — deterministic grid-first matching of cells to OCR words
-            // (reading-order walk is the fallback when no grid is detectable)
+            // Matching runs against the exact list the model was shown, handed back by
+            // the executor — not a list re-derived here, which could differ.
+            const sanitizedWords = artifact.grounded_items;
             const cellProvenance = matchCellsToOcr(csvRows, sanitizedWords, naturalHeight);
-
-            // Attach logprob-based + OCR-based confidence to each cell
-            const provenanceCells = computeProvenanceCells(cellProvenance, logprobs, rawContent, sanitizedWords);
+            const provenanceCells = computeProvenanceCells(
+                cellProvenance,
+                artifact.logprobs,
+                artifact.raw_model_output,
+                sanitizedWords,
+            );
 
             // Re-serialize a clean, correctly-escaped CSV from the parsed rows. Use the
             // canonical exporter (RFC-4180 quoting) so cells containing quotes/newlines —
@@ -185,10 +170,6 @@ export const useLlamaChat = () => {
             const csvContent = toCsv(csvRows);
 
             const db = await getDb();
-            // Final checkpoint: a cancel that landed while the DB handle was awaited
-            // must not still write the row (the await is the only yield point between
-            // the earlier check and the insert).
-            throwIfCancelled();
             // `created_at` is the row's first-write time and must NOT be rewritten on
             // re-extract — otherwise it tracks the latest extraction, not creation.
             // Last-activity tracking lives on sessions.updated_at, bumped below.
@@ -200,31 +181,52 @@ export const useLlamaChat = () => {
                    cell_mappings_json = excluded.cell_mappings_json`,
                 [crypto.randomUUID(), sessionId, pageIndex, csvContent, JSON.stringify(provenanceCells)]
             );
+            // Record which pipeline produced this, so reopening the session renders it
+            // the way it was produced rather than the way today's default would.
+            await db.execute(
+                `INSERT INTO page_extraction_meta (session_id, page_index, preset_id, preset_version, grounding)
+                 VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT(session_id, page_index) DO UPDATE SET
+                   preset_id = excluded.preset_id,
+                   preset_version = excluded.preset_version,
+                   grounding = excluded.grounding`,
+                [sessionId, pageIndex, artifact.preset_id, artifact.preset_version, artifact.grounding]
+            );
             // A completed extraction is the clearest "activity" signal, so surface it
             // in the session's last-updated time that "Recent" and Search order by.
             await touchSession(sessionId);
 
-            // A cancel can land during the (non-abortable) DB writes above — the last
-            // yield points before we return. Re-check here so the result is never
-            // rendered into a pane the user asked to discard. The row is already a
-            // complete, valid extraction, so we leave it persisted: re-entering the
-            // page loads it rather than forcing a re-run of the work just finished.
-            throwIfCancelled();
-
-            return { csvContent, provenanceCells, sanitizedWords, truncated, contextOverflow };
+            return {
+                csvContent,
+                provenanceCells,
+                sanitizedWords,
+                truncated: artifact.truncated,
+                contextOverflow: artifact.context_overflow,
+            };
+        } catch (err) {
+            // Tauri rejects invoke() with a plain string, not an Error.
+            const message =
+                err instanceof Error ? err.message
+                : typeof err === 'string' ? err
+                : 'Extraction failed.';
+            // A user-initiated cancel is not a failure. Re-thrown as an AbortError so
+            // the caller's existing cancel handling applies unchanged.
+            if (message === CANCELLED_MESSAGE) {
+                throw new DOMException(message, 'AbortError');
+            }
+            throw new Error(message);
         } finally {
-            // Reset UI, then release the server with a short warm window instead of
-            // unloading immediately: a re-extract or next page within that window
-            // skips the multi-GB reload, while an idle session still frees RAM
-            // (design §6). The model is unloaded outright on Session unmount.
-            // Any error still propagates to the caller for display in the pane.
+            for (const stop of unlisten) stop();
+            runningRef.current = false;
             setIsExtracting(false);
             setExtractionPhase('idle');
             setIsCancelling(false);
             setStreamingContent('');
+            // Release the model with a short warm window instead of unloading now: a
+            // re-extract or next page within that window skips the multi-GB reload,
+            // while an idle session still frees RAM (design §6). The executor starts
+            // the server; the idle unload is still scheduled from here.
             context.releaseServer();
-            // Only clear the ref if a newer run hasn't already replaced it.
-            if (abortRef.current === controller) abortRef.current = null;
         }
     };
 
@@ -237,4 +239,22 @@ export const useLlamaChat = () => {
         isCancelling,
         extractionPhase,
     };
+};
+
+/**
+ * Absolute path of a page's rendered image.
+ *
+ * The executor reads the file itself rather than being handed base64 over IPC — a
+ * 2000px page is several megabytes, and routing it through the bridge only to hand
+ * it back to a local process is pure overhead.
+ */
+const resolvePageImagePath = async (sessionId: string, pageIndex: number): Promise<string> => {
+    const db = await getDb();
+    const rows = await db.select<{ image_path: string }[]>(
+        'SELECT image_path FROM document_pages WHERE session_id = $1 AND page_index = $2',
+        [sessionId, pageIndex],
+    );
+    const path = rows?.[0]?.image_path;
+    if (!path) throw new Error('This page has not been processed yet.');
+    return path;
 };

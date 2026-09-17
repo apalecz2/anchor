@@ -100,6 +100,15 @@ pub struct BoundingBox {
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct OcrWord {
+    /// Stable identifier, minted by the frontend rather than here — `CellProvenance`
+    /// stores these ids, so they must survive edits that reorder the array.
+    ///
+    /// Absent on freshly-OCR'd words (nothing has named them yet) and carried
+    /// through unchanged when the frontend sends words back into the pipeline. That
+    /// round-trip is what keeps a stored `wordIds` resolvable: if the pipeline
+    /// returned re-identified words, click-to-highlight would break on reload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub text: String,
     pub confidence: f32,
     pub box_coords: BoundingBox,
@@ -404,6 +413,8 @@ fn ocr_image_to_page(
             .into_iter()
             .filter(|item| item.level == 5 && !item.text.trim().is_empty())
             .map(|item| OcrWord {
+                // The frontend assigns ids once, on first load, and persists them.
+                id: None,
                 text: item.text,
                 confidence: item.conf,
                 box_coords: BoundingBox {

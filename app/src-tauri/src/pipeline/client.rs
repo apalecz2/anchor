@@ -28,7 +28,12 @@ use tokio_util::sync::CancellationToken;
 use crate::pipeline::catalog::ModelSpec;
 
 /// One generated token and the model's confidence in it.
+///
+/// Serialized camelCase to match the `TokenLogprob` the frontend's confidence
+/// scoring already consumes, so the artifact drops straight into it with no
+/// per-token remapping on the way through.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct TokenLogprob {
     pub token: String,
     /// `None` when the server reported no logprob for this token. Recorded rather

@@ -30,8 +30,15 @@ class MigrationDb {
     }
 }
 
-/** Latest schema version — every migration entry applied. */
-const LATEST_VERSION = 2;
+/**
+ * Latest schema version — every migration entry applied.
+ *
+ * Derived rather than written out: migrations are append-only, so the count *is*
+ * the version, and a literal here only ever means these tests need editing every
+ * time one is added. The contract under test is that `runMigrations` advances to
+ * the end of the list, not that the list is any particular length.
+ */
+const LATEST_VERSION = MIGRATIONS.length;
 
 describe('runMigrations (CR:H1)', () => {
     it('applies every version from 0 and advances to the latest', async () => {
@@ -65,10 +72,11 @@ describe('runMigrations (CR:H1)', () => {
         const db = new MigrationDb();
         db.userVersion = 1;
         await runMigrations(db.asDb());
-        expect(db.userVersion).toBe(2);
-        // v1's tables are not re-issued; only v2's statements run.
+        expect(db.userVersion).toBe(LATEST_VERSION);
+        // v1's tables are not re-issued; only the later versions' statements run.
         expect(db.executed.some(s => s.includes('CREATE TABLE IF NOT EXISTS sessions'))).toBe(false);
         expect(db.executed.some(s => s.includes('document_page_sets'))).toBe(true);
+        expect(db.executed.some(s => s.includes('page_extraction_meta'))).toBe(true);
     });
 
     it('every migration statement is idempotent — no bare ALTER/CREATE', () => {
@@ -81,12 +89,15 @@ describe('runMigrations (CR:H1)', () => {
     });
 
     it('orders child tables so deletes leave no dangling rows', () => {
-        // All four reference sessions; they must be deleted before the parent. The
-        // constant is the single source of that order.
+        // Every one of these references sessions and must be deleted before the
+        // parent. The constant is the single source of that order, and a new child
+        // table missing from it leaks its rows on delete — which is why this asserts
+        // the whole list rather than just membership.
         expect(SESSION_CHILD_TABLES).toEqual([
             'csv_outputs',
             'document_page_sets',
             'document_pages',
+            'page_extraction_meta',
             'files',
         ]);
     });

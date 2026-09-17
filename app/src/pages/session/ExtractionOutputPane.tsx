@@ -69,7 +69,6 @@ interface ExtractionOutputPaneProps {
 
     // Errors / warnings + actions
     extractionError: string | null;
-    llamaError: string | null;
     truncated: boolean;
     contextOverflow: boolean;
     handleFormatTable: (boostTokens?: boolean) => void;
@@ -178,7 +177,7 @@ export function ExtractionOutputPane(props: ExtractionOutputPaneProps): React.Re
         rawLines, selectedWordId, highlightedWordId, setHighlightedWordId, selectWord, selectedWordRef, handleCopyRawText, rawTextSaved,
         isExtracting, isCancelling, extractionPhase, streamingContent, streamRef, cancelTableFormat,
         provenanceCells, selectedCell, handleCellClick, clearCellSelection, onApplyGrid, tableKey, savedCsv, handleCopyTable, hasTable,
-        extractionError, llamaError, truncated, contextOverflow, handleFormatTable,
+        extractionError, truncated, contextOverflow, handleFormatTable,
         fileStem,
     } = props;
 
@@ -793,10 +792,10 @@ export function ExtractionOutputPane(props: ExtractionOutputPaneProps): React.Re
                                     </OutputCard>
                                 );
                             })()
-                        ) : (extractionError || llamaError) ? (
+                        ) : extractionError ? (
                             <div className="flex flex-col h-full items-center justify-center gap-3">
                                 <Icon name="error" size={28} className="text-error" />
-                                <p className="text-error text-sm text-center max-w-sm">{extractionError || llamaError}</p>
+                                <p className="text-error text-sm text-center max-w-sm">{extractionError}</p>
                                 <button
                                     onClick={() => handleFormatTable()}
                                     className="px-4 py-1 text-sm bg-primary text-on-primary rounded-lg hover:bg-primary/90"
