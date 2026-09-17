@@ -11,6 +11,9 @@ mod llama;
 mod menu;
 mod ocr;
 mod paths;
+/// Compiled and unit-tested before anything executes it, so the catalog it holds
+/// can't drift from the code it describes while the executor is still being built.
+mod pipeline;
 mod reset;
 mod setup;
 mod zoom;
