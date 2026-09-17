@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router';
-import { readSetting, writeSetting, type Theme } from '../lib/settings';
+import { type Theme } from '../lib/settings';
 import { eulaAcceptedAt } from '../features/legal/eulaAcceptance';
 import { useTheme } from '../hooks/useTheme';
 import { requestSetupRerun } from '../features/setup/useSetupCheck';
@@ -15,6 +15,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import Icon from '../components/Icon';
 import PageContainer from '../components/PageContainer';
 import Section from '../components/PageSection';
+import CustomModelSection from '../features/settings/CustomModelSection';
 
 /** Label/description on the left, control on the right. Below `sm` the control
  *  drops onto its own line instead of competing with the text for width: at the
@@ -41,43 +42,6 @@ function SettingRow({ label, description, children }: {
                 )}
             </div>
             <div className="sm:shrink-0">{children}</div>
-        </div>
-    );
-}
-
-function PathField({ label, hint, value, onChange, onBrowse, disabled = false }: {
-    label: string;
-    hint?: string;
-    value: string;
-    onChange: (v: string) => void;
-    onBrowse: () => void;
-    disabled?: boolean;
-}) {
-    return (
-        <div className={`flex flex-col gap-1.5 transition-opacity ${disabled ? 'opacity-40 pointer-events-none select-none' : ''}`}>
-            <label className="font-label-md text-label-md text-on-surface">{label}</label>
-            {hint && <p className="font-body-sm text-body-sm text-on-surface-variant -mt-0.5">{hint}</p>}
-            {/* Stacks below `sm`: side by side, the path field shrinks past the
-                point where any of the path is readable before Browse gives way. */}
-            <div className="flex flex-col sm:flex-row gap-2 mt-0.5">
-                <input
-                    type="text"
-                    value={value}
-                    onChange={(e) => onChange(e.target.value)}
-                    placeholder="Leave blank to use the model installed by setup"
-                    disabled={disabled}
-                    className="min-w-0 sm:flex-1 rounded-lg border border-outline-variant bg-surface px-3 py-2 font-body-md text-body-md text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/50 transition-colors"
-                />
-                <button
-                    type="button"
-                    onClick={onBrowse}
-                    disabled={disabled}
-                    className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-outline-variant bg-surface-container hover:bg-surface-container-high font-label-md text-label-md text-on-surface-variant transition-colors shrink-0"
-                >
-                    <Icon name="folder_open" size={16} />
-                    Browse
-                </button>
-            </div>
         </div>
     );
 }
@@ -145,10 +109,6 @@ const QUIT_DELAY_MS = 1400;
 export default function Settings(): React.ReactElement {
     const [theme, setTheme] = useTheme();
 
-    const [modelPath, setModelPath] = useState(() => readSetting('modelPath'));
-    const [mmprojPath, setMmprojPath] = useState(() => readSetting('mmprojPath'));
-    const [pathsSaved, setPathsSaved] = useState(false);
-
     const acceptedAt = eulaAcceptedAt();
 
     const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
@@ -162,24 +122,6 @@ export default function Settings(): React.ReactElement {
     // One destructive action at a time: they all touch the same files, and a wipe
     // racing a session delete would leave both reporting nonsense.
     const busy = deleting || removing;
-
-    const browseForGguf = async (setter: (path: string) => void) => {
-        const { open } = await import('@tauri-apps/plugin-dialog');
-        const result = await open({
-            filters: [{ name: 'GGUF Model', extensions: ['gguf'] }],
-            multiple: false,
-        });
-        if (typeof result === 'string') {
-            setter(result);
-            setPathsSaved(false);
-        }
-    };
-
-    const savePaths = () => {
-        writeSetting('modelPath', modelPath);
-        writeSetting('mmprojPath', mmprojPath);
-        setPathsSaved(true);
-    };
 
     const handleDeleteAllSessions = async () => {
         setConfirmDeleteAll(false);
@@ -266,40 +208,9 @@ export default function Settings(): React.ReactElement {
                 {/* ── AI Model ── */}
                 <Section
                     title="AI model"
-                    description="Override the model paths installed by setup. Leave blank to use the downloaded model. Saved paths take effect on next server start."
-                    comingSoon
+                    description="Anchor extracts tables with the model it downloaded during setup. You can point it at a different one instead."
                 >
-                    <div className="rounded-[10px] border border-outline-variant bg-surface-container p-6 flex flex-col gap-6">
-                        <PathField
-                            label="Model path"
-                            hint="GGUF model file (e.g. Qwen3.5-4B-Q4_K_M.gguf)"
-                            value={modelPath}
-                            onChange={(v) => { setModelPath(v); setPathsSaved(false); }}
-                            onBrowse={() => browseForGguf(setModelPath)}
-                        />
-                        <PathField
-                            label="Multimodal projector path"
-                            hint="mmproj GGUF file, required for the vision pipeline"
-                            value={mmprojPath}
-                            onChange={(v) => { setMmprojPath(v); setPathsSaved(false); }}
-                            onBrowse={() => browseForGguf(setMmprojPath)}
-                        />
-                        <div className="flex items-center gap-3 pt-1 border-t border-outline-variant">
-                            <button
-                                type="button"
-                                onClick={savePaths}
-                                className="mt-4 px-4 py-2 rounded-lg bg-primary text-on-primary font-label-md text-label-md hover:bg-primary/90 transition-colors"
-                            >
-                                Save paths
-                            </button>
-                            {pathsSaved && (
-                                <span className="mt-4 flex items-center gap-1.5 font-body-sm text-body-sm text-on-surface-variant">
-                                    <Icon name="check_circle" size={16} fill={1} className="text-primary" />
-                                    Saved
-                                </span>
-                            )}
-                        </div>
-                    </div>
+                    <CustomModelSection />
                 </Section>
 
                 {/* ── OCR ── */}

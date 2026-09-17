@@ -122,6 +122,10 @@ pub enum FileRole {
 pub enum PromptId {
     /// Qwen, image + spatial OCR text -> TSV. Today's Stage 1 prompt.
     QwenTsvExtract,
+    /// The same task with no image attached, for a model whose vision support is
+    /// unknown. Not a variant of the above by accident: telling a model to consult an
+    /// attached image that isn't there is worse than not mentioning one.
+    TsvExtractTextOnly,
     /// Qwen's system turn for the extraction path.
     QwenExtractSystem,
     /// Surya full-page OCR to HTML blocks. Training-time contract, verbatim.
@@ -145,6 +149,18 @@ Use the attached image as the primary reference and the OCR text below as a guid
 \n\
 OCR text:\n";
 
+/// The text-only variant. Identical in every instruction that does not concern the
+/// image, so the two produce the same shape of output; the difference is that the OCR
+/// text is described as the *only* source rather than as a guide to a picture.
+const TSV_EXTRACT_TEXT_ONLY: &str = "Return only TSV (tab-separated values).\n\
+First row must be the column headers.\n\
+No reasoning, no explanation, no code fences, no markdown.\n\
+Separate each column with a tab character. Do not use commas as delimiters.\n\
+If two adjacent values belong to the same visual column (e.g. a department code and a course number), output them as one field joined by a space.\n\
+The OCR text below preserves the page's layout: the spacing between values reflects the columns on the page.\n\
+\n\
+OCR text:\n";
+
 const QWEN_EXTRACT_SYSTEM: &str = "You are a structured data extractor. \
 Begin your response with the very first line of the requested format — no introduction, \
 no analysis, no reasoning, no explanation before the data. \
@@ -160,6 +176,7 @@ const SURYA_TABLE_BANDS: &str = "Output the table rows then columns as JSON. Eac
 pub fn prompt_text(id: PromptId) -> &'static str {
     match id {
         PromptId::QwenTsvExtract => QWEN_TSV_EXTRACT,
+        PromptId::TsvExtractTextOnly => TSV_EXTRACT_TEXT_ONLY,
         PromptId::QwenExtractSystem => QWEN_EXTRACT_SYSTEM,
         PromptId::SuryaOcrHtml => SURYA_OCR_HTML,
         PromptId::SuryaTableBands => SURYA_TABLE_BANDS,
@@ -243,6 +260,13 @@ pub struct ModelSpec {
     pub caps: Capabilities,
     pub roles: &'static [ModelRole],
     pub footprint: Footprint,
+    /// True when the *user* provides this model's files rather than the installer.
+    ///
+    /// Such a model is never downloaded, never pinned, and never recommended, and its
+    /// `files` list is empty because the paths live in user config instead. The flag
+    /// exists so those exemptions are a property of the model rather than a string
+    /// comparison against a magic id scattered through `setup.rs` and the validator.
+    pub user_supplied: bool,
 }
 
 impl ModelSpec {
@@ -476,6 +500,7 @@ pub const QWEN_3_5_4B: ModelSpec = ModelSpec {
         min_ram_mb: 8_192,
         min_vram_mb: None,
     },
+    user_supplied: false,
 };
 
 /// Surya-OCR-2, used **only** for the row/column bands its `table` mode reports.
@@ -542,6 +567,76 @@ pub const SURYA_OCR_2: ModelSpec = ModelSpec {
         min_ram_mb: 16_384,
         min_vram_mb: None,
     },
+    user_supplied: false,
+};
+
+/// The id reserved for the user's own GGUF. Not a real model until one is registered.
+pub const CUSTOM_MODEL_ID: &str = "custom-gguf";
+
+/// A GGUF the user supplied themselves.
+///
+/// Anchor knows nothing about this file beyond it being a GGUF: not its family, not
+/// its chat template, not whether it has ever produced a TSV. So the spec is the most
+/// conservative one that can still work, and every field is a deliberate refusal to
+/// guess:
+///
+/// - **No system prompt and no stop tokens.** Qwen's are Qwen's; sending
+///   `<|im_start|>` to a Llama or Gemma checkpoint is at best ignored and at worst
+///   truncates the answer at the first token that happens to match.
+/// - **`jinja: true`.** The model's own embedded chat template is the only one that
+///   can be right, and llama.cpp's generic fallback is reliably wrong for instruct
+///   models.
+/// - **`vision: false`.** The page image is only attached when the user also supplies
+///   a projector; the runtime turns this on for that case (see `pipeline::custom`).
+///   Attaching an image to a text-only model is a hard server error, not a graceful
+///   degradation.
+/// - **No `Ground` role.** A model that has not been checked against the band format
+///   cannot be trusted with the page's geometry, and `Grounding::None` makes the
+///   validator enforce that rather than leaving it to a comment.
+pub const CUSTOM_GGUF: ModelSpec = ModelSpec {
+    id: CUSTOM_MODEL_ID,
+    label: "Your own model",
+    family: "custom",
+    // Empty on purpose: the paths live in user config, not in the asset manifest.
+    files: &[],
+    launch: LaunchSpec {
+        // Overridden by the registered config; this is the floor a model gets if the
+        // user never says otherwise.
+        ctx: 8192,
+        image_min_tokens: None,
+        parallel: 1,
+        gpu_layers: GpuLayers::AllWhenGpu,
+        jinja: true,
+        alias: None,
+    },
+    request: RequestSpec {
+        system_prompt: None,
+        temperature: 0.0,
+        top_p: 1.0,
+        top_k: Some(1),
+        presence_penalty: None,
+        stop: &[],
+        enable_thinking: None,
+        // Kept on: a model that does not return logprobs simply yields unscored cells
+        // (the confidence stage already handles `None`), whereas leaving it off would
+        // silently discard a signal a capable model was willing to give.
+        logprobs: true,
+        top_logprobs: 0,
+    },
+    caps: Capabilities {
+        vision: false,
+        logprobs: true,
+        grounding: Grounding::None,
+        output_format: OutputFormat::Tsv,
+    },
+    roles: &[ModelRole::Structure, ModelRole::Verify],
+    footprint: Footprint {
+        // Unknown until the file is on disk; the runtime reports the real size.
+        weights_mb: 0,
+        min_ram_mb: 8_192,
+        min_vram_mb: None,
+    },
+    user_supplied: true,
 };
 
 /// Every model the app can run.
@@ -640,15 +735,72 @@ Qwen3.5 4B builds the table. Better on dense or irregular tables.",
 /// the recommendation for machines that should have got something else.
 pub const PRESETS: &[PipelinePreset] = &[TESSERACT_QWEN];
 
+/// Tesseract grounds the page and the user's own model builds the table.
+///
+/// Deliberately **not** in [`PRESETS`], which is the list of pipelines Anchor ships:
+/// this one cannot be recommended (nothing is known about the model's capability),
+/// cannot be installed (its file is already on disk, chosen by the user), and must
+/// not appear anywhere the shipped set is treated as verified. It is offered only
+/// once a GGUF has been registered, and `preset()` resolves it so a run can name it.
+pub const CUSTOM_PRESET: PipelinePreset = PipelinePreset {
+    id: "custom-gguf",
+    label: "Your own model",
+    description: "Tesseract reads the page and a GGUF you supply builds the table. \
+Anchor cannot verify this model or vouch for its output.",
+    version: 1,
+    requires: Requirements {
+        min_ram_mb: 8_192,
+        min_vram_mb: None,
+    },
+    steps: &[
+        Step::Render {
+            target_width: RENDER_TARGET_WIDTH,
+        },
+        Step::GroundTesseract {
+            tesseract: TesseractSpec {
+                psm: 6,
+                lang: "eng",
+            },
+        },
+        Step::Structure {
+            model_id: CUSTOM_MODEL_ID,
+            prompt: PromptId::TsvExtractTextOnly,
+            residency: Residency::Exclusive,
+        },
+    ],
+};
+
 /// The preset used when nothing else is selected.
 pub const DEFAULT_PRESET_ID: &str = TESSERACT_QWEN.id;
 
+/// A model Anchor ships and installs. Excludes [`CUSTOM_GGUF`] on purpose — callers
+/// that download, verify or size models must not see a model with no files.
 pub fn model(id: &str) -> Option<&'static ModelSpec> {
     MODELS.iter().find(|m| m.id == id)
 }
 
+/// Any model a *step* may name, including the user's own.
+///
+/// The split from [`model`] is the point: the executor has to resolve a custom model
+/// to run it, while `setup.rs` and `hardware.rs` must never see one, because a model
+/// with no pinned files would otherwise flow into a download list or a recommendation.
+pub fn any_model(id: &str) -> Option<&'static ModelSpec> {
+    model(id).or(if id == CUSTOM_MODEL_ID {
+        Some(&CUSTOM_GGUF)
+    } else {
+        None
+    })
+}
+
 pub fn preset(id: &str) -> Option<&'static PipelinePreset> {
-    PRESETS.iter().find(|p| p.id == id)
+    PRESETS
+        .iter()
+        .find(|p| p.id == id)
+        .or(if id == CUSTOM_PRESET.id {
+            Some(&CUSTOM_PRESET)
+        } else {
+            None
+        })
 }
 
 /// Find the model file a setup asset id delivers.
@@ -699,14 +851,20 @@ pub fn validate_catalog(
         if m.roles.is_empty() {
             errors.push(format!("model `{}` has no roles", m.id));
         }
-        if m.file(FileRole::Weights).is_none() {
-            errors.push(format!("model `{}` has no weights file", m.id));
-        }
-        if m.caps.vision && m.file(FileRole::Mmproj).is_none() {
-            errors.push(format!(
-                "model `{}` is vision-capable but has no mmproj file",
-                m.id
-            ));
+        // A user-supplied model's files are chosen at runtime and live in user config,
+        // so there is nothing to declare here. Every other rule still applies to it —
+        // notably the role and grounding checks below, which are what stop an
+        // unverified model being handed the page's geometry.
+        if !m.user_supplied {
+            if m.file(FileRole::Weights).is_none() {
+                errors.push(format!("model `{}` has no weights file", m.id));
+            }
+            if m.caps.vision && m.file(FileRole::Mmproj).is_none() {
+                errors.push(format!(
+                    "model `{}` is vision-capable but has no mmproj file",
+                    m.id
+                ));
+            }
         }
         if m.allows(ModelRole::Ground) && !m.caps.grounding.is_usable_for_grounding() {
             errors.push(format!(
@@ -999,6 +1157,7 @@ mod tests {
             min_ram_mb: 8_192,
             min_vram_mb: None,
         },
+        user_supplied: false,
     };
 
     const RENDER: Step = Step::Render {
@@ -1150,6 +1309,111 @@ mod tests {
         let models = [QWEN_3_5_4B, GROUNDER];
         validate_catalog(&[bad(OK)], &models).expect("a ground→structure→verify preset is valid");
         assert_eq!(bad(OK).grounding(), Grounding::None); // `grounder` isn't in the real MODELS
+    }
+
+    // ---- the user's own model ----
+
+    #[test]
+    fn the_custom_preset_is_valid_against_the_custom_model() {
+        let models = [QWEN_3_5_4B, CUSTOM_GGUF];
+        if let Err(errors) = validate_catalog(&[CUSTOM_PRESET], &models) {
+            panic!("the custom preset is invalid:\n  {}", errors.join("\n  "));
+        }
+    }
+
+    /// The shipped lists are what gets recommended, downloaded and verified. A model
+    /// with no pinned files and a preset Anchor cannot vouch for must not appear in
+    /// either, or they flow into an install plan or a hardware recommendation.
+    #[test]
+    fn the_custom_model_and_preset_stay_out_of_the_shipped_lists() {
+        assert!(!MODELS.iter().any(|m| m.id == CUSTOM_MODEL_ID));
+        assert!(!PRESETS.iter().any(|p| p.id == CUSTOM_PRESET.id));
+        assert!(model(CUSTOM_MODEL_ID).is_none(), "not an installable model");
+
+        // But a run must still be able to name them.
+        assert!(any_model(CUSTOM_MODEL_ID).is_some());
+        assert_eq!(
+            preset(CUSTOM_PRESET.id).map(|p| p.id),
+            Some(CUSTOM_PRESET.id)
+        );
+    }
+
+    #[test]
+    fn any_model_does_not_invent_models() {
+        assert!(any_model("no-such-model").is_none());
+        assert_eq!(any_model("qwen3.5-4b").map(|m| m.id), Some("qwen3.5-4b"));
+    }
+
+    /// An unverified model must never be handed the page's geometry. `Grounding::None`
+    /// is what makes the validator enforce that rather than a comment asking nicely.
+    #[test]
+    fn a_user_supplied_model_may_not_ground_the_page() {
+        assert!(!CUSTOM_GGUF.allows(ModelRole::Ground));
+        assert_eq!(CUSTOM_GGUF.caps.grounding, Grounding::None);
+
+        let errs = errors_for(
+            bad(&[
+                RENDER,
+                Step::GroundModel {
+                    model_id: CUSTOM_MODEL_ID,
+                    prompt: PromptId::SuryaOcrHtml,
+                    residency: Residency::Exclusive,
+                },
+                STRUCT_QWEN,
+            ]),
+            &[QWEN_3_5_4B, CUSTOM_GGUF],
+        );
+        assert_reports(&errs, "reports no locations");
+    }
+
+    /// Nothing is known about an arbitrary GGUF's chat format, so the request carries
+    /// no borrowed Qwen-isms: another model's stop tokens would at best be ignored and
+    /// at worst cut the answer off at the first coincidental match.
+    #[test]
+    fn a_user_supplied_model_borrows_no_other_models_conventions() {
+        // Resolved through `any_model` rather than read off the constant: that is the
+        // spec the executor actually gets, and a field read on a `const` folds to a
+        // literal that clippy rejects asserting on.
+        let m = any_model(CUSTOM_MODEL_ID).expect("the custom model must resolve");
+        assert!(m.request.stop.is_empty());
+        assert!(m.request.system_prompt.is_none());
+        assert!(m.request.enable_thinking.is_none());
+        // Its own embedded template is the only one that can be right.
+        assert!(m.launch.jinja);
+        // And it declares no files: they live in user config, not the manifest.
+        assert!(m.files.is_empty());
+        assert!(m.user_supplied);
+    }
+
+    /// Telling a model to consult an attached image that is not there is worse than
+    /// not mentioning one, so the custom preset uses the text-only prompt.
+    #[test]
+    fn the_custom_preset_asks_for_a_table_without_promising_an_image() {
+        let prompt = match CUSTOM_PRESET.steps.last() {
+            Some(Step::Structure { prompt, .. }) => *prompt,
+            other => panic!("the custom preset must end in a structure step: {other:?}"),
+        };
+        assert_eq!(prompt, PromptId::TsvExtractTextOnly);
+
+        let text = prompt_text(prompt);
+        assert!(
+            !text.contains("image"),
+            "text-only prompt mentions an image"
+        );
+        assert!(!text.contains("attached"));
+        // It is still the same task, and still ends with the load-bearing marker the
+        // spatial OCR text is appended to.
+        assert!(text.starts_with("Return only TSV"));
+        assert!(text.contains("tab character"));
+        assert!(text.ends_with("\n\nOCR text:\n"));
+    }
+
+    /// The custom model is not vision-capable, which is what stops the executor
+    /// attaching a page image and what stops the budget charging for one.
+    #[test]
+    fn a_user_supplied_model_is_not_assumed_to_read_images() {
+        let m = any_model(CUSTOM_MODEL_ID).expect("the custom model must resolve");
+        assert!(!m.caps.vision);
     }
 
     // ---- the grid axis ----

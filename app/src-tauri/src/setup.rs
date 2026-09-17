@@ -1236,6 +1236,12 @@ pub fn get_asset_manifest(
     // and then fails at the first extraction.
     let mut models = Vec::new();
     for id in preset.model_ids() {
+        // A model the *user* supplied is already on their disk — there is nothing to
+        // download and nothing to pin. Skipped by the flag rather than by an id
+        // comparison, so the exemption is a property of the model.
+        if catalog::any_model(id).is_some_and(|m| m.user_supplied) {
+            continue;
+        }
         let model = catalog::model(id)
             .ok_or_else(|| format!("preset `{}` names unknown model `{id}`", preset.id))?;
         for file in model.files {
@@ -1593,6 +1599,29 @@ mod tests {
             }
             // pdfium tracks whether we ship one for this platform at all.
             assert_eq!(required.contains(&"pdfium"), pdfium_spec().is_some());
+        }
+    }
+
+    /// A model the user supplied is already on their disk. Demanding a download for it
+    /// would make the app report an incomplete install it could never complete.
+    #[test]
+    fn required_assets_demands_no_download_for_a_user_supplied_model() {
+        let required = required_assets(Some("cpu"), &catalog::CUSTOM_PRESET);
+        assert!(required.contains(&"llama_server"));
+        assert!(
+            required.contains(&"tesseract"),
+            "the preset still grounds on it"
+        );
+        assert!(
+            !required.contains(&"model_gguf") && !required.contains(&"mmproj_gguf"),
+            "a custom preset must not demand the bundled model's files: {required:?}"
+        );
+        // And nothing in it is an unpinned asset id.
+        for id in &required {
+            assert!(
+                model_asset(id).is_some() || !catalog::all_model_asset_ids().contains(id),
+                "`{id}` is a model asset with no pin"
+            );
         }
     }
 

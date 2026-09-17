@@ -200,6 +200,9 @@ pub fn run() {
             setup::get_setup_paths,
             setup::persist_backend,
             setup::persist_preset,
+            pipeline::custom::set_custom_model,
+            pipeline::custom::get_custom_model,
+            pipeline::custom::clear_custom_model,
             setup::get_asset_manifest,
             setup::extract_archive,
         ])

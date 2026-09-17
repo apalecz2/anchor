@@ -167,22 +167,24 @@ impl Default for PipelineState {
 
 /// Human-readable step name for the progress UI.
 fn step_label(step: &Step) -> String {
+    // `any_model`, so a step running the user's own GGUF is named rather than falling
+    // through to the generic label.
     match step {
         Step::Render { .. } => "Reading the page".into(),
         Step::GroundTesseract { .. } => "Finding text on the page".into(),
-        Step::GroundModel { model_id, .. } => match catalog::model(model_id) {
+        Step::GroundModel { model_id, .. } => match catalog::any_model(model_id) {
             Some(m) => format!("Reading the page ({})", m.label),
             None => "Reading the page".into(),
         },
-        Step::GroundGrid { model_id, .. } => match catalog::model(model_id) {
+        Step::GroundGrid { model_id, .. } => match catalog::any_model(model_id) {
             Some(m) => format!("Mapping the table ({})", m.label),
             None => "Mapping the table".into(),
         },
-        Step::Structure { model_id, .. } => match catalog::model(model_id) {
+        Step::Structure { model_id, .. } => match catalog::any_model(model_id) {
             Some(m) => format!("Building the table ({})", m.label),
             None => "Building the table".into(),
         },
-        Step::Verify { model_id, .. } => match catalog::model(model_id) {
+        Step::Verify { model_id, .. } => match catalog::any_model(model_id) {
             Some(m) => format!("Checking the table ({})", m.label),
             None => "Checking the table".into(),
         },
@@ -211,6 +213,31 @@ fn image_data_url(path: &str) -> Result<String, String> {
         "image/png"
     };
     Ok(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
+}
+
+/// Launch settings for a model the user registered themselves.
+///
+/// The paths come from the on-disk registration, never from the call that started the
+/// run: the webview hands a path to [`crate::pipeline::custom::validate_gguf`] once,
+/// and this reads back what that accepted. A path arriving with the extraction request
+/// would put the webview one hop from a process spawn's argv.
+///
+/// No projector, and therefore no page image: `CUSTOM_GGUF` declares `vision: false`
+/// and the preset uses the text-only prompt. Attaching an image to a model that cannot
+/// read one is a hard server error, not a graceful degradation, and nothing about an
+/// arbitrary GGUF says whether it can.
+fn custom_launch_spec(model: &crate::pipeline::custom::CustomModel) -> LaunchSpec {
+    LaunchSpec {
+        model_path: model.weights_path.clone(),
+        mmproj_path: None,
+        ctx: model.ctx,
+        image_min_tokens: None,
+        parallel: catalog::CUSTOM_GGUF.launch.parallel,
+        gpu_layers: catalog::CUSTOM_GGUF.launch.gpu_layers,
+        jinja: catalog::CUSTOM_GGUF.launch.jinja,
+        chat_template_file: None,
+        alias: None,
+    }
 }
 
 /// Resolve a model's files to absolute paths under the AppData models directory.
@@ -273,7 +300,15 @@ async fn resident_model_url(
     residency: Residency,
     token: &CancellationToken,
 ) -> Result<String, String> {
-    let spec = launch_spec_for(model, data_dir)?;
+    let spec = if model.user_supplied {
+        let registered = crate::pipeline::custom::load(app_handle).ok_or(
+            "No model file has been chosen yet. Pick one in Settings ▸ Models, \
+             or switch back to a pipeline Anchor installs.",
+        )?;
+        custom_launch_spec(&registered)
+    } else {
+        launch_spec_for(model, data_dir)?
+    };
     let handle = ensure_server(app_handle, servers, &spec, backend, residency)?;
     let base_url = format!("http://127.0.0.1:{}", handle.port);
     wait_for_health(&base_url, token).await?;
@@ -368,7 +403,7 @@ async fn run_page(
                 prompt,
                 residency,
             } => {
-                let model = catalog::model(model_id)
+                let model = catalog::any_model(model_id)
                     .ok_or_else(|| format!("unknown model `{model_id}`"))?;
                 let base_url = resident_model_url(
                     app_handle, servers, model, &data_dir, backend, *residency, token,
@@ -412,7 +447,7 @@ async fn run_page(
                 prompt,
                 residency,
             } => {
-                let model = catalog::model(model_id)
+                let model = catalog::any_model(model_id)
                     .ok_or_else(|| format!("unknown model `{model_id}`"))?;
 
                 let prompt_text = format!("{}{}", catalog::prompt_text(*prompt), spatial_text);
@@ -424,14 +459,16 @@ async fn run_page(
                 )
                 .await?;
 
-                let body = build_request_body(
-                    model,
-                    vec![
-                        ContentPart::ImageUrl(image_data_url(image_path)?),
-                        ContentPart::Text(prompt_text),
-                    ],
-                    max_tokens,
-                );
+                // The image goes only to a model that can read one. `estimate_budget`
+                // already charges image tokens on the same condition, so the two stay
+                // consistent; sending one to a text-only model is a hard server error.
+                let mut parts = Vec::new();
+                if model.caps.vision {
+                    parts.push(ContentPart::ImageUrl(image_data_url(image_path)?));
+                }
+                parts.push(ContentPart::Text(prompt_text));
+
+                let body = build_request_body(model, parts, max_tokens);
 
                 // Coalesce deltas: one IPC post per DELTA_THROTTLE, carrying whatever
                 // accumulated since the last one.

@@ -24,6 +24,7 @@
 pub mod budget;
 pub mod catalog;
 pub mod client;
+pub mod custom;
 pub mod executor;
 pub mod prompt;
 pub mod surya;
