@@ -1,7 +1,7 @@
 import type { OcrWord, BoundingBox } from '../ocr/types';
 import { sortWords, groupWordsIntoLines } from '../../utils/ocrTransforms';
 import { blankCell } from './tableEdits';
-import type { CellProvenance, ProvenanceCell } from './types';
+import type { CellProvenance, DeclaredGrid, GroundingKind, ProvenanceCell, Span } from './types';
 
 export const normalize = (s: string): string =>
     s.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -392,22 +392,21 @@ function alignRowsToLines(
     return ranges;
 }
 
-function detectTableGrid(
+// Map TSV columns onto column bands.
+//
+// An all-empty TSV column has no ink in the image, so its band and the two gaps
+// flanking it merge into a single whitespace channel — demanding a separator for it
+// would fail detection (or promote an accidental channel) and cost the whole table its
+// grid. Geometry is therefore matched over content-bearing columns only; empty columns
+// keep their TSV index but map to no band (their cells have nothing to match anyway).
+//
+// Shared by both grid sources on purpose: a declared grid describes the same page, so
+// a model that reports a band per *inked* column has to line up against the same
+// filtered list the inferred path builds.
+function mapContentColumnsToBands(
     csvRows: string[][],
-    ocrWords: OcrWord[],
-    naturalHeight?: number,
-): TableGrid | null {
-    if (csvRows.length === 0 || ocrWords.length === 0) return null;
-    const columnCount = expectedColumnCount(csvRows);
-    // A single-column table has no geometry to exploit — the walk handles it.
-    if (columnCount < 2) return null;
-
-    // An all-empty TSV column has no ink in the image, so its band and the two
-    // gaps flanking it merge into a single whitespace channel — demanding a
-    // separator for it would fail detection (or promote an accidental channel)
-    // and cost the whole table its grid. Geometry is therefore detected over
-    // content-bearing columns only; empty columns keep their TSV index but map
-    // to no band (their cells have nothing to match anyway).
+    columnCount: number,
+): { colToBand: number[]; bandCount: number } {
     const hasContent = new Array<boolean>(columnCount).fill(false);
     for (const row of csvRows) {
         const n = Math.min(row.length, columnCount);
@@ -420,6 +419,80 @@ function detectTableGrid(
     for (let c = 0; c < columnCount; c++) {
         if (hasContent[c]) colToBand[c] = bandCount++;
     }
+    return { colToBand, bandCount };
+}
+
+const bandIndexAt = (v: number, bands: Span[]): number =>
+    bands.findIndex(b => v >= b.lo && v <= b.hi);
+
+// Build the grid from bands a grounding model declared, instead of inferring it.
+//
+// This is the whole point of cell-level grounding. The inferred path has to guess
+// twice: `detectColumnSeparators` sweeps for whitespace channels, and
+// `groupWordsIntoLines` splits rows on vertical gaps. Both are geometry heuristics,
+// and between them they account for every Provenance/Matching post-mortem in
+// `docs/issues.md` ("everything loses alignment if the OCR isn't perfect"). A model
+// that reports Row and Col bands has already answered both questions.
+//
+// What is deliberately *not* taken from the model is which TSV row corresponds to
+// which band. `alignRowsToLines` still arbitrates that by content, because the bands
+// describe the page while the TSV describes what the structuring model made of it, and
+// those can legitimately differ — a dropped row, a merged header. Geometry from the
+// model, alignment from the content, is the division that degrades gracefully.
+//
+// Returns null when the declared bands cannot describe this TSV, so the caller can
+// fall back to inference rather than matching against a grid that doesn't fit.
+function buildDeclaredTableGrid(
+    csvRows: string[][],
+    ocrWords: OcrWord[],
+    declared: DeclaredGrid,
+): TableGrid | null {
+    if (csvRows.length === 0 || ocrWords.length === 0) return null;
+    const { rowBands, colBands } = declared;
+    if (rowBands.length === 0 || colBands.length < 2) return null;
+
+    const columnCount = expectedColumnCount(csvRows);
+    if (columnCount < 2) return null;
+    const { colToBand, bandCount } = mapContentColumnsToBands(csvRows, columnCount);
+    // The model counted the page's columns; the TSV counts the structuring model's
+    // own. Mapping them by index when they disagree is a guess, and the two ways it
+    // can go wrong are indistinguishable from here: a trailing extra band is harmless,
+    // while a leading or interleaved one shifts every column by one and matches every
+    // cell against its neighbour. Declining costs a page that had the harmless shape
+    // whatever the declared grid would have bought it — the cheaper mistake by far.
+    if (bandCount !== colBands.length) return null;
+
+    // Words resolve by box center, exactly as the inferred path does, so a word
+    // straddling a band edge belongs to whichever side holds its middle.
+    const wordCol = ocrWords.map(w =>
+        bandIndexAt(w.box_coords.left + w.box_coords.width / 2, colBands));
+    const wordRow = ocrWords.map(w =>
+        bandIndexAt(w.box_coords.top + w.box_coords.height / 2, rowBands));
+
+    // One "line" per declared row band, in the reading order sanitization produced.
+    // A word outside every band — marginalia, a stamp, a footnote below the table —
+    // joins no line and is simply left to the recovery passes.
+    const lines: number[][] = rowBands.map(() => []);
+    for (let i = 0; i < ocrWords.length; i++) {
+        if (wordRow[i] >= 0 && wordCol[i] >= 0) lines[wordRow[i]].push(i);
+    }
+    if (lines.every(line => line.length === 0)) return null;
+
+    const rowRanges = alignRowsToLines(csvRows, lines, wordCol, bandCount, colToBand, ocrWords);
+    return { lines, wordCol, colToBand, rowRanges };
+}
+
+function detectTableGrid(
+    csvRows: string[][],
+    ocrWords: OcrWord[],
+    naturalHeight?: number,
+): TableGrid | null {
+    if (csvRows.length === 0 || ocrWords.length === 0) return null;
+    const columnCount = expectedColumnCount(csvRows);
+    // A single-column table has no geometry to exploit — the walk handles it.
+    if (columnCount < 2) return null;
+
+    const { colToBand, bandCount } = mapContentColumnsToBands(csvRows, columnCount);
     if (bandCount < 2) return null;
 
     // Reuse the canonical line grouping so the grid can never disagree with the
@@ -550,9 +623,9 @@ function fuzzyMatchPass(
     }
 }
 
-// Inclusive 1-D interval. Used to bound a cell to a column's x-span and a row's
-// y-span derived from cells the earlier passes already placed.
-type Span = { lo: number; hi: number };
+// `Span` (an inclusive 1-D interval) is shared with the declared-grid types — it is
+// the same thing whether the band was derived from cells the earlier passes placed or
+// handed over by a grounding model.
 
 // y-span (top→bottom) covering every OCR word the given cells matched, or null if
 // none of them matched. Used as a row band.
@@ -708,6 +781,47 @@ function verifyEmptyCellsPass(
     }
 }
 
+export type MatchOptions = {
+    /** Defaults to `word` — the tier every shipped preset grounds at. */
+    grounding?: GroundingKind;
+    /** The bands a `cell`-grounded model reported, in page pixels. */
+    grid?: DeclaredGrid | null;
+};
+
+/**
+ * Decide where the table grid comes from — the one place grounding changes matching.
+ *
+ * The three tiers ask for genuinely different treatment, and the difference is about
+ * what is *known*, not about quality:
+ *
+ *  - `word` — nothing is known about the grid, so infer it, exactly as before. This
+ *    path must stay byte-identical; it is what every shipped preset runs.
+ *  - `cell` — the grid was reported. Use it, and fall back to inference if it turns
+ *    out not to describe this TSV (see `buildDeclaredTableGrid`). Falling back to
+ *    inference rather than straight to the reading-order walk matters: a declined
+ *    grid is a mismatch between two descriptions of the page, not evidence that the
+ *    page has no columns.
+ *  - `block` / `none` — there is nothing to infer a grid *from*. Region boxes have no
+ *    whitespace channels between words and no visual lines, so `detectColumnSeparators`
+ *    would be reading structure out of noise. The reading-order walk and the fuzzy
+ *    pass handle these, and the UI renders their highlights as approximate.
+ */
+function resolveGrid(
+    csvRows: string[][],
+    ocrWords: OcrWord[],
+    naturalHeight: number | undefined,
+    options: MatchOptions | undefined,
+): TableGrid | null {
+    const grounding = options?.grounding ?? 'word';
+    if (grounding === 'block' || grounding === 'none') return null;
+
+    if (grounding === 'cell' && options?.grid) {
+        const declared = buildDeclaredTableGrid(csvRows, ocrWords, options.grid);
+        if (declared) return declared;
+    }
+    return detectTableGrid(csvRows, ocrWords, naturalHeight);
+}
+
 // Match TSV cells to their source OCR words.
 //
 // Pipeline: grid-first spatial matching (column bands from whitespace channels,
@@ -720,10 +834,14 @@ function verifyEmptyCellsPass(
 //
 // `naturalHeight` is the source image height used for visual line grouping;
 // when omitted it is derived from the words' own extent.
+//
+// `options.grounding` selects where the grid comes from, and defaults to `word` — the
+// tier every shipped preset uses, whose behaviour is unchanged. See `resolveGrid`.
 export const matchCellsToOcr = (
     csvRows: string[][],
     ocrWords: OcrWord[],
     naturalHeight?: number,
+    options?: MatchOptions,
 ): CellProvenance[][] => {
     // A blank cell is "empty", never "unmatched" — there is nothing to match,
     // so it must not read as a failed match downstream (badge, low trust).
@@ -736,7 +854,7 @@ export const matchCellsToOcr = (
         })));
     const claimed = new Set<number>();
 
-    const grid = detectTableGrid(csvRows, ocrWords, naturalHeight);
+    const grid = resolveGrid(csvRows, ocrWords, naturalHeight, options);
     let gridAccepted = false;
     if (grid) {
         gridMatchCells(working, ocrWords, grid, claimed);

@@ -10,6 +10,7 @@ import {
     unclaimedWordsInRegion,
 } from './provenance';
 import { ocrWord as word, provenanceCell } from '../../test/fixtures';
+import type { DeclaredGrid } from './types';
 
 describe('normalize', () => {
     it('lowercases and strips non-alphanumerics', () => {
@@ -529,5 +530,153 @@ describe('sanitizeWordsForProvenance', () => {
         expect(out.map(x => x.text)).toEqual(['Total', '|', 'amount']);
         // The kept words retain their original stable ids.
         expect(out.find(x => x.text === 'amount')?.id).toBe(w[2].id);
+    });
+});
+
+describe('grounding dispatch', () => {
+    // A wrapped cell: "Intro Systems" occupies two visual lines, with "1.00" beside
+    // only the first of them. The reading-order walk cannot place it by construction —
+    // another column's word is interleaved between its two halves, so no contiguous
+    // run of words spells the cell. Only a grid can, which makes this the fixture that
+    // tells the three dispatch branches apart.
+    const wrapped = () => [
+        word('Intro', 0, 0),
+        word('1.00', 100, 0),
+        word('Systems', 0, 20),
+        word('Calc', 0, 100),
+        word('2.00', 100, 100),
+    ];
+    // Words abutting: the columns touch, leaving no whitespace channel between them.
+    // `detectColumnSeparators` therefore finds no separator at any tolerance and
+    // returns null, so inference yields *no grid at all* on this layout — which is
+    // exactly the situation a model-declared grid exists to rescue.
+    const abutting = () => [
+        word('Intro', 0, 0),
+        word('1.00', 10, 0),
+        word('Systems', 0, 20),
+        word('Calc', 0, 100),
+        word('2.00', 10, 100),
+    ];
+    const TSV = [['Intro Systems', '1.00'], ['Calc', '2.00']];
+
+    // The same layouts as a grounding model would report them: one row band per table
+    // row (the first spanning both wrapped lines), one column band per inked column.
+    const spacedGrid: DeclaredGrid = {
+        rowBands: [{ lo: 0, hi: 35 }, { lo: 95, hi: 115 }],
+        colBands: [{ lo: 0, hi: 50 }, { lo: 95, hi: 150 }],
+    };
+    const tightGrid: DeclaredGrid = {
+        rowBands: [{ lo: 0, hi: 35 }, { lo: 95, hi: 115 }],
+        colBands: [{ lo: 0, hi: 10 }, { lo: 10, hi: 20 }],
+    };
+
+    it('defaults to word grounding, leaving today\'s inferred-grid path untouched', () => {
+        const words = wrapped();
+        const implicit = matchCellsToOcr(TSV, words, 1000);
+        const explicit = matchCellsToOcr(TSV, words, 1000, { grounding: 'word' });
+        expect(implicit).toEqual(explicit);
+        // With a channel between the columns the grid is inferable, and it solves the
+        // wrapped cell — today's behaviour, unchanged.
+        expect(implicit[0][0].matchStatus).toBe('multi_word');
+    });
+
+    it('places cells a declared grid describes but no inferred grid could', () => {
+        // This is the whole point of cell-level grounding. Inference has to find the
+        // columns by sweeping for whitespace channels; here there is no channel to
+        // find, so it gives up and the walk loses the wrapped cell. The model already
+        // knew where the columns were.
+        const words = abutting();
+        expect(matchCellsToOcr(TSV, words, 1000)[0][0].matchStatus).toBe('unmatched');
+
+        const declared = matchCellsToOcr(TSV, words, 1000, {
+            grounding: 'cell',
+            grid: tightGrid,
+        });
+        expect(declared[0][0].matchStatus).toBe('multi_word');
+        expect(declared[0][0].wordIds).toEqual([words[0].id, words[2].id]);
+        expect(declared[1][1].wordIds).toEqual([words[4].id]);
+    });
+
+    it('does not infer a grid for block or ungrounded pages', () => {
+        // Region boxes have no whitespace channels between words and no visual lines,
+        // so inferring column geometry from them would be reading structure out of
+        // noise. Both tiers fall to the reading-order walk, and the honest miss on the
+        // wrapped cell is what the coarse highlight and the badge then report.
+        for (const grounding of ['block', 'none'] as const) {
+            const cells = matchCellsToOcr(TSV, wrapped(), 1000, { grounding });
+            expect(cells[0][0].matchStatus, grounding).toBe('unmatched');
+            // The rest of the table still matches; only the wrapped cell is lost.
+            expect(cells[1][0].matchStatus, grounding).toBe('matched');
+        }
+    });
+
+    it('falls back to inference when a cell-grounded run carries no grid', () => {
+        // A grounding step that returned nothing usable must not cost the page its
+        // grid — inference is still available, and is what the page would have had.
+        const words = wrapped();
+        expect(matchCellsToOcr(TSV, words, 1000, { grounding: 'cell' }))
+            .toEqual(matchCellsToOcr(TSV, words, 1000));
+    });
+
+    it('declines a declared grid whose column count disagrees with the TSV', () => {
+        // The model counted the page's columns; the TSV counts the structuring model's
+        // own. Mapping them by index when they disagree is a guess, and the two ways it
+        // can go wrong are indistinguishable from here: a *trailing* extra band is
+        // harmless, while a leading or interleaved one shifts every column by one and
+        // matches every cell against its neighbour.
+        //
+        // This case is the harmless kind — the third band sits past the table, so the
+        // identity mapping would have worked — and declining still costs the page its
+        // wrapped cell. That is the trade taken deliberately: a grid that silently
+        // mismatched a whole table is far worse than one match given up, and nothing
+        // available at this point can tell the two shapes apart.
+        const words = abutting();
+        const threeBands: DeclaredGrid = {
+            ...tightGrid,
+            colBands: [...tightGrid.colBands, { lo: 200, hi: 250 }],
+        };
+        const cells = matchCellsToOcr(TSV, words, 1000, { grounding: 'cell', grid: threeBands });
+        expect(cells).toEqual(matchCellsToOcr(TSV, words, 1000));
+        expect(cells[0][0].matchStatus).toBe('unmatched');
+    });
+
+    it('declines a declared grid that covers none of the words', () => {
+        const words = wrapped();
+        const elsewhere: DeclaredGrid = {
+            rowBands: [{ lo: 900, hi: 950 }],
+            colBands: [{ lo: 900, hi: 950 }, { lo: 960, hi: 990 }],
+        };
+        expect(matchCellsToOcr(TSV, words, 1000, { grounding: 'cell', grid: elsewhere }))
+            .toEqual(matchCellsToOcr(TSV, words, 1000));
+    });
+
+    it('discards a declared grid that does not describe the page, like an inferred one', () => {
+        // Bands in the wrong order send every cell looking in its neighbour's column,
+        // placing nothing. The same <30% gate that protects the inferred grid catches
+        // it, so the page lands on the reading-order walk rather than on a confidently
+        // wrong grid — and the three cells the walk can place still come back.
+        const words = abutting();
+        const swapped: DeclaredGrid = {
+            rowBands: tightGrid.rowBands,
+            colBands: [tightGrid.colBands[1], tightGrid.colBands[0]],
+        };
+        const cells = matchCellsToOcr(TSV, words, 1000, { grounding: 'cell', grid: swapped });
+        expect(cells[1][0].wordIds).toEqual([words[3].id]);
+        expect(cells[0][1].wordIds).toEqual([words[1].id]);
+    });
+
+    it('maps an all-empty TSV column to no band, as the inferred path does', () => {
+        // An empty column has no ink, so a model reporting a band per inked column
+        // reports two, not three. Counting content columns is what makes the two agree
+        // — a raw column-count comparison would decline this grid.
+        const words = abutting();
+        const withGap = TSV.map(([a, b]) => [a, '', b]);
+        const cells = matchCellsToOcr(withGap, words, 1000, {
+            grounding: 'cell',
+            grid: tightGrid,
+        });
+        expect(cells[0][0].matchStatus).toBe('multi_word');
+        expect(cells[0][1].matchStatus).toBe('empty');
+        expect(cells[0][2].wordIds).toEqual([words[1].id]);
     });
 });

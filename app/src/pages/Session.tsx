@@ -12,7 +12,7 @@ import { SplitLayout } from '../layouts/SplitLayout';
 import { buildReadingOrderText, generateLinesFromWords } from '../utils/ocrTransforms';
 import { sanitizeWordsForProvenance, getCellSourceBox, padProvenanceGrid } from '../features/extraction/provenance';
 import type { BoundingBox } from '../features/ocr/types';
-import type { ProvenanceCell } from '../features/extraction/types';
+import type { GroundingKind, ProvenanceCell } from '../features/extraction/types';
 import { buildFileStem, toCsv } from '../features/export/exportUtils';
 import { copyTableToClipboard } from '../utils/clipboard';
 import { touchSession } from '../features/sessions/touchSession';
@@ -63,6 +63,11 @@ function SessionContent(): React.ReactElement {
     const [tableGeneration, setTableGeneration] = useState(0);
     const [selectedCell, setSelectedCell] = useState<SelectedCell>(null);
     const [provenanceHighlightBox, setProvenanceHighlightBox] = useState<BoundingBox | null>(null);
+    // The grounding tier the *table on screen* was produced at, which is a property of
+    // the run that made it, not of today's default preset — so it is read back from
+    // `page_extraction_meta` when a saved page is opened rather than assumed. Pages
+    // extracted before that table existed default to `word`, which is what they were.
+    const [grounding, setGrounding] = useState<GroundingKind>('word');
     const [extractionError, setExtractionError] = useState<string | null>(null);
     const [truncated, setTruncated] = useState(false);
     // The page's prompt is estimated too dense to fit the model's context in one pass.
@@ -198,13 +203,24 @@ function SessionContent(): React.ReactElement {
         let cancelled = false;
         async function load() {
             const db = await getDb();
-            const rows = await db.select<{ csv_content: string; cell_mappings_json: string | null }[]>(
-                'SELECT csv_content, cell_mappings_json FROM csv_outputs WHERE session_id = $1 AND page_index = $2',
+            // Left join: `page_extraction_meta` only exists for pages extracted since
+            // it was added, and a table without it is still a table to show.
+            const rows = await db.select<{
+                csv_content: string;
+                cell_mappings_json: string | null;
+                grounding: GroundingKind | null;
+            }[]>(
+                `SELECT c.csv_content, c.cell_mappings_json, m.grounding
+                   FROM csv_outputs c
+                   LEFT JOIN page_extraction_meta m
+                     ON m.session_id = c.session_id AND m.page_index = c.page_index
+                  WHERE c.session_id = $1 AND c.page_index = $2`,
                 [id, activePageIndex]
             );
             if (cancelled) return;
             const csv = rows[0]?.csv_content ?? null;
             const mappingsJson = rows[0]?.cell_mappings_json ?? null;
+            setGrounding(rows[0]?.grounding ?? 'word');
             // Pad ragged grids (the model may omit trailing empty cells; older
             // sessions persisted them that way) so the last column always renders.
             replaceTable(csv, mappingsJson ? padProvenanceGrid(JSON.parse(mappingsJson) as ProvenanceCell[][]) : null);
@@ -242,6 +258,7 @@ function SessionContent(): React.ReactElement {
                 { boostTokens },
             );
             replaceTable(result.csvContent, padProvenanceGrid(result.provenanceCells));
+            setGrounding(result.grounding);
             setTruncated(result.truncated);
             setContextOverflow(result.contextOverflow);
         } catch (err) {
@@ -355,6 +372,10 @@ function SessionContent(): React.ReactElement {
                 setHighlightedWordId={setHighlightedWordId}
                 onWordClick={handleWordClick}
                 provenanceHighlightBox={provenanceHighlightBox}
+                // Block grounding locates the region a value sits in, not the value —
+                // so the highlight has to say so rather than pointing confidently at
+                // an area it only roughly knows. Every other tier bounds the text.
+                highlightPrecision={grounding === 'block' ? 'coarse' : 'exact'}
                 activeTool={activeTool}
                 setActiveTool={setActiveTool}
                 zoom={zoom}

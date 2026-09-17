@@ -48,6 +48,13 @@ interface DocumentViewerProps {
      *  derive: the zoom ceiling (`maxZoomFor`) and the true-size readout. */
     onFitScaleChange?: (fitScale: number | null) => void;
     provenanceHighlightBox?: BoundingBox | null;
+    /** How closely `provenanceHighlightBox` bounds the cell's actual source.
+     *  `'exact'` means the box is the union of the words (or cells) the value came
+     *  from; `'coarse'` means the grounding source only located the *region* it sits
+     *  in, so the box is a neighbourhood, not the text. Drawn differently — a solid
+     *  outline that is quietly wrong about where a value is would be worse than no
+     *  highlight at all. */
+    highlightPrecision?: 'exact' | 'coarse';
     /** Fired when the source image fails to load (e.g. the file was moved/deleted). */
     onLoadError?: () => void;
     /** 'all' shows every OCR region at its normal ambient opacity; 'issues' dims
@@ -102,6 +109,7 @@ const DocumentViewer = forwardRef<DocumentViewerHandle, DocumentViewerProps>(fun
     onZoomChange,
     onFitScaleChange,
     provenanceHighlightBox,
+    highlightPrecision = 'exact',
     onLoadError,
     overlayMode = 'all',
 }: DocumentViewerProps, ref) {
@@ -484,14 +492,25 @@ const DocumentViewer = forwardRef<DocumentViewerHandle, DocumentViewerProps>(fun
                         })}
 
                         {provenanceHighlightBox && (
+                            // A coarse box is drawn dashed and unfilled: the outline says
+                            // "somewhere in here", and a solid fill would claim the whole
+                            // region is the value. The title carries the same caveat for
+                            // anyone hovering it.
                             <rect
                                 x={provenanceHighlightBox.left - 2}
                                 y={provenanceHighlightBox.top - 2}
                                 width={provenanceHighlightBox.width + 4}
                                 height={provenanceHighlightBox.height + 4}
-                                className={`${highlightFill} ${highlightStroke} stroke-[2px]`}
+                                className={highlightPrecision === 'coarse'
+                                    ? `${highlightStroke} fill-none stroke-[2px]`
+                                    : `${highlightFill} ${highlightStroke} stroke-[2px]`}
+                                strokeDasharray={highlightPrecision === 'coarse' ? '8 6' : undefined}
                                 style={{ pointerEvents: 'none', vectorEffect: 'non-scaling-stroke' }}
-                            />
+                            >
+                                {highlightPrecision === 'coarse' && (
+                                    <title>Approximate location — this page was read at region precision, so the source of this value is somewhere in this area.</title>
+                                )}
+                            </rect>
                         )}
 
                         {isDrawing && currentBox && (

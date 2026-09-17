@@ -38,6 +38,7 @@ use crate::pipeline::client::{
     build_request_body, stream_completion, ContentPart, TokenLogprob, CANCELLED_MESSAGE,
 };
 use crate::pipeline::prompt::{build_table_text, sanitize_words_for_provenance};
+use crate::pipeline::surya::DeclaredGrid;
 
 /// Text deltas are coalesced to this interval. Each emit is a JSON serialize plus an
 /// IPC post, and a table can run to thousands of tokens — matching `setup.rs`'s
@@ -61,6 +62,14 @@ pub struct PageArtifact {
     /// The words the model was actually shown, in the order it saw them. Returned
     /// rather than re-derived so provenance matches against exactly this list.
     pub grounded_items: Vec<OcrWord>,
+    /// Row and column bands a grounding model reported directly, in page pixels.
+    ///
+    /// `None` on every preset that ships today: Tesseract supplies words, not bands,
+    /// so provenance infers the grid as it always has. When a grounding preset lands
+    /// this carries the geometry that lets it stop inferring — see
+    /// [`crate::pipeline::surya`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grid: Option<DeclaredGrid>,
     pub raw_model_output: String,
     pub logprobs: Vec<TokenLogprob>,
     pub finish_reason: Option<String>,
@@ -395,6 +404,9 @@ async fn run_page(
                     preset_version: preset.version,
                     grounding: preset.grounding(),
                     grounded_items: grounded.clone(),
+                    // Only `GroundModel` can report bands, and no shipped preset uses
+                    // it yet; `GroundTesseract` grounds at word precision instead.
+                    grid: None,
                     truncated: result.finish_reason.as_deref() == Some("length"),
                     raw_model_output: result.content,
                     logprobs: result.logprobs,

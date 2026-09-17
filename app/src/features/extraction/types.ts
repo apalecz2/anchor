@@ -71,7 +71,49 @@ export type TokenLogprob = {
     charOffset: number;     // cumulative char offset in the raw streamed content
 };
 
-export type AgreementStatus = "agree" | "disagree" | "image_only";
+/**
+ * How precisely the source of a cell can be located on the page — the `Grounding`
+ * enum in `src-tauri/src/pipeline/catalog.rs`, mirrored here because the executor
+ * reports it on every artifact and it decides three things in the frontend: whether
+ * provenance infers the table grid or is handed one, which agreement axis confidence
+ * scores on, and how precisely the document highlight can be drawn.
+ *
+ *  - `word`  — per-word boxes (Tesseract). Today's only shipped tier.
+ *  - `cell`  — row × column bands the grounding model reported directly.
+ *  - `block` — region boxes only. Honest, but coarse: the P0 spike saw a whole
+ *              transcript come back as one block, which is why no preset relies on it.
+ *  - `none`  — no locations at all; the structuring model is the only source.
+ */
+export type GroundingKind = "none" | "block" | "word" | "cell";
+
+/** An inclusive 1-D interval in page pixels. */
+export type Span = { lo: number; hi: number };
+
+/**
+ * A table grid the grounding model reported, rather than one inferred from word
+ * geometry. Arrives on the page artifact already converted to page pixels (see
+ * `pipeline/surya.rs`), so only one coordinate space is ever in play here.
+ */
+export type DeclaredGrid = {
+    rowBands: Span[];
+    colBands: Span[];
+};
+
+/**
+ * How the two sources of a cell relate.
+ *
+ * The axis is "**structure source vs grounding source**", not "LLM vs Tesseract" —
+ * which is what it always modelled, and what lets a model-grounded, model-verified
+ * page still earn `high`.
+ *
+ *  - `agree`         — the structured value was found in the grounded source.
+ *  - `disagree`      — the sources conflict (today: a blank cell over a region that
+ *                      still holds unclaimed text).
+ *  - `image_only`    — grounding found nothing matching this value.
+ *  - `self_reported` — there is no second source *by design* (`none` grounding), so
+ *                      the model is vouching for itself. Capped at `medium`.
+ */
+export type AgreementStatus = "agree" | "disagree" | "image_only" | "self_reported";
 export type TrustLevel = "high" | "medium" | "low";
 
 export type CellConfidence = {

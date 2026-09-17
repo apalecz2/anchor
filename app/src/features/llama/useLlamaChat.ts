@@ -9,12 +9,15 @@ import { parseTSVWithOffsets, computeProvenanceCells } from '../extraction/confi
 import { toCsv } from '../export/exportUtils';
 import { readSetting } from '../../lib/settings';
 import type { OcrWord } from '../ocr/types';
-import type { ProvenanceCell, TokenLogprob } from '../extraction/types';
+import type { DeclaredGrid, GroundingKind, ProvenanceCell, TokenLogprob } from '../extraction/types';
 
 type TableFormatResult = {
     csvContent: string;
     provenanceCells: ProvenanceCell[][];
     sanitizedWords: OcrWord[];
+    /** How precisely this page's cells can be traced back to the image — drives the
+     *  document highlight's precision as well as the trust axis above. */
+    grounding: GroundingKind;
     /** True when the model hit its token budget (`finish_reason: "length"`) and
      *  the table is likely missing trailing rows/cells. */
     truncated: boolean;
@@ -36,8 +39,11 @@ type PageArtifact = {
     run_id: number;
     preset_id: string;
     preset_version: number;
-    grounding: 'none' | 'block' | 'word' | 'cell';
+    grounding: GroundingKind;
     grounded_items: OcrWord[];
+    /** Row/column bands a grounding model reported, already in page pixels. Absent on
+     *  every preset that ships today — Tesseract supplies words, not bands. */
+    grid?: DeclaredGrid | null;
     raw_model_output: string;
     logprobs: TokenLogprob[];
     finish_reason: string | null;
@@ -155,13 +161,19 @@ export const useLlamaChat = () => {
 
             // Matching runs against the exact list the model was shown, handed back by
             // the executor — not a list re-derived here, which could differ.
+            // The grounding tier is the preset's, not a guess: it selects where the
+            // table grid comes from and which agreement axis the heatmap scores on.
             const sanitizedWords = artifact.grounded_items;
-            const cellProvenance = matchCellsToOcr(csvRows, sanitizedWords, naturalHeight);
+            const cellProvenance = matchCellsToOcr(csvRows, sanitizedWords, naturalHeight, {
+                grounding: artifact.grounding,
+                grid: artifact.grid,
+            });
             const provenanceCells = computeProvenanceCells(
                 cellProvenance,
                 artifact.logprobs,
                 artifact.raw_model_output,
                 sanitizedWords,
+                artifact.grounding,
             );
 
             // Re-serialize a clean, correctly-escaped CSV from the parsed rows. Use the
@@ -200,6 +212,7 @@ export const useLlamaChat = () => {
                 csvContent,
                 provenanceCells,
                 sanitizedWords,
+                grounding: artifact.grounding,
                 truncated: artifact.truncated,
                 contextOverflow: artifact.context_overflow,
             };

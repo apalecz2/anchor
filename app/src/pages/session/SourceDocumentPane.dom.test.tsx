@@ -48,6 +48,7 @@ function renderPane(over: { totalPages?: number; activePageIndex?: number } = {}
             setHighlightedWordId={vi.fn()}
             onWordClick={vi.fn()}
             provenanceHighlightBox={null}
+            highlightPrecision="exact"
             activeTool="pan"
             setActiveTool={vi.fn()}
             zoom={1}
