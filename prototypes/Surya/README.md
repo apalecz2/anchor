@@ -123,6 +123,56 @@ mean/min/max, first 15 tokens) plus a one-line **VERDICT**:
 
 The full token stream is also written to `out/<image>.logprobs.json` for inspection.
 
+## Table-grid spike (`table-grid-test.mjs`)
+
+Answers the question the manifest-driven pipeline refactor branches on: **can Surya
+supply the table's row and column bands directly, so provenance matching can stop
+*inferring* them from word geometry?**
+
+`provenance.ts` already thinks in row bands × column bands — `gridMatchPass` and
+`verifyEmptyCellsPass` both call `unclaimedWordsInRegion(words, claimed, rowBand,
+colBand)`. Today those bands are inferred by `detectColumnSeparators` (a
+whitespace-channel sweep) and `alignRowsToLines` (a Needleman–Wunsch DP), which is
+the subject of all six Provenance/Matching post-mortems in `docs/issues.md`.
+Surya's `table` mode is prompted to return exactly those bands.
+
+```bash
+node table-grid-test.mjs <image.png>                      # spawns its own server
+node table-grid-test.mjs --connect --port 8099 image.png  # use a running server
+```
+
+It runs **both** modes in one server session — `table` for the bands, `ocr` for the
+`<table>` HTML — intersects Row × Col into cell rectangles, cross-checks the derived
+grid against the HTML's real shape, and writes `out/<image>.grid.overlay.html` so
+"do the cells land in the right place" is answerable by eye.
+
+### Recorded result — `sample_invoice.png`, 2026-09-16: **OUTCOME A**
+
+| | |
+|---|---|
+| Bands returned | **13 Row × 6 Col**, 0 overlapping, 0 degenerate, 0 out-of-range |
+| Cost | **1.8 s / 192 tokens** for the bands (OCR mode: 5.4 s / 783 tokens) |
+| vs. the model's own `<table>` | 13 rows — **exact match**. Columns: 6 bands vs 5 HTML columns |
+
+The Col bands are a **perfect contiguous tiling** of the table width:
+
+```
+[12–111] [111–212] [212–651] [651–811] [811–910] [910–977]
+  dept     number    description  attempted  earned   grade
+```
+
+The Δcols=1 is the interesting part, and it favours the bands. The page genuinely
+has six visual columns; Surya's own HTML collapses `BUSINESS | 1299E` under a single
+`Course` header *and* drops the Grade value from body rows, so its `<table>` is
+internally inconsistent (header labels ≠ body semantics) while the geometry is exact.
+This is the same failure `docs/issues.md` § Provenance/Matching records as "course
+column split into two columns by right-justified content".
+
+**Conclusion for the refactor:** treat the bands as the structural source of truth
+and the `<table>` HTML as a source of *cell text only* — not of cell geometry or
+column count. Note also that block grounding would be near-useless on this page:
+OCR mode returned the whole transcript as **one** `data-label="Table"` block.
+
 ## Limitations (it's an MVP)
 
 - Images only (PNG/JPEG/WebP). PDFs would need a render-to-image step — the app
