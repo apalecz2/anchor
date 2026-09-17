@@ -22,6 +22,7 @@ use tauri::{Manager, WindowEvent};
 
 use llama::{stop_all_servers, sweep_orphan_server, AppState};
 use ocr::ProcessState;
+use pipeline::executor::PipelineState;
 use zoom::ZoomState;
 
 /// Label of the primary window (Tauri's default when none is configured). The
@@ -144,6 +145,7 @@ pub fn run() {
         .manage(AppState::new())
         .manage(ProcessState::new())
         .manage(ZoomState::new())
+        .manage(PipelineState::new())
         .on_window_event(|window, event| {
             if matches!(event, WindowEvent::CloseRequested { .. })
                 && window.label() == MAIN_WINDOW_LABEL
@@ -184,6 +186,10 @@ pub fn run() {
             llama::stop_llama_server,
             llama::get_llama_server_port,
             llama::llama_server_status,
+            // Manifest-driven pipeline. Registered but not yet driven by the UI —
+            // the frontend keeps orchestrating until the two are compared.
+            pipeline::executor::run_extraction_pipeline,
+            pipeline::executor::cancel_extraction_pipeline,
             // Setup wizard
             setup::check_setup_complete,
             hardware::detect_hardware,

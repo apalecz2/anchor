@@ -15,15 +15,6 @@
 //! the TSV-not-CSV decision (design.md §4). Keeping them beside the model that
 //! requires them is what stops the two drifting apart.
 //!
-//! # Status
-//!
-//! Nothing executes this yet — the executor that walks these steps arrives in a
-//! later phase. It is compiled and unit-tested from day one on purpose, for the
-//! same reason `menu` is compiled on every platform: a catalog that isn't built
-//! and checked is a catalog that rots. Hence the module-level `dead_code` allow.
-
-#![allow(dead_code)]
-
 use serde::Serialize;
 
 use crate::paths::{MMPROJ_FILENAME, MODEL_FILENAME};

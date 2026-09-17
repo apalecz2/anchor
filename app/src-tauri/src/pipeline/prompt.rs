@@ -32,15 +32,6 @@
 //! hold the two implementations together; the tests at the bottom read the very
 //! same files the Vitest suite writes.
 //!
-//! # Status
-//!
-//! The executor that calls these arrives in a later phase; until then only the
-//! tests do. Built and checked from the start regardless, because the whole point
-//! is to keep it in step with the TypeScript it mirrors — hence the `dead_code`
-//! allow, as in `catalog`.
-
-#![allow(dead_code)]
-
 use crate::ocr::OcrWord;
 
 /// Length in UTF-16 code units — what JavaScript's `String.length` returns.

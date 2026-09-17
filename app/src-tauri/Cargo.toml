@@ -64,9 +64,17 @@ image = "0.25.10"
 
 # Setup / dependency download
 reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls"] }
-# Async backoff between download retries (Tauri already pulls tokio in transitively).
-tokio = { version = "1", features = ["time"] }
+# Async backoff between download retries, plus the pipeline executor's runtime needs.
+# `rt`/`macros` were previously only reaching us through Tauri's feature unification —
+# `spawn_blocking` and `select!` are used directly, so they are declared here rather
+# than relying on another crate happening to enable them.
+tokio = { version = "1", features = ["time", "rt", "sync", "macros"] }
+# CancellationToken: a pipeline step is a single 30-120s await, so cancellation has to
+# be something `select!` can race against, not a flag polled between iterations.
+tokio-util = "0.7"
 sha2 = "0.10"
+# Page images reach the model as `data:image/png;base64,...` chat content parts.
+base64 = "0.22"
 zip = "2"
 # llama.cpp ships macOS releases as .tar.gz (Windows is .zip)
 flate2 = "1"
