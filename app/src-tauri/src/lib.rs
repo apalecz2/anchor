@@ -199,6 +199,7 @@ pub fn run() {
             setup::verify_file_hash,
             setup::get_setup_paths,
             setup::persist_backend,
+            setup::persist_preset,
             setup::get_asset_manifest,
             setup::extract_archive,
         ])

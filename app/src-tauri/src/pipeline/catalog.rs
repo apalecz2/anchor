@@ -471,6 +471,12 @@ pub const TESSERACT_QWEN: PipelinePreset = PipelinePreset {
     ],
 };
 
+/// Every preset the app can run, **ordered most capable first**.
+///
+/// That ordering is load-bearing, not cosmetic: `hardware::recommend_preset` picks the
+/// first entry a machine's RAM and VRAM satisfy, so inserting a new preset places it
+/// in the recommendation ladder. A preset added in the wrong position silently becomes
+/// the recommendation for machines that should have got something else.
 pub const PRESETS: &[PipelinePreset] = &[TESSERACT_QWEN];
 
 /// The preset used when nothing else is selected.
@@ -482,6 +488,30 @@ pub fn model(id: &str) -> Option<&'static ModelSpec> {
 
 pub fn preset(id: &str) -> Option<&'static PipelinePreset> {
     PRESETS.iter().find(|p| p.id == id)
+}
+
+/// Find the model file a setup asset id delivers.
+///
+/// This is the join between the catalog and the asset manifest, and it runs in this
+/// direction on purpose: `setup.rs` is handed an `asset_id` and needs to know where
+/// the file lands, which only the catalog knows. Keeping the mapping here means adding
+/// a model is a catalog edit plus a pinned asset, with no third list to update.
+pub fn model_file_by_asset(asset_id: &str) -> Option<&'static ModelFile> {
+    MODELS
+        .iter()
+        .flat_map(|m| m.files.iter())
+        .find(|f| f.asset_id == asset_id)
+}
+
+/// Every asset id the catalog's models need, deduplicated.
+pub fn all_model_asset_ids() -> Vec<&'static str> {
+    let mut ids = Vec::new();
+    for file in MODELS.iter().flat_map(|m| m.files.iter()) {
+        if !ids.contains(&file.asset_id) {
+            ids.push(file.asset_id);
+        }
+    }
+    ids
 }
 
 // ---------------------------------------------------------------------------

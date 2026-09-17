@@ -8,6 +8,8 @@ use std::process::Command;
 
 use serde::Serialize;
 
+use crate::pipeline::catalog::{self, PipelinePreset};
+
 /// Build a `Command` that won't flash a console window on Windows. Anchor is a GUI
 /// app, so shelling out to a probe (PowerShell, nvidia-smi) would otherwise pop a
 /// visible console window on every launch during hardware detection. `CREATE_NO_WINDOW`
@@ -37,6 +39,25 @@ pub struct HardwareInfo {
     /// Backends the user may choose in the custom installer on this platform,
     /// independent of the detected GPU (the wizard warns about mismatches).
     pub available_backends: Vec<String>,
+    /// The pipeline preset this machine should run, chosen from the catalog by
+    /// [`recommend_preset`]. The wizard pre-selects it; the user may override.
+    pub recommended_preset: String,
+    /// Every catalog preset with whether this machine meets its requirements, so the
+    /// picker can show the ones it cannot run as *unavailable* rather than hiding
+    /// them — a user comparing options needs to see what the machine rules out.
+    pub presets: Vec<PresetAvailability>,
+}
+
+#[derive(Serialize)]
+pub struct PresetAvailability {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    /// Sum of every model's weights, in MB — the download the user is agreeing to.
+    pub download_mb: u32,
+    pub min_ram_mb: u32,
+    pub min_vram_mb: Option<u32>,
+    pub supported: bool,
 }
 
 /// `async` so Tauri runs it on the async runtime rather than the main (UI)
@@ -68,7 +89,84 @@ fn probe_hardware() -> HardwareInfo {
         recommended_backend,
         os: current_os().into(),
         available_backends: available_backends(),
+        recommended_preset: recommend_preset(ram_mb, vram_mb, catalog::PRESETS)
+            .id
+            .into(),
+        presets: preset_availability(ram_mb, vram_mb, catalog::PRESETS),
     }
+}
+
+/// Whether a machine meets a preset's declared floor.
+///
+/// A preset that names no VRAM requirement runs anywhere; one that does is only
+/// offered when VRAM was read *and* is sufficient. An unreadable VRAM figure counts
+/// as insufficient here, which is the opposite of [`recommend_backend`]'s treatment of
+/// the same `None` — deliberately. There, guessing wrong costs some speed; here it
+/// costs a multi-gigabyte download for a pipeline the machine then cannot run.
+fn meets(preset: &PipelinePreset, ram_mb: u64, vram_mb: Option<u64>) -> bool {
+    if ram_mb < u64::from(preset.requires.min_ram_mb) {
+        return false;
+    }
+    match preset.requires.min_vram_mb {
+        None => true,
+        Some(needed) => vram_mb.is_some_and(|have| have >= u64::from(needed)),
+    }
+}
+
+/// Total weights a preset downloads, in MB.
+fn download_mb(preset: &PipelinePreset) -> u32 {
+    preset
+        .model_ids()
+        .iter()
+        .filter_map(|id| catalog::model(id))
+        .map(|m| m.footprint.weights_mb)
+        .sum()
+}
+
+/// Pick the pipeline this machine should run: the first preset in catalog order whose
+/// requirements it meets.
+///
+/// `ram_mb` was collected by every platform probe from the beginning and never used in
+/// a decision; this is what it was collected for.
+///
+/// **`PRESETS` is ordered most-capable first** — that ordering is the ranking, and
+/// `catalog.rs` says so beside the list. The alternative, inferring capability from
+/// something measurable like total download size, reads plausibly and is wrong as soon
+/// as two small specialized models outclass one large generalist. A separate `rank`
+/// field would be a second source of truth that could quietly disagree with the steps.
+///
+/// Falls back to the least demanding preset when nothing qualifies: an unsupported
+/// machine still has to be offered something, and the wizard shows the requirements it
+/// failed beside it, so the user can see why it will struggle.
+fn recommend_preset(
+    ram_mb: u64,
+    vram_mb: Option<u64>,
+    presets: &'static [PipelinePreset],
+) -> &'static PipelinePreset {
+    presets
+        .iter()
+        .find(|p| meets(p, ram_mb, vram_mb))
+        .or_else(|| presets.last())
+        .unwrap_or(&catalog::TESSERACT_QWEN)
+}
+
+fn preset_availability(
+    ram_mb: u64,
+    vram_mb: Option<u64>,
+    presets: &'static [PipelinePreset],
+) -> Vec<PresetAvailability> {
+    presets
+        .iter()
+        .map(|p| PresetAvailability {
+            id: p.id.into(),
+            label: p.label.into(),
+            description: p.description.into(),
+            download_mb: download_mb(p),
+            min_ram_mb: p.requires.min_ram_mb,
+            min_vram_mb: p.requires.min_vram_mb,
+            supported: meets(p, ram_mb, vram_mb),
+        })
+        .collect()
 }
 
 /// Minimum VRAM (MB) before an NVIDIA GPU is worth the CUDA build over CPU.
@@ -308,6 +406,98 @@ fn query_hardware_linux() -> (Option<String>, Option<String>, Option<u64>, u64) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- preset recommendation ----
+    //
+    // The real catalog has one preset, so exercising only that would prove nothing
+    // about the ladder. These build a three-rung catalog and walk a machine up it.
+
+    const LOW: PipelinePreset = PipelinePreset {
+        id: "low",
+        requires: catalog::Requirements {
+            min_ram_mb: 4_096,
+            min_vram_mb: None,
+        },
+        ..catalog::TESSERACT_QWEN
+    };
+    const MID: PipelinePreset = PipelinePreset {
+        id: "mid",
+        requires: catalog::Requirements {
+            min_ram_mb: 16_384,
+            min_vram_mb: None,
+        },
+        ..catalog::TESSERACT_QWEN
+    };
+    const HIGH: PipelinePreset = PipelinePreset {
+        id: "high",
+        requires: catalog::Requirements {
+            min_ram_mb: 16_384,
+            min_vram_mb: Some(8_192),
+        },
+        ..catalog::TESSERACT_QWEN
+    };
+    // Most capable first — the ordering `recommend_preset` reads as the ranking.
+    const LADDER: &[PipelinePreset] = &[HIGH, MID, LOW];
+
+    #[test]
+    fn recommends_the_most_capable_preset_the_machine_meets() {
+        assert_eq!(recommend_preset(32_768, Some(12_288), LADDER).id, "high");
+        // Plenty of RAM, but the GPU is too small for the top rung.
+        assert_eq!(recommend_preset(32_768, Some(4_096), LADDER).id, "mid");
+        assert_eq!(recommend_preset(16_384, None, LADDER).id, "mid");
+        assert_eq!(recommend_preset(8_192, None, LADDER).id, "low");
+    }
+
+    /// Unreadable VRAM must not qualify a machine for a VRAM-gated preset. This is the
+    /// opposite of `recommend_backend`'s treatment of the same `None`, and the reason
+    /// is the cost of being wrong: there it is some lost speed, here it is a
+    /// multi-gigabyte download for a pipeline that then will not run.
+    #[test]
+    fn unknown_vram_does_not_qualify_for_a_vram_gated_preset() {
+        assert_eq!(recommend_preset(32_768, None, LADDER).id, "mid");
+    }
+
+    /// A machine under every floor still has to be given something to install.
+    #[test]
+    fn a_machine_below_every_floor_gets_the_least_demanding_preset() {
+        assert_eq!(recommend_preset(2_048, None, LADDER).id, "low");
+    }
+
+    #[test]
+    fn the_real_catalog_recommends_something_runnable_on_any_machine() {
+        for (ram, vram) in [(2_048, None), (8_192, None), (65_536, Some(24_576))] {
+            let p = recommend_preset(ram, vram, catalog::PRESETS);
+            assert!(
+                catalog::preset(p.id).is_some(),
+                "{} is not in the catalog",
+                p.id
+            );
+        }
+    }
+
+    #[test]
+    fn availability_reports_every_preset_with_its_requirements() {
+        let rows = preset_availability(8_192, None, LADDER);
+        assert_eq!(rows.len(), 3);
+        // Reported, not hidden: a user comparing options needs to see what their
+        // machine rules out, and why.
+        assert_eq!(rows.iter().filter(|r| r.supported).count(), 1);
+        let high = rows.iter().find(|r| r.id == "high").unwrap();
+        assert!(!high.supported);
+        assert_eq!(high.min_vram_mb, Some(8_192));
+        assert!(high.download_mb > 0, "the download size must be shown");
+    }
+
+    #[test]
+    fn download_size_sums_every_model_the_preset_needs() {
+        let expected: u32 = catalog::TESSERACT_QWEN
+            .model_ids()
+            .iter()
+            .map(|id| catalog::model(id).unwrap().footprint.weights_mb)
+            .sum();
+        assert_eq!(download_mb(&catalog::TESSERACT_QWEN), expected);
+        assert!(expected > 0);
+    }
 
     #[test]
     fn recommend_backend_matrix() {

@@ -145,8 +145,18 @@ export default function DownloadStep({ config, onComplete, onError, onCancel }: 
                 await invoke('persist_backend', { backend: config.backend })
                     .catch(() => { /* non-fatal: the check falls back to not requiring cudart */ });
 
+                // Same reasoning as the backend, and the same failure if it is missing:
+                // the preset decides *which* assets this install needs, so a completeness
+                // check that ran without it would measure a half-finished install against
+                // the wrong pipeline. Written before the first byte, not on success.
+                if (config.presetId) {
+                    await invoke('persist_preset', { presetId: config.presetId })
+                        .catch(() => { /* non-fatal: the check falls back to the default preset */ });
+                }
+
                 const entries = await invoke<AssetManifestEntry[]>('get_asset_manifest', {
                     backend: config.backend,
+                    presetId: config.presetId ?? null,
                 });
                 setManifest(entries);
 
