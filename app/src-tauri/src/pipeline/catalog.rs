@@ -448,6 +448,20 @@ impl PipelinePreset {
 /// Page render width for PDFs, mirroring `ocr.rs`.
 const RENDER_TARGET_WIDTH: u32 = 2000;
 
+/// RAM floors, in **reported** megabytes rather than nominal ones.
+///
+/// A machine sold as 16 GB reports about 16,300 MB, not 16,384 — firmware and
+/// integrated graphics take their share before the OS ever sees it, and an 8 GB
+/// machine lands nearer 7,900. A floor written as `16_384` therefore excludes every
+/// 16 GB machine in existence, which is a silent, total failure of the requirement:
+/// `recommend_preset` simply never offers the preset and nothing reports why.
+///
+/// These are set below the nominal figure by enough to clear that gap on any
+/// configuration, and they are the numbers to change if a preset's real appetite turns
+/// out to differ — not the nominal size it is named after.
+const USABLE_8GB: u32 = 7_500;
+const USABLE_16GB: u32 = 15_000;
+
 pub const QWEN_3_5_4B: ModelSpec = ModelSpec {
     id: "qwen3.5-4b",
     label: "Qwen3.5 4B (vision)",
@@ -497,7 +511,7 @@ pub const QWEN_3_5_4B: ModelSpec = ModelSpec {
     roles: &[ModelRole::Structure, ModelRole::Verify, ModelRole::Chat],
     footprint: Footprint {
         weights_mb: 3_255, // 2.74 GB weights + 672 MB projector
-        min_ram_mb: 8_192,
+        min_ram_mb: USABLE_8GB,
         min_vram_mb: None,
     },
     user_supplied: false,
@@ -519,39 +533,56 @@ pub const SURYA_OCR_2: ModelSpec = ModelSpec {
     id: "surya-ocr-2",
     label: "Surya OCR 2 (layout)",
     family: "surya",
+    // Filenames are the ones `datalab-to/surya-ocr-2-gguf` publishes and the prototype
+    // downloads — the same bytes the P0 spike ran against, not a renaming.
     files: &[
         ModelFile {
             role: FileRole::Weights,
-            asset_id: "surya_ocr2_gguf",
-            relative_path: "surya-ocr-2/surya-ocr-2-Q8_0.gguf",
+            asset_id: "surya_gguf",
+            relative_path: "surya-ocr-2/surya-2.gguf",
         },
         ModelFile {
             role: FileRole::Mmproj,
-            asset_id: "surya_ocr2_mmproj_gguf",
-            relative_path: "surya-ocr-2/mmproj-surya-ocr-2-F16.gguf",
+            asset_id: "surya_mmproj_gguf",
+            relative_path: "surya-ocr-2/surya-2-mmproj.gguf",
+        },
+        ModelFile {
+            role: FileRole::ChatTemplate,
+            asset_id: "surya_chat_template",
+            relative_path: "surya-ocr-2/chat_template.jinja",
         },
     ],
+    // Every value below is the prototype's verified launch (`prototypes/Surya/README.md`
+    // § How it works), not a guess. The bands the P0 spike recorded came out of exactly
+    // this configuration, so deviating from it invalidates that result.
     launch: LaunchSpec {
-        // Bands are a couple of hundred tokens (192 for a 13-row transcript in the P0
-        // run), so a large window buys nothing and costs KV cache on a machine that is
-        // about to hold a second model as well.
-        ctx: 4096,
+        // 32k, not the ~200 tokens the *output* needs: a full-page image at Surya's
+        // resolution is the bulk of the window, and starving it is how the model ends
+        // up describing the page instead of mapping it.
+        ctx: 32_768,
         image_min_tokens: None,
         parallel: 1,
         gpu_layers: GpuLayers::AllWhenGpu,
-        // Surya ships its own chat template; without --jinja llama.cpp falls back to a
-        // generic one and the model answers in prose instead of the trained format.
+        // Without --jinja llama.cpp applies a generic chat template and the model
+        // answers in prose instead of the trained format. The prototype's README names
+        // this as the first thing to check when the boxes look wrong, which is why the
+        // shipped `chat_template.jinja` rides along above as a belt-and-braces fallback.
         jinja: true,
-        alias: None,
+        alias: Some("surya-ocr-2"),
     },
     request: RequestSpec {
         system_prompt: None,
         temperature: 0.0,
-        top_p: 1.0,
+        // 0.1, matching the prototype. This is a reproduction of a verified contract,
+        // not a sampling preference to tidy up.
+        top_p: 0.1,
         top_k: Some(1),
         presence_penalty: None,
         stop: &[],
         enable_thinking: None,
+        // Kept on: a model that returns no logprobs simply yields unscored cells (the
+        // confidence stage already handles `None`), whereas leaving it off would
+        // discard a signal a capable model was willing to give.
         logprobs: true,
         top_logprobs: 0,
     },
@@ -563,8 +594,8 @@ pub const SURYA_OCR_2: ModelSpec = ModelSpec {
     },
     roles: &[ModelRole::Ground],
     footprint: Footprint {
-        weights_mb: 1_100, // ~650M params at Q8_0 plus its vision projector
-        min_ram_mb: 16_384,
+        weights_mb: 1_472, // 1.27 GB weights + 205 MB projector (measured)
+        min_ram_mb: USABLE_16GB,
         min_vram_mb: None,
     },
     user_supplied: false,
@@ -641,12 +672,17 @@ pub const CUSTOM_GGUF: ModelSpec = ModelSpec {
 
 /// Every model the app can run.
 ///
-/// [`SURYA_OCR_2`] is **not here yet**, and its absence is enforced rather than
-/// accidental: `setup.rs` pins the bytes of every listed model's files, and a test
-/// asserts that list and this one cover each other exactly. Surya joins this array in
-/// the same change that adds its SHA-256 pins — not before, because a model the
-/// catalog offers and the installer cannot verify is exactly what the pinning
-/// invariant exists to prevent.
+/// [`SURYA_OCR_2`] is **debug-only** until its files are uploaded to R2. Its SHA-256
+/// digests are real — measured from the files `prototypes/Surya` downloads — but the
+/// R2 objects they name do not exist yet, so a release build that offered the preset
+/// would hand a user a 404 part-way through setup. The `cfg` is the same bargain
+/// `setup::accept_unpinned_or_err` already makes: a development build may run ahead of
+/// the pinned assets, a shipped one may never.
+///
+/// Removing the `cfg` is the change that ships it, and nothing else has to move.
+#[cfg(debug_assertions)]
+pub const MODELS: &[ModelSpec] = &[QWEN_3_5_4B, SURYA_OCR_2];
+#[cfg(not(debug_assertions))]
 pub const MODELS: &[ModelSpec] = &[QWEN_3_5_4B];
 
 /// Today's pipeline, expressed as data. Running this preset must reproduce the
@@ -658,7 +694,7 @@ pub const TESSERACT_QWEN: PipelinePreset = PipelinePreset {
     description: "Tesseract reads the page, Qwen3.5 4B builds the table. Lowest memory use.",
     version: 1,
     requires: Requirements {
-        min_ram_mb: 8_192,
+        min_ram_mb: USABLE_8GB,
         min_vram_mb: None,
     },
     steps: &[
@@ -692,8 +728,9 @@ pub const TESSERACT_QWEN: PipelinePreset = PipelinePreset {
 /// long document. The 16 GB floor is what pays for holding both — hence the RAM
 /// requirement above what either model needs alone.
 ///
-/// **Not in [`PRESETS`] yet** — it names [`SURYA_OCR_2`], whose downloads are not
-/// pinned. It is validated by a test in the meantime so it cannot rot while it waits.
+/// **Debug builds only**, for the same reason as [`SURYA_OCR_2`]: the weights it needs
+/// are not on R2 yet. In a development build it is selectable and runnable against
+/// files placed in AppData by hand; in a release build it does not exist.
 pub const TESSERACT_SURYA_QWEN: PipelinePreset = PipelinePreset {
     id: "tesseract-surya-qwen3.5-4b",
     label: "Accurate",
@@ -701,7 +738,7 @@ pub const TESSERACT_SURYA_QWEN: PipelinePreset = PipelinePreset {
 Qwen3.5 4B builds the table. Better on dense or irregular tables.",
     version: 1,
     requires: Requirements {
-        min_ram_mb: 16_384,
+        min_ram_mb: USABLE_16GB,
         min_vram_mb: None,
     },
     steps: &[
@@ -733,6 +770,9 @@ Qwen3.5 4B builds the table. Better on dense or irregular tables.",
 /// first entry a machine's RAM and VRAM satisfy, so inserting a new preset places it
 /// in the recommendation ladder. A preset added in the wrong position silently becomes
 /// the recommendation for machines that should have got something else.
+#[cfg(debug_assertions)]
+pub const PRESETS: &[PipelinePreset] = &[TESSERACT_SURYA_QWEN, TESSERACT_QWEN];
+#[cfg(not(debug_assertions))]
 pub const PRESETS: &[PipelinePreset] = &[TESSERACT_QWEN];
 
 /// Tesseract grounds the page and the user's own model builds the table.
@@ -1508,6 +1548,39 @@ mod tests {
                 m.id
             );
         }
+    }
+
+    /// Surya's spec is a **reproduction of a verified launch**, not a configuration to
+    /// tune. The P0 spike's bands came out of exactly these arguments
+    /// (`prototypes/Surya/README.md` § How it works), so every one of them is pinned
+    /// here — the first draft of this spec guessed four of them wrong, and a model that
+    /// answers in prose instead of JSON looks like a parser bug from every angle except
+    /// this one.
+    #[test]
+    fn surya_reproduces_the_prototypes_verified_launch() {
+        let m = any_model("surya-ocr-2").expect("surya must resolve");
+        assert_eq!(m.launch.ctx, 32_768);
+        assert_eq!(m.launch.parallel, 1);
+        assert_eq!(m.launch.alias, Some("surya-ocr-2"));
+        assert!(m.launch.jinja);
+        assert_eq!(m.request.temperature, 0.0);
+        assert_eq!(m.request.top_p, 0.1);
+        assert!(
+            m.request.system_prompt.is_none(),
+            "one user turn, no system prompt"
+        );
+        // The shipped template is the fallback the README calls the first thing to
+        // check when the boxes come back wrong.
+        assert_eq!(
+            m.file(FileRole::ChatTemplate).map(|f| f.relative_path),
+            Some("surya-ocr-2/chat_template.jinja")
+        );
+        // Filenames are upstream's, so the bytes are the ones the spike ran against.
+        assert!(m
+            .file(FileRole::Weights)
+            .unwrap()
+            .relative_path
+            .ends_with("surya-2.gguf"));
     }
 
     #[test]

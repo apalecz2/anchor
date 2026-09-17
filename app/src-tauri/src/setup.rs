@@ -877,6 +877,60 @@ fn read_persisted_preset_id(data_dir: &Path) -> Option<String> {
         .filter(|id| catalog::preset(id).is_some())
 }
 
+/// One selectable pipeline, with everything the picker needs to present it honestly.
+#[derive(Serialize)]
+pub struct PresetOption {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub download_mb: u32,
+    pub min_ram_mb: u32,
+    pub min_vram_mb: Option<u32>,
+    /// This machine meets the preset's declared floor.
+    pub supported: bool,
+    /// Every asset this preset needs is already on disk. A preset that is *not*
+    /// installed can still be chosen — the wizard fetches what is missing — but the
+    /// UI has to say so first, because switching to one sends the next launch back
+    /// through setup.
+    pub installed: bool,
+    pub selected: bool,
+}
+
+/// Every pipeline the user can choose between, in catalog order (most capable first).
+///
+/// `async` for the same reason as `detect_hardware`: it probes the GPU, which shells
+/// out to WMI or `system_profiler` and routinely takes seconds. Doing that on the main
+/// thread would freeze the settings page while it ran.
+#[tauri::command]
+pub async fn list_pipeline_presets(
+    app_handle: tauri::AppHandle,
+) -> Result<Vec<PresetOption>, String> {
+    let data_dir = resolve_data_dir(&app_handle)?;
+    let backend = read_persisted_backend(&data_dir);
+    let selected = read_persisted_preset(&data_dir).id;
+
+    let hardware = tokio::task::spawn_blocking(crate::hardware::probe_hardware)
+        .await
+        .map_err(|e| format!("hardware probe failed: {e}"))?;
+
+    Ok(catalog::PRESETS
+        .iter()
+        .map(|p| PresetOption {
+            id: p.id.into(),
+            label: p.label.into(),
+            description: p.description.into(),
+            download_mb: crate::hardware::download_mb(p),
+            min_ram_mb: p.requires.min_ram_mb,
+            min_vram_mb: p.requires.min_vram_mb,
+            supported: crate::hardware::meets(p, hardware.ram_mb, hardware.vram_mb),
+            installed: required_assets(backend.as_deref(), p)
+                .iter()
+                .all(|id| asset_installed(id, &data_dir)),
+            selected: p.id == selected,
+        })
+        .collect())
+}
+
 /// Persist the wizard's chosen pipeline preset. Rejects an id the catalog does not
 /// know rather than writing it — the same contract `persist_backend` holds.
 #[tauri::command]
@@ -969,6 +1023,12 @@ const LLAMA_CPP_BUILD: &str = "b9596 (18ef86ece)";
 // fallback URLs (and SHA-256 pins) reference; see HF_MODEL_URL / HF_MMPROJ_URL.
 const QWEN_MODEL_REVISION: &str = "unsloth/Qwen3.5-4B-GGUF@e87f176";
 
+/// Surya's upstream, deliberately *without* a commit suffix: the prototype fetches
+/// from `resolve/main` and no revision has been pinned yet. Recorded this way rather
+/// than with a made-up pin so the audit field says what is actually known — pin the
+/// revision here at the same time as uploading the objects to R2.
+const SURYA_SOURCE: &str = "datalab-to/surya-ocr-2-gguf (revision not yet pinned)";
+
 /// The pinned download for one model file, keyed by the `asset_id` a catalog
 /// [`catalog::ModelFile`] names.
 ///
@@ -990,8 +1050,11 @@ struct ModelAssetSpec {
     sha256: &'static str,
     /// Object key under `models/` in R2, and the filename the fallback resolves to.
     r2_key: &'static str,
-    /// Upstream mirror, used when R2 is unreachable. Pinned to a repo revision.
-    hf_fallback: &'static str,
+    /// Upstream mirror, used when R2 is unreachable — and **only** when it can be
+    /// pinned to an exact repo revision. `None` where no such pin exists yet: a
+    /// `resolve/main` URL would fail verification the moment the repo re-quants, which
+    /// is precisely when the fallback is needed, so no fallback is the safer answer.
+    hf_fallback: Option<&'static str>,
     version: &'static str,
 }
 
@@ -1002,7 +1065,7 @@ const MODEL_ASSETS: &[ModelAssetSpec] = &[
         size_bytes: 672_423_616, // actual R2 Content-Length (verified 2026-06-16)
         sha256: "cd88edcf8d031894960bb0c9c5b9b7e1fea6ebee02b9f7ce925a00d12891f864",
         r2_key: MMPROJ_FILENAME,
-        hf_fallback: HF_MMPROJ_URL,
+        hf_fallback: Some(HF_MMPROJ_URL),
         version: QWEN_MODEL_REVISION,
     },
     ModelAssetSpec {
@@ -1011,8 +1074,44 @@ const MODEL_ASSETS: &[ModelAssetSpec] = &[
         size_bytes: 2_740_937_888, // actual R2 Content-Length (verified 2026-06-16)
         sha256: "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
         r2_key: MODEL_FILENAME,
-        hf_fallback: HF_MODEL_URL,
+        hf_fallback: Some(HF_MODEL_URL),
         version: QWEN_MODEL_REVISION,
+    },
+    // ---- Surya OCR 2 (the Accurate preset's grid model) ----
+    //
+    // ⚠️ These digests and sizes are **measured from the real files** (the ones
+    // `prototypes/Surya` downloads from `datalab-to/surya-ocr-2-gguf`), but the R2
+    // objects they name are **not uploaded yet**. That is why the model and its preset
+    // are `#[cfg(debug_assertions)]` in the catalog: a debug build can run them against
+    // files placed in AppData by hand, while a release build cannot offer a download
+    // that would 404. Uploading these three objects under `models/` and dropping the
+    // two `cfg` attributes is the whole of what ships this preset.
+    ModelAssetSpec {
+        asset_id: "surya_gguf",
+        label: "Surya layout model (1.3 GB)",
+        size_bytes: 1_266_400_864,
+        sha256: "1f18abe17b1ed8b4e47ee9b1ad0e274c93daf5efbb6b29a04ff1712e37051e05",
+        r2_key: "surya-2.gguf",
+        hf_fallback: None,
+        version: SURYA_SOURCE,
+    },
+    ModelAssetSpec {
+        asset_id: "surya_mmproj_gguf",
+        label: "Surya vision projector (205 MB)",
+        size_bytes: 204_986_688,
+        sha256: "98c0563673b1657ff6d021d1e5f04af06cbf61bb40c63ac613e8bb71b42fb2c0",
+        r2_key: "surya-2-mmproj.gguf",
+        hf_fallback: None,
+        version: SURYA_SOURCE,
+    },
+    ModelAssetSpec {
+        asset_id: "surya_chat_template",
+        label: "Surya chat template",
+        size_bytes: 2_872,
+        sha256: "86f17a85672e7f367b5e6c6de6f67f53ede0fba4abb3d67c583a6ef647c1aa85",
+        r2_key: "chat_template.jinja",
+        hf_fallback: None,
+        version: SURYA_SOURCE,
     },
 ];
 
@@ -1042,7 +1141,7 @@ fn model_asset_entry(
             .into_owned(),
         sha256: spec.sha256.into(),
         url_primary: format!("{R2_BASE}/models/{}", spec.r2_key),
-        url_fallback: Some(spec.hf_fallback.into()),
+        url_fallback: spec.hf_fallback.map(Into::into),
         extract_to_dir: None,
         flatten_marker: None,
         installed: false,

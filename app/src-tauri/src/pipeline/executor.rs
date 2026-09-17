@@ -559,9 +559,18 @@ pub async fn run_extraction_pipeline(
     backend: String,
     boost_tokens: Option<bool>,
 ) -> Result<PageArtifact, String> {
-    let preset_id = preset_id.unwrap_or_else(|| catalog::DEFAULT_PRESET_ID.to_owned());
-    let preset =
-        catalog::preset(&preset_id).ok_or_else(|| format!("unknown preset `{preset_id}`"))?;
+    // No preset named by the caller means "whatever this install was set up for" — the
+    // one persisted by the wizard — not the catalog default. They differ the moment
+    // more than one preset exists, and taking the default there would run a pipeline
+    // whose models the install may not even have downloaded, while
+    // `check_setup_complete` reported everything present.
+    let preset = match preset_id {
+        Some(id) => catalog::preset(&id).ok_or_else(|| format!("unknown preset `{id}`"))?,
+        None => {
+            let data_dir = crate::paths::resolve_data_dir(&app_handle)?;
+            crate::setup::read_persisted_preset(&data_dir)
+        }
+    };
 
     let (run_id, token) = pipeline.begin();
 
@@ -775,16 +784,14 @@ mod tests {
         assert_eq!(step_kind(&step), "ground_grid");
         assert_eq!(step_label(&step), "Mapping the table (Qwen3.5 4B (vision))");
 
-        // Surya exists as a catalog constant but is not in `MODELS` until its
-        // downloads are pinned, so it resolves to no spec. The label must degrade to
-        // the generic string rather than panic — the progress UI is not worth
-        // crashing a run over.
-        let pending = Step::GroundGrid {
-            model_id: catalog::SURYA_OCR_2.id,
+        // A model the catalog does not know must degrade to the generic string rather
+        // than panic on an unwrap — the progress UI is not worth crashing a run over.
+        let unknown = Step::GroundGrid {
+            model_id: "no-such-model",
             prompt: PromptId::SuryaTableBands,
             residency: Residency::Shared,
         };
-        assert_eq!(step_label(&pending), "Mapping the table");
+        assert_eq!(step_label(&unknown), "Mapping the table");
     }
 
     /// The grid is an improvement on inference, so failing to get one costs the page

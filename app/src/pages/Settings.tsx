@@ -16,6 +16,7 @@ import Icon from '../components/Icon';
 import PageContainer from '../components/PageContainer';
 import Section from '../components/PageSection';
 import CustomModelSection from '../features/settings/CustomModelSection';
+import PipelineSection from '../features/settings/PipelineSection';
 
 /** Label/description on the left, control on the right. Below `sm` the control
  *  drops onto its own line instead of competing with the text for width: at the
@@ -203,6 +204,14 @@ export default function Settings(): React.ReactElement {
                             </div>
                         </SettingRow>
                     </div>
+                </Section>
+
+                {/* ── Pipeline ── */}
+                <Section
+                    title="Pipeline"
+                    description="Which sequence of models runs an extraction. Changing this takes effect on the next extraction; a pipeline that needs models you don't have yet returns to setup first."
+                >
+                    <PipelineSection />
                 </Section>
 
                 {/* ── AI Model ── */}

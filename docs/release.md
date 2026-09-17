@@ -373,7 +373,7 @@ Two facts shape the whole effort:
 | Policy | Requirement | Status |
 |---|---|---|
 | **10.2.4** dependency disclosure | Non-integrated components delivering primary functionality must be disclosed **at the beginning of the description**. | 🔶 Draft text ready (§6.5) — paste at submission. |
-| **10.2.2** no undisclosed dynamic code | Downloads *are* the described functionality; each is SHA-256-pinned and verified before use (`download_file` in [setup.rs](../app/src-tauri/src/setup.rs)). | ✅ Compliant — say so in cert notes. |
+| **10.2.2** no undisclosed dynamic code | Downloads *are* the described functionality; each is SHA-256-pinned and verified before use (`download_file` in [setup.rs](../app/src-tauri/src/setup.rs)). See the note below on what "pinned" now rests on. | ✅ Compliant — say so in cert notes. |
 | **10.2.9** standalone installer | The installer installs a complete runnable app; the 3.5 GB fetch happens at *first run*, not during install. **Never move app code into a post-install fetch.** | ✅ Compliant. |
 | **10.2** signing | Store signs the MSIX on ingestion. (Fallback path requires the installer *and every installed PE* to be signed — see §5.1.) | ✅ N/A for MSIX. |
 | **10.2.7** clean uninstall | Must enable removal of everything, incl. the downloaded GB. | ✅ In-app *Remove all data and quit* (N5); 🔶 confirm what MSIX uninstall clears on a VM (§6.4). |
@@ -384,6 +384,10 @@ Two facts shape the whole effort:
 | **10.3.1** login | No account required — state in cert notes. | ✅ |
 | **10.4.1** graceful on incompatible hardware | Must degrade/message, not fail silently, on a GPU-less VM. | ✅ Wizard selects the CPU backend; re-verify per §7. |
 | **11.11** age rating | IARC questionnaire → Everyone / PEGI 3. | 🔶 At submission. |
+
+**What the 10.2.2 claim rests on now that models are catalog data.** Which models an install downloads is derived from the chosen pipeline preset rather than from a fixed list ([design.md](design.md) §7.1), so "every download is pinned" had to stop being a property of one hand-maintained array. It is now enforced by a build-time test: the catalog declares that a model needs a file, `MODEL_ASSETS` in [setup.rs](../app/src-tauri/src/setup.rs) pins what bytes that file may be, and `every_catalog_model_file_has_pinned_bytes_and_vice_versa` asserts the two cover each other **exactly**. A model added without a pin fails `cargo test`; an orphaned pin fails the same way. Empty digests are rejected outright, because `verify_file_hash` skips them by design. The catalog itself is compiled Rust constants, not a user-editable manifest — that is deliberate and is part of this claim.
+
+**One carve-out, and it is not a download.** Settings ▸ AI model lets a user point Anchor at a GGUF **already on their own disk** (design.md §7.5). Nothing is fetched: the app accepts only an absolute path to an existing local file whose contents begin with the `GGUF` magic bytes, and it explicitly refuses any URL. The in-app text states that a user-supplied model is not verified. This is the user running their own file on their own machine — the same category as opening a document — and it introduces no code path that downloads anything unpinned. If a certification reviewer asks, that is the answer: there is exactly one way bytes arrive over the network, it is `download_file`, and it verifies against a constant compiled into the binary.
 
 ### 6.4 The uninstall/AppData problem (10.2.7)
 

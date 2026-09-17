@@ -78,7 +78,7 @@ pub async fn detect_hardware() -> Result<HardwareInfo, String> {
 
 /// The probe itself, kept synchronous and separate from the command wrapper so
 /// tests can call it directly without an async runtime.
-fn probe_hardware() -> HardwareInfo {
+pub(crate) fn probe_hardware() -> HardwareInfo {
     let (gpu_name, gpu_vendor, vram_mb, ram_mb) = query_hardware();
     let recommended_backend = recommend_backend(gpu_vendor.as_deref(), vram_mb);
     HardwareInfo {
@@ -103,7 +103,7 @@ fn probe_hardware() -> HardwareInfo {
 /// as insufficient here, which is the opposite of [`recommend_backend`]'s treatment of
 /// the same `None` — deliberately. There, guessing wrong costs some speed; here it
 /// costs a multi-gigabyte download for a pipeline the machine then cannot run.
-fn meets(preset: &PipelinePreset, ram_mb: u64, vram_mb: Option<u64>) -> bool {
+pub(crate) fn meets(preset: &PipelinePreset, ram_mb: u64, vram_mb: Option<u64>) -> bool {
     if ram_mb < u64::from(preset.requires.min_ram_mb) {
         return false;
     }
@@ -114,7 +114,7 @@ fn meets(preset: &PipelinePreset, ram_mb: u64, vram_mb: Option<u64>) -> bool {
 }
 
 /// Total weights a preset downloads, in MB.
-fn download_mb(preset: &PipelinePreset) -> u32 {
+pub(crate) fn download_mb(preset: &PipelinePreset) -> u32 {
     preset
         .model_ids()
         .iter()
@@ -461,6 +461,45 @@ mod tests {
     #[test]
     fn a_machine_below_every_floor_gets_the_least_demanding_preset() {
         assert_eq!(recommend_preset(2_048, None, LADDER).id, "low");
+    }
+
+    /// A machine sold as "16 GB" reports ~16,300 MB, and an "8 GB" one ~7,900. A floor
+    /// written as the nominal figure excludes every machine of that size, and does it
+    /// silently — the preset is simply never offered and nothing says why. This walks
+    /// real reported sizes past the real catalog.
+    #[test]
+    fn nominal_ram_sizes_actually_clear_the_catalog_floors() {
+        // Reported totals from actual machines, not round powers of two.
+        let eight_gb: u64 = 7_936;
+        let sixteen_gb: u64 = 16_306;
+
+        for p in catalog::PRESETS {
+            if p.requires.min_vram_mb.is_some() {
+                continue; // VRAM-gated presets are a separate question
+            }
+            match p.requires.min_ram_mb {
+                floor if floor <= 8_192 => assert!(
+                    eight_gb >= u64::from(floor),
+                    "`{}` claims to run on 8 GB but demands {floor} MB, which no 8 GB machine reports",
+                    p.id
+                ),
+                floor => assert!(
+                    sixteen_gb >= u64::from(floor),
+                    "`{}` demands {floor} MB, which no 16 GB machine reports",
+                    p.id
+                ),
+            }
+        }
+
+        // And the end-to-end consequence: an 8 GB machine gets something, a 16 GB
+        // machine gets the most capable preset the catalog has for it.
+        assert!(catalog::preset(recommend_preset(eight_gb, None, catalog::PRESETS).id).is_some());
+        let best = recommend_preset(sixteen_gb, None, catalog::PRESETS);
+        assert_eq!(
+            best.id,
+            catalog::PRESETS[0].id,
+            "a 16 GB machine must reach the top of the ladder"
+        );
     }
 
     #[test]
