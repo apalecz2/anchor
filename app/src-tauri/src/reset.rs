@@ -21,7 +21,7 @@ use std::{
 use serde::Serialize;
 use tauri::Manager;
 
-use crate::llama::{stop_llama_server_process, AppState};
+use crate::llama::{stop_all_servers, AppState};
 use crate::ocr::{request_cancel_processing, ProcessState};
 use crate::paths::resolve_data_dir;
 use crate::setup::cancel_setup;
@@ -130,8 +130,9 @@ pub async fn remove_all_app_data(
 ) -> Result<RemovalReport, String> {
     // Stop everything still holding a handle on what we are about to delete. The GGUF
     // is memory-mapped by llama-server and Windows will not delete a mapped file at
-    // all, so this ordering is load-bearing rather than tidy.
-    let _ = stop_llama_server_process(&llama);
+    // all, so this ordering is load-bearing rather than tidy. A pipeline preset may
+    // have left *two* models resident, so every server has to go, not just one.
+    let _ = stop_all_servers(&llama);
     // An in-flight OCR job would write page images back into sessions/ *after* the
     // wipe; an in-flight download would do the same with its `.part`.
     request_cancel_processing(&process);

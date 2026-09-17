@@ -90,7 +90,7 @@ pub fn cancel_process_document(state: tauri::State<'_, ProcessState>) {
     request_cancel_processing(&state);
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
 pub struct BoundingBox {
     pub left: i32,
     pub top: i32,
@@ -98,7 +98,7 @@ pub struct BoundingBox {
     pub height: i32,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct OcrWord {
     pub text: String,
     pub confidence: f32,

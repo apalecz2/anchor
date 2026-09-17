@@ -20,7 +20,7 @@ mod zoom;
 
 use tauri::{Manager, WindowEvent};
 
-use llama::{stop_llama_server_process, sweep_orphan_server, AppState};
+use llama::{stop_all_servers, sweep_orphan_server, AppState};
 use ocr::ProcessState;
 use zoom::ZoomState;
 
@@ -149,7 +149,7 @@ pub fn run() {
                 && window.label() == MAIN_WINDOW_LABEL
             {
                 if let Some(state) = window.app_handle().try_state::<AppState>() {
-                    let _ = stop_llama_server_process(&state);
+                    let _ = stop_all_servers(&state);
                 }
             }
         })

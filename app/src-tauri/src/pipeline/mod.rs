@@ -10,3 +10,4 @@
 //! still orchestrates from the frontend.
 
 pub mod catalog;
+pub mod prompt;
