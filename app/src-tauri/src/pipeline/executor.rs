@@ -762,6 +762,7 @@ mod tests {
             &TESSERACT_QWEN,
             &catalog::OAR_OCR_QWEN,
             &catalog::TESSERACT_SURYA_QWEN,
+            &catalog::OAR_OCR_SURYA_QWEN,
         ] {
             for step in preset.steps {
                 assert!(

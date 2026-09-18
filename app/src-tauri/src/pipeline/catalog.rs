@@ -848,6 +848,60 @@ Qwen3.5 4B builds the table. Better on dense or irregular tables.",
     ],
 };
 
+/// oar-ocr's words with Surya's grid, then Qwen builds the table.
+///
+/// [`TESSERACT_SURYA_QWEN`] with the classical engine swapped — same pairing
+/// (a word-level grounder for text, Surya for the structure it's bad at
+/// inferring), same reasoning, just oar-ocr standing in for Tesseract per the
+/// accuracy testing that made oar-ocr the preferred engine ([`OAR_OCR_QWEN`]).
+/// A thin preset by design: `Step::GroundGrid` and the executor's handling of
+/// it are completely unchanged by which classical engine supplied the words,
+/// so this is a catalog-only addition — no executor/setup plumbing to write.
+///
+/// Both model steps stay `Shared` for the same correctness reason as the
+/// Tesseract version: the executor runs steps per page, and evicting Surya
+/// and Qwen between them would reload multi-gigabyte weights twice per page.
+///
+/// **Debug builds only**, for the same reason as [`SURYA_OCR_2`] and
+/// [`OAR_OCR_QWEN`]: Surya's weights aren't on R2 yet, and oar-ocr's files are
+/// pinned with real hashes but not yet uploaded either (see
+/// `setup.rs::get_oar_ocr_asset_specs`). Both gates have to lift before this
+/// preset can ship.
+pub const OAR_OCR_SURYA_QWEN: PipelinePreset = PipelinePreset {
+    id: "oar-ocr-surya-qwen3.5-4b",
+    label: "Accurate (Rust OCR)",
+    description: "A pure-Rust OCR engine reads the page, Surya maps the table's rows and \
+columns, Qwen3.5 4B builds the table. Better on dense or irregular tables.",
+    version: 1,
+    requires: Requirements {
+        min_ram_mb: USABLE_16GB,
+        min_vram_mb: None,
+    },
+    steps: &[
+        Step::Render {
+            target_width: RENDER_TARGET_WIDTH,
+        },
+        Step::GroundOcr {
+            engine: OcrEngine::OarOcr(OarOcrSpec {
+                det_model: "pp-ocrv6_small_det.onnx",
+                rec_model: "pp-ocrv6_small_rec.onnx",
+                dict: "ppocrv6_dict.txt",
+                word_box: true,
+            }),
+        },
+        Step::GroundGrid {
+            model_id: SURYA_OCR_2.id,
+            prompt: PromptId::SuryaTableBands,
+            residency: Residency::Shared,
+        },
+        Step::Structure {
+            model_id: QWEN_3_5_4B.id,
+            prompt: PromptId::QwenTsvExtract,
+            residency: Residency::Shared,
+        },
+    ],
+};
+
 /// Every preset the app can run, **ordered most capable first**.
 ///
 /// That ordering is load-bearing, not cosmetic: `hardware::recommend_preset` picks the
@@ -855,7 +909,12 @@ Qwen3.5 4B builds the table. Better on dense or irregular tables.",
 /// in the recommendation ladder. A preset added in the wrong position silently becomes
 /// the recommendation for machines that should have got something else.
 #[cfg(debug_assertions)]
-pub const PRESETS: &[PipelinePreset] = &[TESSERACT_SURYA_QWEN, OAR_OCR_QWEN, TESSERACT_QWEN];
+pub const PRESETS: &[PipelinePreset] = &[
+    OAR_OCR_SURYA_QWEN,
+    TESSERACT_SURYA_QWEN,
+    OAR_OCR_QWEN,
+    TESSERACT_QWEN,
+];
 #[cfg(not(debug_assertions))]
 pub const PRESETS: &[PipelinePreset] = &[TESSERACT_QWEN];
 
@@ -1164,6 +1223,22 @@ mod tests {
         assert!(!OAR_OCR_QWEN.uses_tesseract());
         assert_eq!(OAR_OCR_QWEN.grounding(), Grounding::Word);
         assert_eq!(OAR_OCR_QWEN.model_ids(), vec!["qwen3.5-4b"]);
+    }
+
+    /// oar-ocr's words + Surya's grid: the GroundGrid step must not change what
+    /// `grounding()` reports (still word-level, per the doc comment on
+    /// `grounding()` — a grid says where the table is, not where a value's
+    /// glyphs are), and both of Surya's and Qwen's model ids must be pulled in.
+    #[test]
+    fn oar_ocr_surya_preset_stays_word_grounded_and_declares_a_grid() {
+        assert!(OAR_OCR_SURYA_QWEN.uses_oar_ocr());
+        assert!(!OAR_OCR_SURYA_QWEN.uses_tesseract());
+        assert_eq!(OAR_OCR_SURYA_QWEN.grounding(), Grounding::Word);
+        assert!(OAR_OCR_SURYA_QWEN.declares_grid());
+        assert_eq!(
+            OAR_OCR_SURYA_QWEN.model_ids(),
+            vec!["surya-ocr-2", "qwen3.5-4b"]
+        );
     }
 
     #[test]
