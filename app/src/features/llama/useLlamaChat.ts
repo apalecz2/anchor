@@ -71,6 +71,8 @@ const PHASE_FOR_STEP: Record<string, ExtractionPhase> = {
     ground_grid: 'preparing',
     structure: 'generating',
     verify: 'generating',
+    // No model call, but it's the step producing the table -- same phase as structure.
+    assemble_from_grid: 'generating',
 };
 
 export const useLlamaChat = () => {

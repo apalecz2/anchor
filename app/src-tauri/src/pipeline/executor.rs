@@ -188,6 +188,7 @@ fn step_label(step: &Step) -> String {
             Some(m) => format!("Checking the table ({})", m.label),
             None => "Checking the table".into(),
         },
+        Step::AssembleFromGrid => "Building the table".into(),
     }
 }
 
@@ -199,6 +200,7 @@ fn step_kind(step: &Step) -> &'static str {
         Step::GroundGrid { .. } => "ground_grid",
         Step::Structure { .. } => "structure",
         Step::Verify { .. } => "verify",
+        Step::AssembleFromGrid => "assemble_from_grid",
     }
 }
 
@@ -347,6 +349,37 @@ async fn wait_for_health(base_url: &str, token: &CancellationToken) -> Result<()
     Err("the model server did not become ready in time".into())
 }
 
+/// Builds a TSV table directly from grid ∩ words, no model call: each cell is
+/// the words whose box center falls in that row×col region, left to right,
+/// joined by spaces. See `Step::AssembleFromGrid` and `prototypes/OarOcrSurya`,
+/// which validated this same intersection logic standalone.
+fn assemble_table_from_grid(grid: &DeclaredGrid, words: &[OcrWord]) -> String {
+    let mut rows = Vec::with_capacity(grid.row_bands.len());
+    for row in &grid.row_bands {
+        let mut cells = Vec::with_capacity(grid.col_bands.len());
+        for col in &grid.col_bands {
+            let mut cell_words: Vec<&OcrWord> = words
+                .iter()
+                .filter(|w| {
+                    let cx = f64::from(w.box_coords.left) + f64::from(w.box_coords.width) / 2.0;
+                    let cy = f64::from(w.box_coords.top) + f64::from(w.box_coords.height) / 2.0;
+                    cy >= row.lo && cy <= row.hi && cx >= col.lo && cx <= col.hi
+                })
+                .collect();
+            cell_words.sort_by_key(|w| w.box_coords.left);
+            cells.push(
+                cell_words
+                    .iter()
+                    .map(|w| w.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            );
+        }
+        rows.push(cells.join("\t"));
+    }
+    rows.join("\n")
+}
+
 /// Run one page through a preset.
 #[allow(clippy::too_many_arguments)]
 async fn run_page(
@@ -437,6 +470,37 @@ async fn run_page(
                     f64::from(natural_width),
                     f64::from(natural_height),
                 );
+            }
+
+            // No model call: intersect the grid a prior GroundGrid step found with
+            // the words a prior GroundOcr step found, directly. Quick integration
+            // for testing whether that's good enough without an LLM pass at all
+            // (see prototypes/OarOcrSurya, which validated the same logic
+            // standalone). Provenance/confidence need no changes on the frontend
+            // side: the synthesized TSV is built from exactly the words its own
+            // grid-first matcher will match it back to, so click-to-highlight
+            // falls out for free.
+            Step::AssembleFromGrid => {
+                let grid_ref = grid.as_ref().ok_or_else(|| {
+                    format!(
+                        "preset `{}` has no grid to assemble a table from -- a GroundGrid step must run first",
+                        preset.id
+                    )
+                })?;
+                let raw = assemble_table_from_grid(grid_ref, &grounded);
+                artifact = Some(PageArtifact {
+                    run_id,
+                    preset_id: preset.id.to_owned(),
+                    preset_version: preset.version,
+                    grounding: preset.grounding(),
+                    grounded_items: grounded.clone(),
+                    grid: grid.clone(),
+                    truncated: false,
+                    raw_model_output: raw,
+                    logprobs: Vec::new(),
+                    finish_reason: None,
+                    context_overflow: false,
+                });
             }
 
             Step::Structure {

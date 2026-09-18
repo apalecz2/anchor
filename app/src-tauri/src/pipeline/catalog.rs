@@ -363,6 +363,13 @@ pub enum Step {
         prompt: PromptId,
         residency: Residency,
     },
+    /// Produce the table with no model call at all: intersect a prior
+    /// `GroundGrid` step's row/column bands with a prior `GroundOcr` step's
+    /// words directly, cell text = the words whose box center falls in that
+    /// row×col region, left-to-right. Quick integration for testing whether
+    /// grid+OCR alone is good enough without Qwen (see `prototypes/OarOcrSurya`)
+    /// — stands in for `Structure` wherever a preset has no model step at all.
+    AssembleFromGrid,
 }
 
 impl Step {
@@ -370,7 +377,7 @@ impl Step {
     /// don't involve a model.
     pub fn required_role(&self) -> Option<ModelRole> {
         match self {
-            Step::Render { .. } | Step::GroundOcr { .. } => None,
+            Step::Render { .. } | Step::GroundOcr { .. } | Step::AssembleFromGrid => None,
             Step::GroundModel { .. } | Step::GroundGrid { .. } => Some(ModelRole::Ground),
             Step::Structure { .. } => Some(ModelRole::Structure),
             Step::Verify { .. } => Some(ModelRole::Verify),
@@ -379,7 +386,7 @@ impl Step {
 
     pub fn model_id(&self) -> Option<&'static str> {
         match self {
-            Step::Render { .. } | Step::GroundOcr { .. } => None,
+            Step::Render { .. } | Step::GroundOcr { .. } | Step::AssembleFromGrid => None,
             Step::GroundModel { model_id, .. }
             | Step::GroundGrid { model_id, .. }
             | Step::Structure { model_id, .. }
@@ -902,6 +909,51 @@ columns, Qwen3.5 4B builds the table. Better on dense or irregular tables.",
     ],
 };
 
+/// oar-ocr's words + Surya's grid, table assembled by intersection — **no LLM
+/// call at all**, no Qwen.
+///
+/// Quick integration for testing whether grid+OCR alone is good enough
+/// without a structuring model (see `prototypes/OarOcrSurya`, which validated
+/// the same intersection logic standalone and got a correct table on the
+/// sample invoice). `Step::AssembleFromGrid` does the intersection directly
+/// in the executor; provenance/confidence on the frontend need no changes,
+/// since the synthesized TSV is built from the exact same words its own
+/// grid-first matcher would match it back to.
+///
+/// **Debug builds only**, for the same reason as [`OAR_OCR_SURYA_QWEN`]:
+/// depends on Surya, whose weights aren't on R2 yet.
+pub const OAR_OCR_SURYA_NO_LLM: PipelinePreset = PipelinePreset {
+    id: "oar-ocr-surya-no-llm",
+    label: "Rust OCR + Surya (no LLM)",
+    description: "A pure-Rust OCR engine reads the page and Surya maps the table's rows and \
+columns; the table is built directly from that, with no language model pass. Fastest option, \
+quality depends entirely on OCR + grid accuracy.",
+    version: 1,
+    requires: Requirements {
+        min_ram_mb: USABLE_16GB,
+        min_vram_mb: None,
+    },
+    steps: &[
+        Step::Render {
+            target_width: RENDER_TARGET_WIDTH,
+        },
+        Step::GroundOcr {
+            engine: OcrEngine::OarOcr(OarOcrSpec {
+                det_model: "pp-ocrv6_small_det.onnx",
+                rec_model: "pp-ocrv6_small_rec.onnx",
+                dict: "ppocrv6_dict.txt",
+                word_box: true,
+            }),
+        },
+        Step::GroundGrid {
+            model_id: SURYA_OCR_2.id,
+            prompt: PromptId::SuryaTableBands,
+            residency: Residency::Exclusive,
+        },
+        Step::AssembleFromGrid,
+    ],
+};
+
 /// Every preset the app can run, **ordered most capable first**.
 ///
 /// That ordering is load-bearing, not cosmetic: `hardware::recommend_preset` picks the
@@ -914,6 +966,7 @@ pub const PRESETS: &[PipelinePreset] = &[
     TESSERACT_SURYA_QWEN,
     OAR_OCR_QWEN,
     TESSERACT_QWEN,
+    OAR_OCR_SURYA_NO_LLM,
 ];
 #[cfg(not(debug_assertions))]
 pub const PRESETS: &[PipelinePreset] = &[TESSERACT_QWEN];
@@ -1114,7 +1167,11 @@ pub fn validate_catalog(
             }
         }
 
-        if !p.steps.iter().any(|s| matches!(s, Step::Structure { .. })) {
+        if !p
+            .steps
+            .iter()
+            .any(|s| matches!(s, Step::Structure { .. } | Step::AssembleFromGrid))
+        {
             errors.push(format!("preset `{}` has no structure step", p.id));
         }
 
