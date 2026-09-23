@@ -5,3 +5,9 @@ logs
 *.log
 .wdio-*
 results
+
+# Eval corpus (large ground-truth image+HTML dataset; placed manually, never committed)
+eval-data/
+
+# Eval run reports
+eval-results/

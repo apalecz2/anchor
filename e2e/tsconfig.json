@@ -7,7 +7,8 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "allowImportingTsExtensions": true
   },
-  "include": ["wdio.conf.ts", "specs/**/*.ts"]
+  "include": ["wdio.conf.ts", "wdio.eval.conf.ts", "wdio.shared.ts", "specs/**/*.ts", "eval/**/*.ts"]
 }

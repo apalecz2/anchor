@@ -37,6 +37,11 @@ PDFIUM_TGZ=/path/to.tgz cargo test   # + the gated pdfium archive test
 # E2E (from e2e/) — requires a release build + tauri-driver on the host
 cargo install tauri-driver --locked
 npm ci && npm run e2e
+
+# Pipeline-accuracy eval (from e2e/) — local/manual only, NOT in CI; needs a real
+# setup wizard already completed (real models installed, not the fixture server)
+# and the corpus placed in e2e/eval-data/ (TEST_PLAN.md §7a)
+npm run e2e:eval
 ```
 
 ## What is implemented
@@ -47,8 +52,9 @@ npm ci && npm run e2e
 | 2 — FE component/hook | **Core done** | `useDialogA11y`, `ConfirmDialog`, `WordEditModal`, `ErrorBoundary`, `ProvenanceTable`, `useTableEditor`, `ExportMenu`, `DocumentViewer`, `DeleteSessionDialog`, `useDocumentExtraction`, `useSetupCheck`, `db.runMigrations`, `sessionActions`, `ConfigStep`, `CompleteStep`, `DownloadStep`, `CustomModelSection`. Shared harness in `src/test/`: `setup.ts` (global), `fixtures.ts` (data builders — §12), `helpers.ts` (DOM doubles). |
 | 3 — Rust | **Pure helpers + the pipeline** | hardware (`recommend_backend`, `recommend_preset`, `parse_nvidia_smi`, …), ocr (`upscale_factor`, `map_coord`, `classify_extension`, `ensure_tesseract_tsv_config`), paths, llama (`is_gpu_backend`, `parse_pidfile`, `build_args`, `pick_free_port`, `something_listening`), setup (`is_targz`, `hash_file_range`, `find_marker_dir`, `copy_dir_contents`, `asset_installed`, `required_assets`, the catalog↔pin invariant, `sweep_stale_partials`), and the whole `pipeline/` subtree: `catalog` (validation against broken catalogs), `prompt` (golden-file equivalence), `budget`, `client` (SSE parsing against recorded frames), `surya` (band/block parsing, coordinate conversion), `custom` (GGUF validation), `executor` (run lifecycle, readiness, step dispatch). |
 | 4 — E2E | **Scaffolded** | `e2e/` wdio + tauri-driver config and the §7 setup/extraction journey specs. Runnable once the app is built and a fixture asset server is up. |
+| 4a — Pipeline-accuracy eval | **Scaffolded** | `e2e/eval/` (§7a): a separate wdio config (`wdio.eval.conf.ts`) scoring real extraction against a 9,064-image ground-truth corpus per pipeline preset. Local/manual only — never run by `npm run e2e`, not wired into CI. Needs a completed real setup (not the fixture server) and the corpus in `e2e/eval-data/` (gitignored, placed manually). |
 | 5 — Non-functional | **Seeded** | `src/test/a11y.dom.test.tsx` runs `vitest-axe` on dialogs (zero violations). Perf/CSP/cross-OS remain manual/release-gated per §9. |
-| CI | **Wired** | `.github/workflows/test.yml` per §10 (PR: FE coverage + tsc + cargo test/clippy/fmt; nightly: gated Rust + E2E). |
+| CI | **Wired** | `.github/workflows/test.yml` per §10 (PR: FE coverage + tsc + cargo test/clippy/fmt; nightly: gated Rust + E2E). The pipeline-accuracy eval suite is intentionally excluded. |
 
 ## Refactors made for testability
 

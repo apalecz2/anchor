@@ -292,6 +292,20 @@ Each is a WebdriverIO spec driving the real app via `tauri-driver`. Use fixture 
 
 ---
 
+## 7a. Pipeline-Accuracy Eval (manual, non-gating)
+
+`e2e/eval/` — a separate WebdriverIO suite (`wdio.eval.conf.ts`, run via `npm run e2e:eval` from `e2e/`), distinct from the Tier 4 journeys above. It drives the real app the same way (file input → OCR viewer → Format as Table → rendered table), but against `e2e/eval-data/` — a 9,064-image, PubTabNet-style ground-truth corpus (gitignored; placed manually, not committed) — and scores the extracted table against ground truth per preset, rather than asserting a fixed pass/fail outcome.
+
+This suite **deliberately violates the §1 Determinism principle** ("no test depends on a real model, network, wall-clock timing, or GPU"): its entire purpose is to measure the real pipeline's accuracy, so it needs the real Tesseract/oar-ocr/Surya/Qwen models actually installed (a completed first-run setup, not the fixture asset server the journeys above use) and real LLM inference. For that reason it is:
+
+- **Local/manual only** — not part of the §7 journey list, not in the §10 CI integration, never run by `npm run e2e`.
+- **Not a pass/fail gate** — output is a JSON report per preset run under `e2e/eval-results/` (gitignored) with per-image cell-accuracy scores and a run summary, meant for a human to compare across pipeline presets (`app/src-tauri/src/pipeline/catalog.rs`'s `PRESETS`), not to fail CI.
+- **Configurable in scope** via `ANCHOR_EVAL_*` env vars (sample size, preset(s), seed, stratification) — see `e2e/eval/config.ts`.
+
+Scoring is positional grid cell-accuracy (ground-truth HTML expanded through rowspan/colspan into a dense grid, aligned index-for-index against the app's rendered table), not TEDS tree-edit-distance — a deliberate simplification for implementation cost, documented in `e2e/eval/scoring.ts`.
+
+---
+
 ## 8. Crash, Failure & Recovery Matrix ("app crashes" end)
 
 Each row is a deliberately-induced failure with an asserted recovery. Mostly Tier 4 (some Tier 2 where the boundary is mockable).
