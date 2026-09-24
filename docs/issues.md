@@ -85,6 +85,56 @@ version 2 and later:
      documents it cannot promise. It now asserts only what is guaranteed.
    - Verified 0 failures in 100 full-suite runs, against a ~6–7 expected at the old rate.
 
+2. **A model file missing from AppData (Surya's, though this applies to any launch spec)
+   surfaced as a silent 180-second hang ending in a generic "the model server did not
+   become ready in time" — not a "file not found" error.** `ensure_server` (`llama.rs`)
+   passed `spec.model_path`/`mmproj_path`/`chat_template_file` straight into
+   `command.spawn()` with no existence check, and returned `Ok(ServerHandle)` immediately
+   after `spawn()` succeeded with no check that the child was still alive. A process that
+   crashes on a bad path (or a file that was never there) was therefore reported as a
+   *successful* start. The only place that later noticed was `wait_for_health`
+   (`executor.rs`), which only ever does `GET /health` — a connection-refused from an
+   already-dead process is indistinguishable there from "still loading," so it burned the
+   full `READINESS_TIMEOUT` (180s) before returning the generic timeout message. Diagnosing
+   this required realizing the missing files were the cause at all; the error gave no hint.
+   - **Resolved** by adding `require_files_exist` to `ensure_server`, checked immediately
+     after the existing llama-server-binary check and before any spawn: a missing
+     model/mmproj/chat-template path now fails in well under a second with the specific
+     path named in the message. Deliberately a plain existence check (`Path::is_file`), not
+     a reuse of `pipeline::custom::validate_gguf`'s GGUF-magic-byte check — a preset's
+     `chat_template_file` can be a `.jinja` file, so a `.gguf`-shaped check would misfire
+     there.
+   - **Also added** a ~300ms grace-period liveness check right after `spawn()` (poll
+     `child.try_wait()` every 30ms): if llama-server itself rejects a file that exists but
+     is invalid (corrupt/unsupported quant, GPU init failure) and exits within that window,
+     the crash is reported immediately instead of being discovered 180 seconds later by
+     `wait_for_health`. Kept local to `ensure_server` rather than plumbing `AppState`/`Child`
+     access into `wait_for_health` — the existing `llama_server_status` command was already
+     built for exactly this kind of fast-fail check but has zero callers anywhere in the
+     frontend or `executor.rs`, and wiring it in would need frontend polling plus a race
+     against the existing cancellation-message handling, for no benefit over the
+     backend-local fix.
+   - **Two adjacent gaps flagged, not fixed here:** (1) `document_pages`' OCR cache had no
+     engine/preset key, so switching which OCR engine a session uses didn't invalidate
+     cached words — reopening an already-OCR'd document after a preset switch could
+     silently show words from the old engine; fixed by threading `preset_id`/`version`
+     through `ExtractionResult` into `page_extraction_meta` and checking it on cache-hit
+     (`useDocumentExtraction.ts`). (2) A persisted preset with undownloadable assets could
+     softlock the setup wizard — the wizard never actually set `config.presetId`, so
+     `DownloadStep`'s `persist_preset` call never fired on any path, meaning a broken
+     persisted preset was never overwritten by a "successful" run; fixed by having the
+     wizard always resolve a concrete `presetId` (self-healing every completed install) and
+     by giving the error screen a "try a different preset" escape hatch reusing
+     `list_pipeline_presets`/`persist_preset`.
+   - **Frontend granularity was part of what made this hard to diagnose**: `render`,
+     `ground_ocr`, `ground_model`, and `ground_grid` all mapped to the same `'preparing'`
+     phase (`useLlamaChat.ts`'s `PHASE_FOR_STEP`), so a `ground_grid` step stuck on
+     `resident_model_url`'s 180s wait looked identical in the UI to the near-instant
+     `ground_ocr` step. The backend already emitted a per-step human-readable `label`
+     (`StepEvent`); the frontend just discarded it. Now surfaced as `currentStepLabel`, so
+     the stalled step's own label stays visible for the duration of the stall instead of a
+     static "Reading image".
+
 ### General
 
 Added excel export support

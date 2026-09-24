@@ -21,6 +21,8 @@
 
 - [ ] Smart OCR routing: detect machine-readable PDF text layers and skip Tesseract entirely
 - [ ] Multi-language OCR: allow users to drop in additional `.traineddata` files; wire language selection to the settings page
+- [ ] Mirror oar-ocr's PP-OCRv6 model files (det/rec/dict, ~30MB) to Anchor's own R2 bucket and pin their SHA-256 through `setup.rs`'s manifest, the way every other model asset already works -- this is what lifts the oar-ocr-grounded presets (`oar-ocr-qwen3.5-4b`, `oar-ocr-surya-qwen3.5-4b`, `oar-ocr-surya-no-llm`) out of `#[cfg(debug_assertions)]` and into a release build; today they rely on the `oar-ocr` crate's own live `auto-download` from ModelScope, unpinned by this app (see `docs/design.md` §5, `NOTICES.md` §1.7)
+- [ ] Decide whether `confidence.ts`'s `cellTrust` should visually distinguish oar-ocr-sourced word confidence as wider-uncertainty rather than a precise per-word score -- oar-ocr's Rust crate only scores at the line level (every word split from one line inherits that line's single confidence), unlike Tesseract's genuinely independent per-word scores; flagged as an open product question in `docs/design.md` §6 step 5, not yet decided or implemented
 
 ## LLM / Extraction
 
@@ -42,6 +44,7 @@
 ## Testing
 
 - [ ] Implement full test setup
+- [ ] `oar-ocr-surya-no-llm` / `Step::AssembleFromGrid` have zero test coverage -- not in `executor::tests::the_shipped_and_pending_presets_are_runnable_by_this_executor`'s exhaustiveness list, no test for `assemble_table_from_grid` itself. Known/accepted gap, not urgent, but worth closing at the same cheap structural level every other preset/step already gets before this preset is considered for release
 
 ## Roadmap
 
