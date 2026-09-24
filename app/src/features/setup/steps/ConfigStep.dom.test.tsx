@@ -29,21 +29,22 @@ describe('ConfigStep', () => {
         render(<ConfigStep hardware={hw()} onNext={onNext} onBack={vi.fn()} />);
         expect(screen.getByText('Recommended')).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: /Start download/ }));
-        expect(onNext).toHaveBeenCalledWith({ backend: 'cuda' });
+        expect(onNext).toHaveBeenCalledWith({ backend: 'cuda', presetId: hw().recommended_preset });
     });
 
     it('falls back to the first option when the recommendation is not available', () => {
         const onNext = vi.fn();
         // Recommend cpu but only metal is on offer (macOS-style mismatch).
+        const hardware = hw({ recommended_backend: 'cpu', available_backends: ['metal'], os: 'macos' });
         render(
             <ConfigStep
-                hardware={hw({ recommended_backend: 'cpu', available_backends: ['metal'], os: 'macos' })}
+                hardware={hardware}
                 onNext={onNext}
                 onBack={vi.fn()}
             />,
         );
         fireEvent.click(screen.getByRole('button', { name: /Start download/ }));
-        expect(onNext).toHaveBeenCalledWith({ backend: 'metal' });
+        expect(onNext).toHaveBeenCalledWith({ backend: 'metal', presetId: hardware.recommended_preset });
     });
 
     it('shows a warning when the selected backend does not suit the hardware', () => {
@@ -64,5 +65,29 @@ describe('ConfigStep', () => {
         render(<ConfigStep hardware={hw()} onNext={vi.fn()} onBack={onBack} />);
         fireEvent.click(screen.getByRole('button', { name: /Back/ }));
         expect(onBack).toHaveBeenCalled();
+    });
+
+    it('offers a pipeline preset picker and lets the user override the recommendation', () => {
+        const onNext = vi.fn();
+        const hardware = hw({
+            recommended_preset: 'tesseract-qwen',
+            presets: [
+                { id: 'tesseract-qwen', label: 'Standard', description: 'Tesseract + a small model.', download_mb: 3000, min_ram_mb: 8192, min_vram_mb: null, supported: true },
+                { id: 'oar-ocr-surya', label: 'Accurate', description: 'A larger, slower pipeline.', download_mb: 9000, min_ram_mb: 16384, min_vram_mb: null, supported: false },
+            ],
+        });
+        render(<ConfigStep hardware={hardware} onNext={onNext} onBack={vi.fn()} />);
+        expect(screen.getByText('Standard')).toBeInTheDocument();
+        expect(screen.getByText('Accurate')).toBeInTheDocument();
+        expect(screen.getByText('Not ideal for your hardware')).toBeInTheDocument();
+
+        fireEvent.click(screen.getByText('Accurate'));
+        fireEvent.click(screen.getByRole('button', { name: /Start download/ }));
+        expect(onNext).toHaveBeenCalledWith({ backend: 'cuda', presetId: 'oar-ocr-surya' });
+    });
+
+    it('does not render a preset picker when only one pipeline is on offer', () => {
+        render(<ConfigStep hardware={hw()} onNext={vi.fn()} onBack={vi.fn()} />);
+        expect(screen.queryByText('Pipeline')).not.toBeInTheDocument();
     });
 });

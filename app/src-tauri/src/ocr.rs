@@ -119,6 +119,11 @@ pub struct OcrWord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     pub text: String,
+    /// Independently meaningful only when the source engine is Tesseract. When
+    /// oar-ocr produced this word, `confidence` is its parent line's single score
+    /// copied unchanged into every word split from that line (see
+    /// `oar_region_to_word`) — the crate has no per-word signal, so this is not a
+    /// precise per-word measurement the way Tesseract's is.
     pub confidence: f32,
     pub box_coords: BoundingBox,
 }
@@ -148,10 +153,17 @@ struct ProcessProgress {
     total_pages: usize,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 pub struct ExtractionResult {
     pub session_id: String,
     pub pages: Vec<DocumentPageResult>,
+    /// Which preset's classical-OCR step produced `pages[*].words`, so the frontend
+    /// cache can recognise a result as stale when the persisted preset later changes
+    /// (see `page_extraction_meta` in db.ts) — mirrors `PageArtifact::preset_id` in
+    /// the structuring stage, which the OCR stage never had an equivalent for.
+    pub preset_id: String,
+    pub preset_version: u32,
+    pub grounding: catalog::Grounding,
 }
 
 const UPSCALE_NARROW_SIDE_THRESHOLD: u32 = 1500;
@@ -605,6 +617,20 @@ fn union_boxes(boxes: &[&OarBox]) -> OarBox {
 /// Maps an oar-ocr box (in preprocessed-image pixels) + line-level confidence
 /// into an `OcrWord` in the original image's coordinate space, via the same
 /// `map_coord` scale-division Tesseract's path uses.
+///
+/// `confidence` here is the *line's* score, copied verbatim into every word split
+/// from that line (see the callers in `run_oar_ocr`) — oar-ocr's Rust crate exposes
+/// no per-word or per-character signal to score them independently with, unlike
+/// Tesseract (`run_tesseract`, independently-scored word rows from
+/// `image_to_data`) or the Python RapidOCR prototype (`result.word_results`, same
+/// PP-OCR model family, per-word scores via a different API). A single
+/// mis-recognized word inside an otherwise-confident oar-ocr line will therefore
+/// NOT show a locally low score the way it would under Tesseract — this is a
+/// limitation of the data available from this crate, not a bug here, and no
+/// heuristic (e.g. scoring by word length) should be added to fake independence
+/// that doesn't exist. Whether it's worth investigating a finer-grained signal
+/// upstream (e.g. per-character CTC-decode confidence the crate's API doesn't
+/// currently surface) is an open, unscheduled question — see docs/design.md §5.
 fn oar_region_to_word(text: &str, region_box: &OarBox, confidence: f32, scale: f32) -> OcrWord {
     let left = region_box.x_min();
     let top = region_box.y_min();
@@ -905,7 +931,13 @@ fn process_document_blocking(
         return Err(format!("Unsupported file format: .{}", extension));
     }
 
-    Ok(ExtractionResult { session_id, pages })
+    Ok(ExtractionResult {
+        session_id,
+        pages,
+        preset_id: preset.id.to_owned(),
+        preset_version: preset.version,
+        grounding: preset.grounding(),
+    })
 }
 
 /// Prepend the bundled Tesseract dir to PATH and point TESSDATA_PREFIX at its

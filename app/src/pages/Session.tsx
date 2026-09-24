@@ -46,6 +46,7 @@ function SessionContent(): React.ReactElement {
         isExtracting,
         isCancelling,
         extractionPhase,
+        currentStepLabel,
     } = useLlamaChat();
 
     // Defer the "Processing…" spinner: a cached session loads from the DB in well
@@ -408,6 +409,7 @@ function SessionContent(): React.ReactElement {
                 isExtracting={isExtracting}
                 isCancelling={isCancelling}
                 extractionPhase={extractionPhase}
+                currentStepLabel={currentStepLabel}
                 streamingContent={streamingContent}
                 streamRef={streamRef}
                 cancelTableFormat={cancelTableFormat}

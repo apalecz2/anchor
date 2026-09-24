@@ -3,6 +3,7 @@ import Icon from '../../components/Icon';
 import type { ConsentContext, HardwareInfo, SetupConfig, SetupMode, SetupStep } from './types';
 import { setBackHandler } from '../../lib/navState';
 import { acceptedEulaVersion } from '../legal/eulaAcceptance';
+import { listPipelinePresets, type PresetOption } from '../settings/pipelinePresets';
 import WelcomeStep from './steps/WelcomeStep';
 import TermsStep from './steps/TermsStep';
 import ConfigStep from './steps/ConfigStep';
@@ -103,7 +104,7 @@ export default function SetupWizard({ eulaAccepted, onAcceptEula, installNeeded,
     const startAutomatic = (info: HardwareInfo) => {
         setHardware(info);
         setMode('automatic');
-        setConfig({ backend: info.recommended_backend });
+        setConfig({ backend: info.recommended_backend, presetId: info.recommended_preset });
         setStep(needsEula ? 'terms' : 'install');
     };
 
@@ -117,6 +118,17 @@ export default function SetupWizard({ eulaAccepted, onAcceptEula, installNeeded,
         onAcceptEula();
         // Consent-only run: App drops the wizard as soon as acceptance is recorded.
         if (needsInstall) setStep(mode === 'custom' ? 'config' : 'install');
+    };
+
+    // Escape hatch for a persisted preset whose assets can't download (dead URL,
+    // network issue, or one that never finished installing before). Re-entering
+    // `install` with a different presetId makes DownloadStep persist *that* id
+    // before fetching its manifest, overwriting whatever broken value was on disk —
+    // an already-installed preset then completes immediately with no downloads.
+    const retryWithPreset = (id: string) => {
+        setErrorMsg(null);
+        setConfig(cfg => (cfg ? { ...cfg, presetId: id } : cfg));
+        setStep('install');
     };
 
     return (
@@ -173,7 +185,11 @@ export default function SetupWizard({ eulaAccepted, onAcceptEula, installNeeded,
                     )}
 
                     {errorMsg ? (
-                        <ErrorView message={errorMsg} onRetry={() => { setErrorMsg(null); setStep('welcome'); }} />
+                        <ErrorView
+                            message={errorMsg}
+                            onRetry={() => { setErrorMsg(null); setStep('welcome'); }}
+                            onChoosePreset={retryWithPreset}
+                        />
                     ) : (
                         <>
                             {step === 'welcome' && (
@@ -202,7 +218,7 @@ export default function SetupWizard({ eulaAccepted, onAcceptEula, installNeeded,
                                 />
                             )}
                             {step === 'complete' && config && (
-                                <CompleteStep backend={config.backend} onLaunch={onComplete} />
+                                <CompleteStep backend={config.backend} presetId={config.presetId} onLaunch={onComplete} />
                             )}
                         </>
                     )}
@@ -212,7 +228,29 @@ export default function SetupWizard({ eulaAccepted, onAcceptEula, installNeeded,
     );
 }
 
-function ErrorView({ message, onRetry }: { message: string; onRetry: () => void }): React.ReactElement {
+function ErrorView({
+    message,
+    onRetry,
+    onChoosePreset,
+}: {
+    message: string;
+    onRetry: () => void;
+    /** Lets the user pick a different pipeline preset right from the failure screen,
+     *  instead of only "Start over" — which alone never fixes a persisted preset
+     *  whose assets can't download, since a fresh automatic run just re-selects the
+     *  same recommended preset and fails again. */
+    onChoosePreset: (id: string) => void;
+}): React.ReactElement {
+    const [presets, setPresets] = useState<PresetOption[] | null>(null);
+
+    useEffect(() => {
+        let cancelled = false;
+        listPipelinePresets()
+            .then(rows => { if (!cancelled) setPresets(rows); })
+            .catch(() => { if (!cancelled) setPresets([]); });
+        return () => { cancelled = true; };
+    }, []);
+
     return (
         <div className="flex flex-col gap-6 items-center text-center py-8">
             <Icon name="error" size={48} className="text-error" />
@@ -228,6 +266,37 @@ function ErrorView({ message, onRetry }: { message: string; onRetry: () => void 
                 <Icon name="refresh" size={18} />
                 Start over
             </button>
+
+            {presets && presets.length > 1 && (
+                <div className="w-full max-w-md text-left mt-2">
+                    <p className="font-body-sm text-body-sm text-on-surface-variant mb-2">
+                        Or try a different pipeline — useful if the one above keeps failing to
+                        download:
+                    </p>
+                    <div className="rounded-[10px] border border-outline-variant bg-surface-container divide-y divide-outline-variant">
+                        {presets.map(preset => (
+                            <button
+                                key={preset.id}
+                                type="button"
+                                onClick={() => onChoosePreset(preset.id)}
+                                className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-on-surface/[0.03] transition-colors"
+                            >
+                                <Icon
+                                    name={preset.installed ? 'check_circle' : 'download'}
+                                    size={18}
+                                    className={`shrink-0 ${preset.installed ? 'text-primary' : 'text-on-surface-variant'}`}
+                                />
+                                <span className="flex-1 min-w-0">
+                                    <span className="font-body-md text-body-md text-on-surface block">{preset.label}</span>
+                                    <span className="font-body-sm text-body-sm text-on-surface-variant">
+                                        {preset.installed ? 'Already installed — no download needed' : `${(preset.download_mb / 1000).toFixed(1)} GB to download`}
+                                    </span>
+                                </span>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

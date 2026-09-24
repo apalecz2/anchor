@@ -950,6 +950,26 @@ pub fn persist_preset(app_handle: tauri::AppHandle, preset_id: String) -> Result
         .map_err(|e| format!("failed to persist pipeline preset: {e}"))
 }
 
+/// The preset currently in effect, as `{id, version}` — a synchronous read of the
+/// persisted file plus a catalog lookup, deliberately not `list_pipeline_presets`
+/// (which probes hardware and returns the whole catalog). Lets a cache-hit path
+/// (e.g. `document_pages`) recognise a stale cache without re-running OCR.
+#[derive(Serialize)]
+pub struct ActivePreset {
+    pub id: String,
+    pub version: u32,
+}
+
+#[tauri::command]
+pub fn active_pipeline_preset(app_handle: tauri::AppHandle) -> Result<ActivePreset, String> {
+    let data_dir = resolve_data_dir(&app_handle)?;
+    let preset = read_persisted_preset(&data_dir);
+    Ok(ActivePreset {
+        id: preset.id.to_string(),
+        version: preset.version,
+    })
+}
+
 #[tauri::command]
 pub fn get_setup_paths(app_handle: tauri::AppHandle) -> Result<SetupPaths, String> {
     let d = resolve_data_dir(&app_handle)?;

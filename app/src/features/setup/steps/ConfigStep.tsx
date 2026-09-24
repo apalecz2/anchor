@@ -19,6 +19,7 @@ export default function ConfigStep({ hardware, onNext, onBack }: Props): React.R
     const [backend, setBackend] = useState<Backend>(
         options.includes(hardware.recommended_backend) ? hardware.recommended_backend : options[0]
     );
+    const [presetId, setPresetId] = useState<string>(hardware.recommended_preset);
 
     const selectedWarning = backendWarning(backend, hardware);
 
@@ -100,11 +101,62 @@ export default function ConfigStep({ hardware, onNext, onBack }: Props): React.R
                 </div>
             )}
 
+            {hardware.presets.length > 1 && (
+                <div>
+                    <h3 className="font-label-lg text-label-lg text-on-surface mb-3">Pipeline</h3>
+                    <div className="flex flex-col gap-3">
+                        {hardware.presets.map((preset) => {
+                            const isRecommended = preset.id === hardware.recommended_preset;
+                            const isSelected = preset.id === presetId;
+                            return (
+                                <button
+                                    key={preset.id}
+                                    type="button"
+                                    onClick={() => setPresetId(preset.id)}
+                                    className={`text-left rounded-[10px] border p-4 flex items-start gap-4 transition-colors ${
+                                        isSelected
+                                            ? 'border-primary bg-primary/5'
+                                            : 'border-outline-variant bg-surface-container hover:bg-surface-container-high'
+                                    }`}
+                                >
+                                    <div
+                                        className={`mt-0.5 w-4 h-4 rounded-full border-2 shrink-0 flex items-center justify-center ${
+                                            isSelected ? 'border-primary' : 'border-outline'
+                                        }`}
+                                    >
+                                        {isSelected && <div className="w-2 h-2 rounded-full bg-primary" />}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-2">
+                                            <span className="font-label-lg text-label-lg text-on-surface">{preset.label}</span>
+                                            <span className="font-label-sm text-label-sm text-on-surface-variant">
+                                                {(preset.download_mb / 1000).toFixed(1)} GB
+                                            </span>
+                                            {isRecommended && (
+                                                <span className="px-2 py-0.5 rounded-full bg-primary/10 font-label-sm text-label-sm text-primary">
+                                                    Recommended
+                                                </span>
+                                            )}
+                                            {!preset.supported && (
+                                                <span className="px-2 py-0.5 rounded-full bg-error/10 font-label-sm text-label-sm text-error">
+                                                    Not ideal for your hardware
+                                                </span>
+                                            )}
+                                        </div>
+                                        <p className="font-body-sm text-body-sm text-on-surface-variant mt-0.5">{preset.description}</p>
+                                    </div>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
+
             <div className="flex justify-between">
                 <WizardBackButton onBack={onBack} />
                 <button
                     type="button"
-                    onClick={() => onNext({ backend })}
+                    onClick={() => onNext({ backend, presetId })}
                     className="flex items-center gap-2 px-6 py-2.5 rounded-lg bg-primary text-on-primary font-label-lg text-label-lg hover:bg-primary/90 transition-colors"
                 >
                     Start download

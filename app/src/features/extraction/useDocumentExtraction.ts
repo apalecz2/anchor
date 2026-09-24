@@ -5,15 +5,48 @@ import { readFile } from '@tauri-apps/plugin-fs';
 import { getDb } from '../../lib/db';
 import { touchSession } from '../sessions/touchSession';
 import { discardCachedPages } from '../sessions/sessionActions';
-import { ExtractionResult, DocumentPageResult } from './types';
+import { ExtractionResult, DocumentPageResult, GroundingKind } from './types';
 import type { BoundingBox } from '../ocr/types';
 import { sortWords, buildReadingOrderText } from '../../utils/ocrTransforms';
 
 export type ProcessProgress = { current: number; total: number };
 
+// What `process_document` actually returns on the wire: an `ExtractionResult` plus
+// the preset identity that produced it (ocr.rs::ExtractionResult), used here to
+// populate `page_extraction_meta` and never exposed on the public `ExtractionResult`
+// type, since nothing downstream of this hook consumes it.
+type OcrRunResult = ExtractionResult & {
+    preset_id: string;
+    preset_version: number;
+    grounding: GroundingKind;
+};
+
 // Must match CANCELLED_MESSAGE in src-tauri/src/ocr.rs — the backend rejects a
 // cancelled job with this exact string so we can show a neutral state, not a failure.
 const CANCELLED_MESSAGE = 'Document processing was cancelled.';
+
+/**
+ * Whether a complete `document_pages` cache still matches the currently active
+ * pipeline preset. `process_document` runs one engine for the whole document, so
+ * checking page_index 0's row is sufficient — every page in one run shares the
+ * same preset_id/version.
+ *
+ * A session with no `page_extraction_meta` row (cached before this check existed)
+ * is treated as fresh rather than stale, so shipping this doesn't mass-invalidate
+ * every pre-existing session's cache — it only catches a preset change going
+ * forward, from the point a page's OCR meta was first recorded.
+ */
+async function isOcrCacheFresh(db: Awaited<ReturnType<typeof getDb>>, sessionId: string): Promise<boolean> {
+    const meta = await db.select<{ preset_id: string; preset_version: number }[]>(
+        'SELECT preset_id, preset_version FROM page_extraction_meta WHERE session_id = $1 AND page_index = 0',
+        [sessionId]
+    );
+    const cached = meta?.[0];
+    if (!cached) return true;
+
+    const active = await invoke<{ id: string; version: number }>('active_pipeline_preset');
+    return cached.preset_id === active.id && cached.preset_version === active.version;
+}
 
 export function useDocumentExtraction(sessionId: string | undefined, activePageIndex: number = 0) {
     const [extractionResult, setExtractionResult] = useState<ExtractionResult | null>(null);
@@ -78,16 +111,23 @@ export function useDocumentExtraction(sessionId: string | undefined, activePageI
                 // has landed, which is what makes its count trustworthy here.
                 const expectedPages = pageSets?.[0]?.page_count ?? null;
                 if (expectedPages !== null && (cachedPages?.length ?? 0) === expectedPages) {
-                    const restoredPages: DocumentPageResult[] = cachedPages.map(page => ({
-                        image_path: page.image_path,
-                        natural_width: page.natural_width,
-                        natural_height: page.natural_height,
-                        text: page.full_text,
-                        words: JSON.parse(page.words_json)
-                    }));
-                    setExtractionResult({ session_id: sessionId, pages: restoredPages });
-                    setRawTextSaved(true);
-                    return;
+                    // A complete cache is only usable if it came from whatever OCR
+                    // engine/preset is active now — switching presets (e.g. Tesseract to
+                    // oar-ocr) must not silently keep serving the old engine's words.
+                    // A stale cache falls through to the discard-and-reprocess block
+                    // below, same as an incomplete one.
+                    if (await isOcrCacheFresh(db, sessionId)) {
+                        const restoredPages: DocumentPageResult[] = cachedPages.map(page => ({
+                            image_path: page.image_path,
+                            natural_width: page.natural_width,
+                            natural_height: page.natural_height,
+                            text: page.full_text,
+                            words: JSON.parse(page.words_json)
+                        }));
+                        setExtractionResult({ session_id: sessionId, pages: restoredPages });
+                        setRawTextSaved(true);
+                        return;
+                    }
                 }
 
                 // Rows without a matching marker are the wreckage of an interrupted
@@ -114,7 +154,7 @@ export function useDocumentExtraction(sessionId: string | undefined, activePageI
                     }
                 );
 
-                const rustResult = await invoke<ExtractionResult>('process_document', {
+                const rustResult = await invoke<OcrRunResult>('process_document', {
                     sessionId,
                     filePath: dbResult[0].file_path,
                     presetId: null // the catalog's default until a picker exists (mirrors useLlamaChat.ts)
@@ -142,6 +182,21 @@ export function useDocumentExtraction(sessionId: string | undefined, activePageI
                     await db.execute(
                         `INSERT OR IGNORE INTO document_pages (id, session_id, page_index, image_path, natural_width, natural_height, full_text, words_json) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
                         [crypto.randomUUID(), sessionId, i, page.image_path, page.natural_width, page.natural_height, page.text, JSON.stringify(page.words)]
+                    );
+                    // Record which preset produced this page's OCR, so a later preset
+                    // switch is recognisable as staleness (isOcrCacheFresh above) instead
+                    // of silently serving words from the old engine. Same table/idiom
+                    // useLlamaChat.ts uses for the structuring stage — a later structuring
+                    // run for this page overwrites these columns with identical values,
+                    // since it resolves the same persisted preset.
+                    await db.execute(
+                        `INSERT INTO page_extraction_meta (session_id, page_index, preset_id, preset_version, grounding)
+                         VALUES ($1, $2, $3, $4, $5)
+                         ON CONFLICT(session_id, page_index) DO UPDATE SET
+                           preset_id = excluded.preset_id,
+                           preset_version = excluded.preset_version,
+                           grounding = excluded.grounding`,
+                        [sessionId, i, rustResult.preset_id, rustResult.preset_version, rustResult.grounding]
                     );
                 }
 

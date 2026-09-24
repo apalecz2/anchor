@@ -11,12 +11,25 @@ const EXTRACTION_STEPS: { key: Exclude<ExtractionPhase, 'idle'>; label: string; 
     { key: 'finalizing', label: 'Matching to source & saving' },
 ];
 
-export function ExtractionProgress({ phase }: { phase: ExtractionPhase }): React.ReactElement {
+export function ExtractionProgress({
+    phase,
+    currentStepLabel,
+}: {
+    phase: ExtractionPhase;
+    /** The backend's label for the specific step currently running (e.g. "Finding
+     *  text on the page" vs "Mapping the table (...)"). Several steps share one
+     *  coarse phase despite very different durations, so this is what lets a stalled
+     *  step (a model server that never comes up) look different from an instant one,
+     *  instead of both showing the phase's static hint. Falls back to the phase's own
+     *  hint when no step has reported in yet (e.g. during 'starting'). */
+    currentStepLabel?: string | null;
+}): React.ReactElement {
     const currentStep = EXTRACTION_STEPS.findIndex(s => s.key === phase);
     return (
         <ol className="space-y-3">
             {EXTRACTION_STEPS.map((step, i) => {
                 const status = i < currentStep ? 'done' : i === currentStep ? 'active' : 'pending';
+                const activeHint = status === 'active' ? (currentStepLabel ?? step.hint) : undefined;
                 return (
                     <li key={step.key} className="flex items-start gap-3">
                         <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center">
@@ -38,8 +51,8 @@ export function ExtractionProgress({ phase }: { phase: ExtractionPhase }): React
                             }`}>
                                 {step.label}
                             </span>
-                            {status === 'active' && step.hint && (
-                                <span className="text-xs text-on-surface-variant/70">{step.hint}</span>
+                            {activeHint && (
+                                <span className="text-xs text-on-surface-variant/70">{activeHint}</span>
                             )}
                         </div>
                     </li>

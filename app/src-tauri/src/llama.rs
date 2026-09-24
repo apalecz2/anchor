@@ -38,7 +38,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::Mutex,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use serde::Serialize;
@@ -467,6 +467,34 @@ fn free_slot(servers: &[RunningServer]) -> usize {
         .unwrap()
 }
 
+/// Check that every file `spec` references actually exists before spawning anything.
+///
+/// Without this, a missing model/mmproj/template file (deleted by hand, a botched
+/// setup, a preset whose assets never finished downloading) is only discovered by
+/// `wait_for_health`'s readiness poll in the executor, which cannot tell "the model
+/// path was never valid" apart from "still loading" — so the caller burns the full
+/// readiness timeout for a failure that was knowable in a `stat()` call.
+fn require_files_exist(spec: &LaunchSpec) -> Result<(), String> {
+    let check = |path: &str, label: &str| -> Result<(), String> {
+        if Path::new(path).is_file() {
+            Ok(())
+        } else {
+            Err(format!(
+                "{label} file not found at {path}. Re-run setup to reinstall it, \
+                 or re-register the custom model in Settings \u{25b8} Models."
+            ))
+        }
+    };
+    check(&spec.model_path, "Model")?;
+    if let Some(mmproj) = &spec.mmproj_path {
+        check(mmproj, "Projector (mmproj)")?;
+    }
+    if let Some(template) = &spec.chat_template_file {
+        check(template, "Chat template")?;
+    }
+    Ok(())
+}
+
 /// Ensure a server matching `spec` is running, and return its handle.
 ///
 /// Reuses a live server with the same [`LaunchKey`]; otherwise spawns one. Under
@@ -493,6 +521,7 @@ pub fn ensure_server(
     if !llama_server_path.exists() {
         return Err("llama-server not found. Run the setup wizard to download it.".into());
     }
+    require_files_exist(spec)?;
 
     // Resolve the *effective* backend. The frontend passes its localStorage value,
     // which on a packaged build whose per-origin store never saw the wizard defaults to
@@ -600,9 +629,34 @@ pub fn ensure_server(
         command.creation_flags(CREATE_NO_WINDOW);
     }
 
-    let child = command
+    let mut child = command
         .spawn()
         .map_err(|error| format!("failed to spawn llama server: {error}"))?;
+
+    // llama-server rejecting the model outright (corrupt/unsupported quant, GPU init
+    // failure, a lost port-bind race) crashes within tens of milliseconds. A short
+    // grace period catches that now, before the caller pays the full readiness
+    // timeout for a process that was never actually there. A model that is genuinely
+    // loading survives this trivially -- nothing here waits on model load.
+    let grace_deadline = Instant::now() + Duration::from_millis(300);
+    let mut crash_status = None;
+    while Instant::now() < grace_deadline {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                crash_status = Some(status);
+                break;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(30)),
+            Err(_) => break,
+        }
+    }
+    if let Some(status) = crash_status {
+        return Err(format!(
+            "llama-server exited immediately ({status}). The model file may be corrupt, \
+             unsupported, or too large for available memory. See the log at {}.",
+            log_path.display()
+        ));
+    }
 
     let pid = child.id();
 
@@ -854,6 +908,35 @@ mod tests {
         );
         assert_eq!(s.parallel, catalog::QWEN_3_5_4B.launch.parallel);
         assert!(s.mmproj_path.is_some());
+    }
+
+    #[test]
+    fn require_files_exist_rejects_a_missing_model_path() {
+        let mut s = spec();
+        s.model_path = "/definitely/not/a/real/model.gguf".into();
+        let err = require_files_exist(&s).expect_err("missing model file must be rejected");
+        assert!(err.contains("Model"), "{err}");
+        assert!(err.contains(&s.model_path), "{err}");
+    }
+
+    #[test]
+    fn require_files_exist_rejects_a_missing_mmproj_path() {
+        // qwen_default's model_path won't exist on the test machine either, so use
+        // a real file (this source file) to isolate the mmproj check.
+        let mut s = spec();
+        s.model_path = file!().into();
+        s.mmproj_path = Some("/definitely/not/a/real/mmproj.gguf".into());
+        let err = require_files_exist(&s).expect_err("missing mmproj file must be rejected");
+        assert!(err.contains("Projector"), "{err}");
+    }
+
+    #[test]
+    fn require_files_exist_passes_when_every_referenced_file_exists() {
+        let mut s = spec();
+        s.model_path = file!().into();
+        s.mmproj_path = None;
+        s.chat_template_file = None;
+        assert!(require_files_exist(&s).is_ok());
     }
 
     #[test]

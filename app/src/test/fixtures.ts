@@ -72,5 +72,17 @@ export const hardwareInfo = (over: Partial<HardwareInfo> = {}): HardwareInfo => 
     recommended_backend: 'cpu',
     os: 'windows',
     available_backends: ['cpu'],
+    recommended_preset: 'tesseract-qwen',
+    presets: [
+        {
+            id: 'tesseract-qwen',
+            label: 'Standard',
+            description: 'Tesseract OCR with a small vision model.',
+            download_mb: 3000,
+            min_ram_mb: 8192,
+            min_vram_mb: null,
+            supported: true,
+        },
+    ],
     ...over,
 });

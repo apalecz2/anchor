@@ -201,6 +201,7 @@ pub fn run() {
             setup::persist_backend,
             setup::persist_preset,
             setup::list_pipeline_presets,
+            setup::active_pipeline_preset,
             pipeline::custom::set_custom_model,
             pipeline::custom::get_custom_model,
             pipeline::custom::clear_custom_model,

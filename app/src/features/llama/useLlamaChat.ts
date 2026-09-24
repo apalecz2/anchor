@@ -59,9 +59,11 @@ export type ExtractionPhase = 'idle' | 'starting' | 'preparing' | 'generating' |
  *  src-tauri/src/pipeline/client.rs. A cancel is a neutral state, not a failure. */
 const CANCELLED_MESSAGE = 'Extraction was cancelled.';
 
-/** Map a pipeline step to the phase the progress stepper already renders. The
- *  executor also sends a human-readable label per step; the stepper doesn't use it
- *  yet, which is what keeps this cutover behaviour-identical. */
+/** Map a pipeline step to the phase the progress stepper already renders. Several
+ *  steps share a phase despite very different durations (e.g. `ground_ocr` is
+ *  near-instant, `ground_grid` can block on a model server for minutes) -- the
+ *  executor's per-step `label` (surfaced as `currentStepLabel`) is what lets the UI
+ *  tell them apart within one phase. */
 const PHASE_FOR_STEP: Record<string, ExtractionPhase> = {
     render: 'preparing',
     ground_ocr: 'preparing',
@@ -85,6 +87,10 @@ export const useLlamaChat = () => {
     const [streamingContent, setStreamingContent] = useState<string>('');
     const [isExtracting, setIsExtracting] = useState(false);
     const [extractionPhase, setExtractionPhase] = useState<ExtractionPhase>('idle');
+    // The backend's human-readable label for whatever step is currently running
+    // (e.g. "Finding text on the page" vs "Mapping the table (...)") -- distinguishes
+    // steps that share a coarse phase but differ wildly in how long they can take.
+    const [currentStepLabel, setCurrentStepLabel] = useState<string | null>(null);
     // Set the instant Cancel is clicked so the UI can acknowledge it immediately,
     // even though the abort itself may take a moment to unwind (tearing down the
     // streaming request, or finishing a non-abortable phase such as a model load).
@@ -121,6 +127,7 @@ export const useLlamaChat = () => {
         setIsExtracting(true);
         setStreamingContent('');
         setExtractionPhase('starting');
+        setCurrentStepLabel(null);
         setIsCancelling(false);
         runningRef.current = true;
 
@@ -132,9 +139,10 @@ export const useLlamaChat = () => {
             const imagePath = await resolvePageImagePath(sessionId, pageIndex);
 
             unlisten.push(
-                await listen<{ kind: string }>('pipeline:step', event => {
+                await listen<{ kind: string; label: string }>('pipeline:step', event => {
                     const phase = PHASE_FOR_STEP[event.payload.kind];
                     if (phase) setExtractionPhase(phase);
+                    setCurrentStepLabel(event.payload.label);
                 }),
             );
             unlisten.push(
@@ -242,6 +250,7 @@ export const useLlamaChat = () => {
             runningRef.current = false;
             setIsExtracting(false);
             setExtractionPhase('idle');
+            setCurrentStepLabel(null);
             setIsCancelling(false);
             setStreamingContent('');
             // Release the model with a short warm window instead of unloading now: a
@@ -260,6 +269,7 @@ export const useLlamaChat = () => {
         isExtracting,
         isCancelling,
         extractionPhase,
+        currentStepLabel,
     };
 };
 

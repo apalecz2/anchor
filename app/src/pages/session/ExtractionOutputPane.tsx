@@ -46,6 +46,7 @@ interface ExtractionOutputPaneProps {
     isExtracting: boolean;
     isCancelling: boolean;
     extractionPhase: ExtractionPhase;
+    currentStepLabel: string | null;
     streamingContent: string;
     streamRef: React.RefObject<HTMLPreElement | null>;
     cancelTableFormat: () => void;
@@ -175,7 +176,7 @@ export function ExtractionOutputPane(props: ExtractionOutputPaneProps): React.Re
         outputView, setOutputView,
         activePage, isDbLoading, showProcessing, processingCancelled,
         rawLines, selectedWordId, highlightedWordId, setHighlightedWordId, selectWord, selectedWordRef, handleCopyRawText, rawTextSaved,
-        isExtracting, isCancelling, extractionPhase, streamingContent, streamRef, cancelTableFormat,
+        isExtracting, isCancelling, extractionPhase, currentStepLabel, streamingContent, streamRef, cancelTableFormat,
         provenanceCells, selectedCell, handleCellClick, clearCellSelection, onApplyGrid, tableKey, savedCsv, handleCopyTable, hasTable,
         extractionError, truncated, contextOverflow, handleFormatTable,
         fileStem,
@@ -623,7 +624,7 @@ export function ExtractionOutputPane(props: ExtractionOutputPaneProps): React.Re
                                 {/* Dim the in-progress detail once cancelling so the
                                     pending "Cancelling…" state reads as the active one. */}
                                 <div className={isCancelling ? 'opacity-40 transition-opacity' : 'transition-opacity'}>
-                                    <ExtractionProgress phase={extractionPhase} />
+                                    <ExtractionProgress phase={extractionPhase} currentStepLabel={currentStepLabel} />
                                 </div>
                                 {/* Fixed height and reserved for the whole generation
                                     phase so streaming tokens fill a stable box instead of
