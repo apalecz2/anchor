@@ -364,6 +364,227 @@ rm -rf ~/Library/Application\ Support/com.aidenpaleczny.anchor
 
 ---
 
+## Step 13 — Ship the Surya + oar-ocr assets (lift the debug-only gates)
+
+Two engines added after the original provisioning above are still debug-only: **Surya**
+(the table-grid model used by the "Accurate" presets) and **oar-ocr** (the pure-Rust OCR
+engine used by the "Rust OCR" presets). Both are pinned with real SHA-256 hashes already
+— measured from files this project already downloaded and tested against — but neither
+set of R2 objects exists yet, and oar-ocr additionally still self-downloads from
+ModelScope at runtime instead of going through this app's manifest. This step finishes
+both.
+
+**Do the two parts in order** — upload and verify first; only drop the `#[cfg]` gates
+once the URLs are confirmed live. A code change that ships a preset before its assets
+exist on R2 is strictly worse than leaving it debug-only: it turns a known internal
+limitation into a 404 in front of a real user, which is the exact failure this project
+hit and fixed once already (see `docs/issues.md` § the `require_files_exist` post-mortem).
+
+### 13a — Files needed and where they already are
+
+You don't need to re-download or re-hash anything — every file below already exists on
+this machine from earlier prototyping/testing, and every hash below is already pinned
+in source. Just stage and upload them.
+
+| Local source | Stage as (under `upload/`) | R2 destination | Size | SHA-256 |
+|---|---|---|---|---|
+| `prototypes/Surya/models/surya-2.gguf` | `models/surya-2.gguf` | `models/surya-2.gguf` | 1,266,400,864 B (1.3 GB) | `1f18abe17b1ed8b4e47ee9b1ad0e274c93daf5efbb6b29a04ff1712e37051e05` |
+| `prototypes/Surya/models/surya-2-mmproj.gguf` | `models/surya-2-mmproj.gguf` | `models/surya-2-mmproj.gguf` | 204,986,688 B (205 MB) | `98c0563673b1657ff6d021d1e5f04af06cbf61bb40c63ac613e8bb71b42fb2c0` |
+| `prototypes/Surya/models/chat_template.jinja` | `models/chat_template.jinja` | `models/chat_template.jinja` | 2,872 B | `86f17a85672e7f367b5e6c6de6f67f53ede0fba4abb3d67c583a6ef647c1aa85` |
+| `~/.oar/pp-ocrv6_small_det.onnx` | `models/oar-ocr/pp-ocrv6_small_det.onnx` | `models/oar-ocr/pp-ocrv6_small_det.onnx` | 9,880,512 B (9.4 MB) | `d73e0058b7a8086bbd57f3d10b8bcd4ff95363f67e06e2762b5e814fe9c9410e` |
+| `~/.oar/pp-ocrv6_small_rec.onnx` | `models/oar-ocr/pp-ocrv6_small_rec.onnx` | `models/oar-ocr/pp-ocrv6_small_rec.onnx` | 21,159,378 B (20 MB) | `5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634` |
+| `~/.oar/ppocrv6_dict.txt` | `models/oar-ocr/ppocrv6_dict.txt` | `models/oar-ocr/ppocrv6_dict.txt` | 74,947 B | `b5f2bfe2bdd9448429e3e82b51c789775d9b42f2403d082b00662eb77e401c5d` |
+
+Note the asymmetry: Surya's three files sit flat under `models/`; oar-ocr's sit nested
+under `models/oar-ocr/`. That's simply how each was defined (`setup.rs`'s `MODEL_ASSETS`
+for Surya, `get_oar_ocr_asset_specs` for oar-ocr) — upload to exactly the paths shown.
+
+Before uploading, re-verify each local file's hash matches the table (cheap insurance
+against a partial/corrupt local copy going live):
+
+```powershell
+# PowerShell
+Get-FileHash "prototypes\Surya\models\surya-2.gguf" -Algorithm SHA256
+Get-FileHash "prototypes\Surya\models\surya-2-mmproj.gguf" -Algorithm SHA256
+Get-FileHash "prototypes\Surya\models\chat_template.jinja" -Algorithm SHA256
+Get-FileHash "$env:USERPROFILE\.oar\pp-ocrv6_small_det.onnx" -Algorithm SHA256
+Get-FileHash "$env:USERPROFILE\.oar\pp-ocrv6_small_rec.onnx" -Algorithm SHA256
+Get-FileHash "$env:USERPROFILE\.oar\ppocrv6_dict.txt" -Algorithm SHA256
+```
+
+### 13b — Stage and upload
+
+```bash
+mkdir -p upload/models/oar-ocr
+cp prototypes/Surya/models/surya-2.gguf          upload/models/
+cp prototypes/Surya/models/surya-2-mmproj.gguf   upload/models/
+cp prototypes/Surya/models/chat_template.jinja   upload/models/
+cp ~/.oar/pp-ocrv6_small_det.onnx                upload/models/oar-ocr/
+cp ~/.oar/pp-ocrv6_small_rec.onnx                upload/models/oar-ocr/
+cp ~/.oar/ppocrv6_dict.txt                       upload/models/oar-ocr/
+
+wrangler r2 object put anchor-assets/models/surya-2.gguf                    --file upload/models/surya-2.gguf
+wrangler r2 object put anchor-assets/models/surya-2-mmproj.gguf             --file upload/models/surya-2-mmproj.gguf
+wrangler r2 object put anchor-assets/models/chat_template.jinja             --file upload/models/chat_template.jinja
+wrangler r2 object put anchor-assets/models/oar-ocr/pp-ocrv6_small_det.onnx --file upload/models/oar-ocr/pp-ocrv6_small_det.onnx
+wrangler r2 object put anchor-assets/models/oar-ocr/pp-ocrv6_small_rec.onnx --file upload/models/oar-ocr/pp-ocrv6_small_rec.onnx
+wrangler r2 object put anchor-assets/models/oar-ocr/ppocrv6_dict.txt        --file upload/models/oar-ocr/ppocrv6_dict.txt
+```
+
+(Surya's 1.3 GB file is the one candidate for `rclone` instead, per Step 9's note, if
+Wrangler is slow.)
+
+### 13c — Verify
+
+```bash
+R2_BASE="https://anchor-assets.aidenpaleczny.com"
+curl -I "$R2_BASE/models/surya-2.gguf"
+curl -I "$R2_BASE/models/surya-2-mmproj.gguf"
+curl -I "$R2_BASE/models/chat_template.jinja"
+curl -I "$R2_BASE/models/oar-ocr/pp-ocrv6_small_det.onnx"
+curl -I "$R2_BASE/models/oar-ocr/pp-ocrv6_small_rec.onnx"
+curl -I "$R2_BASE/models/oar-ocr/ppocrv6_dict.txt"
+```
+
+All six must return `HTTP/2 200` with `content-length` matching the table above before
+touching any code below.
+
+### 13d — Code changes, now that the assets are live
+
+**Surya (`app/src-tauri/src/pipeline/catalog.rs`)** — merge the two `#[cfg]`-gated arms
+back into one for both `MODELS` and `PRESETS`, and delete the now-stale "debug-only until
+uploaded" doc comments above each:
+
+```rust
+// Before:
+#[cfg(debug_assertions)]
+pub const MODELS: &[ModelSpec] = &[QWEN_3_5_4B, SURYA_OCR_2];
+#[cfg(not(debug_assertions))]
+pub const MODELS: &[ModelSpec] = &[QWEN_3_5_4B];
+
+// After:
+pub const MODELS: &[ModelSpec] = &[QWEN_3_5_4B, SURYA_OCR_2];
+```
+
+```rust
+// Before:
+#[cfg(debug_assertions)]
+pub const PRESETS: &[PipelinePreset] = &[
+    OAR_OCR_SURYA_QWEN, TESSERACT_SURYA_QWEN, OAR_OCR_QWEN, TESSERACT_QWEN, OAR_OCR_SURYA_NO_LLM,
+];
+#[cfg(not(debug_assertions))]
+pub const PRESETS: &[PipelinePreset] = &[TESSERACT_QWEN];
+
+// After:
+pub const PRESETS: &[PipelinePreset] = &[
+    OAR_OCR_SURYA_QWEN, TESSERACT_SURYA_QWEN, OAR_OCR_QWEN, TESSERACT_QWEN, OAR_OCR_SURYA_NO_LLM,
+];
+```
+
+Also revisit `DEFAULT_PRESET_ID`, which is currently cfg-split the same way (oar-ocr in
+debug, Tesseract in release) — decide now whether oar-ocr becomes the real default or
+stays an opt-in choice once it's no longer debug-only, and collapse that `#[cfg]` too.
+
+**oar-ocr (`app/src-tauri/src/setup.rs`)** — reconnect the manifest function that already
+exists but was never wired in. Remove the two `#[allow(dead_code)]` attributes on
+`get_oar_ocr_asset_specs` and the three `OAR_OCR_*_FILENAME` constants, then:
+
+```rust
+// In required_assets():
+if preset.uses_oar_ocr() {
+    required.push("oar_ocr_det");
+    required.push("oar_ocr_rec");
+    required.push("oar_ocr_dict");
+}
+
+// In get_asset_manifest(), alongside the existing `tesseract` variable:
+let oar_ocr = if preset.uses_oar_ocr() {
+    get_oar_ocr_asset_specs(&data_dir)
+} else {
+    Vec::new()
+};
+// ...
+assets.extend(tesseract);
+assets.extend(oar_ocr);   // add this line back
+assets.extend(models);
+
+// In asset_installed():
+"oar_ocr_det" => data_dir.join("models").join("oar-ocr").join(OAR_OCR_DET_FILENAME).exists(),
+"oar_ocr_rec" => data_dir.join("models").join("oar-ocr").join(OAR_OCR_REC_FILENAME).exists(),
+"oar_ocr_dict" => data_dir.join("models").join("oar-ocr").join(OAR_OCR_DICT_FILENAME).exists(),
+```
+
+(This is close to reverting the "quick test" fix from the earlier `pp-ocrv6_small_det.onnx
+404` incident — that fix was correct *because* the files weren't uploaded yet; now that
+they are, the original wizard-managed design is what should be reinstated.)
+
+**oar-ocr (`app/src-tauri/src/ocr.rs`)** — the manifest change above makes the app
+*download* the pinned files, but `run_oar_ocr` still has to actually *read from* them
+instead of asking the crate to fetch its own copies by bare name. Thread `data_dir`
+through the call chain and build real paths:
+
+```rust
+// ocr_image_to_page and run_oar_ocr both gain a `data_dir: &Path` parameter,
+// passed from process_document_blocking's existing `data_dir` at both call sites
+// (the PDF loop and the single-image branch).
+
+fn run_oar_ocr(
+    ocr_path: &Path,
+    image_path: &Path,
+    natural_width: i32,
+    natural_height: i32,
+    scale: f32,
+    spec: &catalog::OarOcrSpec,
+    data_dir: &Path,                                   // new
+) -> Result<DocumentPageResult, String> {
+    let models_dir = data_dir.join("models").join("oar-ocr");
+    let engine = OAROCRBuilder::new(
+        models_dir.join(spec.det_model).to_string_lossy().into_owned(),
+        models_dir.join(spec.rec_model).to_string_lossy().into_owned(),
+        models_dir.join(spec.dict).to_string_lossy().into_owned(),
+    )
+    .return_word_box(spec.word_box)
+    .build()
+    .map_err(|error| format!("failed to build oar-ocr pipeline: {error}"))?;
+    // ...unchanged below...
+```
+
+Once this is in, oar-ocr no longer touches ModelScope at runtime at all — update its
+doc comment (currently "resolved through oar-ocr's own auto-download... rather than the
+paths setup.rs pins — that wiring is the remaining step") to say the wiring is done, and
+consider removing the now-unused `auto-download` Cargo feature from `oar-ocr`'s entry in
+`Cargo.toml` so there's no latent live-network code path left in the binary at all.
+
+### 13e — Docs to update alongside the code
+
+- **`docs/design.md` §5** — the "Debug builds only" language for all four gated presets,
+  and the "auto-download... unpinned" framing for oar-ocr, both describe the
+  now-superseded state.
+- **`docs/todo.md`** — check off the R2-mirroring item and the `recommend_preset`
+  landmine item (once `PRESETS` is unconditional, "Automatic" recommending a
+  Surya/oar-ocr preset is no longer a broken default — it's a real, downloadable one).
+- **`NOTICES.md` §1.7** — the line "fetched, on first use of an oar-ocr-grounded pipeline
+  preset, by the `oar-ocr` crate's own `auto-download` feature directly from ModelScope"
+  becomes false once 13d lands; update it to describe the app's own pinned download.
+- **`CLAUDE.md`** — the top-of-file paragraph explicitly calls out oar-ocr's ModelScope
+  path as "a separate, unpinned network path outside the wizard's own R2/pinned-manifest
+  pipeline" — that sentence needs rewriting once it isn't true anymore.
+
+### 13f — Test and verify
+
+```bash
+cd app/src-tauri
+cargo test --lib
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
+```
+
+Then walk the setup wizard end-to-end (Step 12's checklist) with each of the five
+presets selected in turn via the Custom path's preset picker, confirming each downloads,
+verifies, and completes without touching ModelScope or any non-R2 host.
+
+---
+
 ## File checklist
 
 Before going to production, confirm every item below is complete:
@@ -379,3 +600,15 @@ Before going to production, confirm every item below is complete:
 - [ ] `HF_MODEL_URL` and `HF_MMPROJ_URL` constants set in `setup.rs` (pinned to an exact revision)
 - [ ] All `sha256` fields populated in the asset manifest (Linux assets may stay empty — later addition)
 - [ ] Setup wizard tested end-to-end on at least one platform
+
+**Surya + oar-ocr (Step 13):**
+
+- [ ] All 3 Surya files uploaded (`models/surya-2.gguf`, `models/surya-2-mmproj.gguf`, `models/chat_template.jinja`)
+- [ ] All 3 oar-ocr files uploaded (`models/oar-ocr/pp-ocrv6_small_det.onnx`, `models/oar-ocr/pp-ocrv6_small_rec.onnx`, `models/oar-ocr/ppocrv6_dict.txt`)
+- [ ] All 6 return HTTP 200 with the correct `content-length` via curl
+- [ ] `catalog.rs`'s `MODELS` and `PRESETS` `#[cfg(debug_assertions)]` split removed (and `DEFAULT_PRESET_ID`'s decided)
+- [ ] `setup.rs`'s `get_oar_ocr_asset_specs` reconnected to `required_assets` / `get_asset_manifest` / `asset_installed`; `#[allow(dead_code)]` attributes removed
+- [ ] `ocr.rs::run_oar_ocr` reads from `data_dir/models/oar-ocr/...` instead of asking the crate to auto-download by bare name
+- [ ] `docs/design.md` §5, `docs/todo.md`, `NOTICES.md` §1.7, and `CLAUDE.md`'s opening paragraph updated to drop the "debug-only" / "unpinned ModelScope path" language
+- [ ] `cargo test --lib`, `cargo clippy -- -D warnings`, `cargo fmt --check` all pass
+- [ ] All 5 presets walked through the setup wizard end-to-end with no non-R2 network calls
