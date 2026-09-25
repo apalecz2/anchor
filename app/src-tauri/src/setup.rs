@@ -1104,15 +1104,18 @@ const MODEL_ASSETS: &[ModelAssetSpec] = &[
         hf_fallback: Some(HF_MODEL_URL),
         version: QWEN_MODEL_REVISION,
     },
-    // ---- Surya OCR 2 (the Accurate preset's grid model) ----
+    // ---- Surya OCR 2 (the on-hold grid model — see catalog::SURYA_OCR_2) ----
     //
     // ⚠️ These digests and sizes are **measured from the real files** (the ones
-    // `prototypes/Surya` downloads from `datalab-to/surya-ocr-2-gguf`), but the R2
-    // objects they name are **not uploaded yet**. That is why the model and its preset
-    // are `#[cfg(debug_assertions)]` in the catalog: a debug build can run them against
-    // files placed in AppData by hand, while a release build cannot offer a download
-    // that would 404. Uploading these three objects under `models/` and dropping the
-    // two `cfg` attributes is the whole of what ships this preset.
+    // `prototypes/Surya` downloads from `datalab-to/surya-ocr-2-gguf`), and the R2
+    // objects they name are still **not uploaded**. Uploading them would no longer be
+    // enough to ship this model on its own, though: `catalog::SURYA_OCR_2`'s doc
+    // comment records an unresolved license concern (a competing-product ban and a
+    // share-alike clause reaching Anchor's own output) found after these pins were
+    // written, on top of the accuracy finding that its grid step doesn't earn its
+    // keep. Kept here only so `catalog::MODELS`' debug-only entry keeps validating
+    // against pinned bytes, the same as every other model — not because shipping is
+    // imminent.
     ModelAssetSpec {
         asset_id: "surya_gguf",
         label: "Surya layout model (1.3 GB)",

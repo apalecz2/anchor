@@ -15,12 +15,14 @@
 //!
 //! # Steps that are built but unreachable
 //!
-//! `GroundGrid` runs, but the only preset using it is not in `catalog::PRESETS` yet
-//! (its model's downloads are unpinned). `GroundModel` — grounding a page's *text* on
-//! a model rather than Tesseract — reports a clear error instead of pretending to run:
-//! the P0 spike found Surya's own table markup inconsistent with its geometry, so
-//! there is no model to implement it against yet. `Verify` shares the structuring
-//! path but no preset asks for a second pass.
+//! `GroundGrid` runs, but every preset that named it (Surya's grid model) is held out
+//! of `catalog::PRESETS` — see `catalog::SURYA_OCR_2`'s doc comment for why (an
+//! unresolved license concern, plus an eval finding that the grid never earned its
+//! keep). `GroundModel` — grounding a page's *text* on a model rather than Tesseract —
+//! reports a clear error instead of pretending to run: the P0 spike found Surya's own
+//! table markup inconsistent with its geometry, so there is no model to implement it
+//! against yet. `Verify` shares the structuring path but no preset asks for a second
+//! pass.
 
 use std::sync::{
     atomic::{AtomicU64, Ordering},
@@ -817,9 +819,10 @@ mod tests {
     /// Every step kind a preset uses must be one `run_page` handles; an unhandled kind
     /// would only surface at runtime, part-way through a real extraction.
     ///
-    /// The unshipped words-plus-grid preset is checked alongside the default one, so
-    /// the phase that finally pins Surya's downloads finds the executor already ready
-    /// for it rather than discovering `GroundGrid` falls through.
+    /// The words-plus-grid presets are checked alongside the shipped ones even though
+    /// they're on hold (`catalog::SURYA_OCR_2`'s doc comment), so a future change that
+    /// lifts the hold finds the executor already ready for `GroundGrid` rather than
+    /// discovering it falls through.
     #[test]
     fn the_shipped_and_pending_presets_are_runnable_by_this_executor() {
         for preset in [

@@ -366,16 +366,36 @@ rm -rf ~/Library/Application\ Support/com.aidenpaleczny.anchor
 
 ## Step 13 — Ship the Surya + oar-ocr assets (lift the debug-only gates)
 
-Two engines added after the original provisioning above are still debug-only: **Surya**
-(the table-grid model used by the "Accurate" presets) and **oar-ocr** (the pure-Rust OCR
-engine used by the "Rust OCR" presets). Both are pinned with real SHA-256 hashes already
-— measured from files this project already downloaded and tested against — but neither
-set of R2 objects exists yet, and oar-ocr additionally still self-downloads from
-ModelScope at runtime instead of going through this app's manifest. This step finishes
-both.
+> **⚠️ Surya's half of this step is on hold — do not execute it.** After this guide was
+> written, two things changed: (1) a real read of Surya's license found a modified
+> OpenRAIL-M grant with a competing-product ban carrying no revenue exemption, a
+> share-alike clause whose text reaches Anchor's own *output*, and a mandatory pass-through
+> onto Anchor's own EULA — none of which `NOTICES.md`/`EULA.md` account for, and none of
+> which is resolved; (2) the real `e2e/eval` harness found Surya's grid step made no
+> measurable difference paired with an LLM and was worse than the LLM pipelines when used
+> alone (see `catalog::SURYA_OCR_2`'s doc comment for the numbers). `tesseract-surya-qwen3.5-4b`,
+> `oar-ocr-surya-qwen3.5-4b`, and `oar-ocr-surya-no-llm` were pulled from `catalog::PRESETS`
+> entirely (2026-09-25, not just left `#[cfg(debug_assertions)]`) and are not selectable in
+> any build. **The Surya-specific parts of 13a–13e below (files, upload commands, and the
+> `PRESETS` snippet naming the three Surya presets) are kept only as a reference for if/when
+> legal clears the license — they must not be run until then.** oar-ocr carries no such
+> issue and remains actionable; do that half on its own.
+>
+> [!] Note there is no interface-level `SURYA_OCR_2` VS `oar-ocr` reason to feel time
+> pressure — the model spec, the three presets, `Step::GroundGrid`, and `pipeline/surya.rs`
+> all stay in the codebase as tested code either way, so there's nothing decaying while
+> this waits on legal review.
 
-**Do the two parts in order** — upload and verify first; only drop the `#[cfg]` gates
-once the URLs are confirmed live. A code change that ships a preset before its assets
+Two engines added after the original provisioning above are still debug-only: **Surya**
+(the table-grid model used by the on-hold "Accurate" presets, above) and **oar-ocr** (the
+pure-Rust OCR engine used by the "Rust OCR" presets). Both are pinned with real SHA-256
+hashes already — measured from files this project already downloaded and tested against —
+but neither set of R2 objects exists yet, and oar-ocr additionally still self-downloads
+from ModelScope at runtime instead of going through this app's manifest. **Only run
+oar-ocr's half of what follows.**
+
+**Do the two parts (per engine) in order** — upload and verify first; only drop a `#[cfg]`
+gate once the URLs are confirmed live. A code change that ships a preset before its assets
 exist on R2 is strictly worse than leaving it debug-only: it turns a known internal
 limitation into a 404 in front of a real user, which is the exact failure this project
 hit and fixed once already (see `docs/issues.md` § the `require_files_exist` post-mortem).
@@ -451,35 +471,29 @@ touching any code below.
 
 ### 13d — Code changes, now that the assets are live
 
-**Surya (`app/src-tauri/src/pipeline/catalog.rs`)** — merge the two `#[cfg]`-gated arms
-back into one for both `MODELS` and `PRESETS`, and delete the now-stale "debug-only until
-uploaded" doc comments above each:
+**Surya (`app/src-tauri/src/pipeline/catalog.rs`) — do not do this until legal clears the
+license (see the warning at the top of this step).** Lifting the hold today is more than
+un-`cfg`-ing a merge: the three Surya presets aren't just gated by build type anymore,
+they're absent from `PRESETS` in every build. Once legal clears it, the real change is to
+add them back to the (now un-gated, if oar-ocr's half of this guide already landed) array,
+and delete the "on hold" doc comments on `SURYA_OCR_2`, `TESSERACT_SURYA_QWEN`,
+`OAR_OCR_SURYA_QWEN`, and `OAR_OCR_SURYA_NO_LLM`:
 
 ```rust
-// Before:
-#[cfg(debug_assertions)]
-pub const MODELS: &[ModelSpec] = &[QWEN_3_5_4B, SURYA_OCR_2];
-#[cfg(not(debug_assertions))]
-pub const MODELS: &[ModelSpec] = &[QWEN_3_5_4B];
-
-// After:
-pub const MODELS: &[ModelSpec] = &[QWEN_3_5_4B, SURYA_OCR_2];
-```
-
-```rust
-// Before:
-#[cfg(debug_assertions)]
-pub const PRESETS: &[PipelinePreset] = &[
-    OAR_OCR_SURYA_QWEN, TESSERACT_SURYA_QWEN, OAR_OCR_QWEN, TESSERACT_QWEN, OAR_OCR_SURYA_NO_LLM,
-];
-#[cfg(not(debug_assertions))]
-pub const PRESETS: &[PipelinePreset] = &[TESSERACT_QWEN];
+// Before (current state):
+pub const PRESETS: &[PipelinePreset] = &[OAR_OCR_QWEN, TESSERACT_QWEN];
 
 // After:
 pub const PRESETS: &[PipelinePreset] = &[
     OAR_OCR_SURYA_QWEN, TESSERACT_SURYA_QWEN, OAR_OCR_QWEN, TESSERACT_QWEN, OAR_OCR_SURYA_NO_LLM,
 ];
 ```
+
+This also reopens the accuracy question this project already measured once and answered
+"no" — the `e2e/eval` numbers in the warning above — so re-adding these presets should
+come with either new evidence that changes that answer, or a product decision to ship
+them anyway for a reason other than accuracy (e.g. speed, for `oar-ocr-surya-no-llm`
+specifically).
 
 Also revisit `DEFAULT_PRESET_ID`, which is currently cfg-split the same way (oar-ocr in
 debug, Tesseract in release) — decide now whether oar-ocr becomes the real default or
@@ -557,18 +571,30 @@ consider removing the now-unused `auto-download` Cargo feature from `oar-ocr`'s 
 
 ### 13e — Docs to update alongside the code
 
-- **`docs/design.md` §5** — the "Debug builds only" language for all four gated presets,
-  and the "auto-download... unpinned" framing for oar-ocr, both describe the
-  now-superseded state.
-- **`docs/todo.md`** — check off the R2-mirroring item and the `recommend_preset`
-  landmine item (once `PRESETS` is unconditional, "Automatic" recommending a
-  Surya/oar-ocr preset is no longer a broken default — it's a real, downloadable one).
+For oar-ocr (actionable now):
+
+- **`docs/design.md` §5** — the "Debug only" row and the "auto-download... unpinned"
+  framing for `oar-ocr-qwen3.5-4b` describe the now-superseded state.
+- **`docs/todo.md`** — check off the oar-ocr R2-mirroring item.
 - **`NOTICES.md` §1.7** — the line "fetched, on first use of an oar-ocr-grounded pipeline
   preset, by the `oar-ocr` crate's own `auto-download` feature directly from ModelScope"
   becomes false once 13d lands; update it to describe the app's own pinned download.
 - **`CLAUDE.md`** — the top-of-file paragraph explicitly calls out oar-ocr's ModelScope
   path as "a separate, unpinned network path outside the wizard's own R2/pinned-manifest
   pipeline" — that sentence needs rewriting once it isn't true anymore.
+
+For Surya (only once legal clears the license — see the warning at the top of this step):
+
+- **`docs/design.md` §5** — the "Three more presets exist... not in `PRESETS` in *any*
+  build" paragraph and the `SURYA_OCR_2`/`GroundGrid`/`Step::AssembleFromGrid` "on hold"
+  callouts throughout §6 all describe the held state and would need rewriting.
+- **`docs/todo.md`** — the "Pulled ... out of `catalog::PRESETS`" Completed entry would
+  need a follow-up noting the hold was lifted and why (legal clearance obtained, and
+  either new accuracy evidence or a non-accuracy reason to ship anyway).
+- **`e2e/eval/presets.ts`** — add the three preset ids back to `PRESET_LABELS`.
+- **`catalog.rs`, `executor.rs`, `setup.rs`** — reverse this session's "on hold" doc
+  comments (search for "on hold" / "held out" in these three files) back to whatever
+  reflects the real justification for shipping.
 
 ### 13f — Test and verify
 
@@ -601,14 +627,24 @@ Before going to production, confirm every item below is complete:
 - [ ] All `sha256` fields populated in the asset manifest (Linux assets may stay empty — later addition)
 - [ ] Setup wizard tested end-to-end on at least one platform
 
-**Surya + oar-ocr (Step 13):**
+**oar-ocr (Step 13, actionable now):**
 
-- [ ] All 3 Surya files uploaded (`models/surya-2.gguf`, `models/surya-2-mmproj.gguf`, `models/chat_template.jinja`)
 - [ ] All 3 oar-ocr files uploaded (`models/oar-ocr/pp-ocrv6_small_det.onnx`, `models/oar-ocr/pp-ocrv6_small_rec.onnx`, `models/oar-ocr/ppocrv6_dict.txt`)
-- [ ] All 6 return HTTP 200 with the correct `content-length` via curl
-- [ ] `catalog.rs`'s `MODELS` and `PRESETS` `#[cfg(debug_assertions)]` split removed (and `DEFAULT_PRESET_ID`'s decided)
+- [ ] All 3 return HTTP 200 with the correct `content-length` via curl
+- [ ] `catalog.rs`'s `MODELS` and `PRESETS` `#[cfg(debug_assertions)]` split removed for the oar-ocr entries (and `DEFAULT_PRESET_ID`'s decided)
 - [ ] `setup.rs`'s `get_oar_ocr_asset_specs` reconnected to `required_assets` / `get_asset_manifest` / `asset_installed`; `#[allow(dead_code)]` attributes removed
 - [ ] `ocr.rs::run_oar_ocr` reads from `data_dir/models/oar-ocr/...` instead of asking the crate to auto-download by bare name
-- [ ] `docs/design.md` §5, `docs/todo.md`, `NOTICES.md` §1.7, and `CLAUDE.md`'s opening paragraph updated to drop the "debug-only" / "unpinned ModelScope path" language
+- [ ] `docs/design.md` §5, `docs/todo.md`, `NOTICES.md` §1.7, and `CLAUDE.md`'s opening paragraph updated to drop the "debug-only" / "unpinned ModelScope path" language for oar-ocr
 - [ ] `cargo test --lib`, `cargo clippy -- -D warnings`, `cargo fmt --check` all pass
-- [ ] All 5 presets walked through the setup wizard end-to-end with no non-R2 network calls
+- [ ] `oar-ocr-qwen3.5-4b` (and the default preset) walked through the setup wizard end-to-end with no non-R2 network calls
+
+**Surya (blocked — do not check any of these off until legal clears the license; see the warning at the top of Step 13):**
+
+- [ ] Legal review of Surya's modified OpenRAIL-M license completed and documented (competing-product ban, output share-alike clause, mandatory EULA pass-through)
+- [ ] Accuracy case re-established (the `e2e/eval` finding was that Surya's grid added nothing paired with an LLM and lost to it used alone) or a non-accuracy reason to ship anyway
+- [ ] All 3 Surya files uploaded (`models/surya-2.gguf`, `models/surya-2-mmproj.gguf`, `models/chat_template.jinja`)
+- [ ] All 3 return HTTP 200 with the correct `content-length` via curl
+- [ ] `tesseract-surya-qwen3.5-4b`, `oar-ocr-surya-qwen3.5-4b`, and `oar-ocr-surya-no-llm` added back to `catalog::PRESETS`
+- [ ] "On hold" doc comments in `catalog.rs`, `executor.rs`, and `setup.rs` reversed; `docs/design.md` §5/§6 and `e2e/eval/presets.ts` updated
+- [ ] `cargo test --lib`, `cargo clippy -- -D warnings`, `cargo fmt --check` all pass
+- [ ] All three Surya presets walked through the setup wizard end-to-end with no non-R2 network calls

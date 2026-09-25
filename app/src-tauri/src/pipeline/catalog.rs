@@ -574,6 +574,21 @@ pub const QWEN_3_5_4B: ModelSpec = ModelSpec {
 /// same bands twice. Logprobs stay on because the grounder's own token confidences are
 /// what a future text-grounding tier would score cells with (`pipeline/surya.rs`
 /// already records the offsets for it).
+///
+/// **On hold, not just unshipped.** No preset in [`PRESETS`] names this model (see the
+/// comment there) — this spec, the three presets that used to reference it, and
+/// `pipeline/surya.rs` are kept only as tested interface code. Two independent findings
+/// drove that, beyond the pre-existing R2-pinning gap: (1) legal — Surya's weights ship
+/// under a modified OpenRAIL-M license with a competing-product ban carrying no revenue
+/// exemption, a share-alike clause whose text extends to Anchor's own *output*, and a
+/// mandatory pass-through onto Anchor's EULA, none of which `NOTICES.md`/`EULA.md`
+/// currently account for; (2) accuracy — the real `e2e/eval` harness found this model's
+/// grid step byte-identical-to-no-effect once paired with an LLM (`oar-ocr-qwen3.5-4b`
+/// vs. the old `oar-ocr-surya-qwen3.5-4b`, both 0.477 mean cellAccuracy over a 12-image
+/// seeded sample — the grid never reaches the Structure prompt) and materially worse
+/// when used alone via `Step::AssembleFromGrid` (0.304 mean). Re-offering any
+/// Surya-grounded preset needs real legal clearance first, a re-measured accuracy case
+/// second.
 pub const SURYA_OCR_2: ModelSpec = ModelSpec {
     id: "surya-ocr-2",
     label: "Surya OCR 2 (layout)",
@@ -717,14 +732,13 @@ pub const CUSTOM_GGUF: ModelSpec = ModelSpec {
 
 /// Every model the app can run.
 ///
-/// [`SURYA_OCR_2`] is **debug-only** until its files are uploaded to R2. Its SHA-256
-/// digests are real — measured from the files `prototypes/Surya` downloads — but the
-/// R2 objects they name do not exist yet, so a release build that offered the preset
-/// would hand a user a 404 part-way through setup. The `cfg` is the same bargain
-/// `setup::accept_unpinned_or_err` already makes: a development build may run ahead of
-/// the pinned assets, a shipped one may never.
-///
-/// Removing the `cfg` is the change that ships it, and nothing else has to move.
+/// [`SURYA_OCR_2`] stays in this list (debug builds only) purely so its own tests and
+/// the presets that used to reference it keep compiling and validating as interface
+/// code — see its doc comment for why it is on hold. It is **not** reachable from
+/// [`PRESETS`], so nothing here reaches a real user: `get_asset_manifest` only pins
+/// bytes for a model a selectable preset names, and this one has none. Its SHA-256
+/// digests are real (measured from the files `prototypes/Surya` downloads) but the R2
+/// objects they name were never uploaded — moot while the model is on hold regardless.
 #[cfg(debug_assertions)]
 pub const MODELS: &[ModelSpec] = &[QWEN_3_5_4B, SURYA_OCR_2];
 #[cfg(not(debug_assertions))]
@@ -819,9 +833,9 @@ the table. Better word accuracy in testing; same memory use as the Tesseract pre
 /// long document. The 16 GB floor is what pays for holding both — hence the RAM
 /// requirement above what either model needs alone.
 ///
-/// **Debug builds only**, for the same reason as [`SURYA_OCR_2`]: the weights it needs
-/// are not on R2 yet. In a development build it is selectable and runnable against
-/// files placed in AppData by hand; in a release build it does not exist.
+/// **Not in [`PRESETS`], on hold — see [`SURYA_OCR_2`]'s doc comment.** Still defined
+/// and validated by tests so it does not rot while it waits; runnable by hand against
+/// files placed in AppData, but not offered, recommended, or selectable in any build.
 pub const TESSERACT_SURYA_QWEN: PipelinePreset = PipelinePreset {
     id: "tesseract-surya-qwen3.5-4b",
     label: "Accurate",
@@ -869,11 +883,9 @@ Qwen3.5 4B builds the table. Better on dense or irregular tables.",
 /// Tesseract version: the executor runs steps per page, and evicting Surya
 /// and Qwen between them would reload multi-gigabyte weights twice per page.
 ///
-/// **Debug builds only**, for the same reason as [`SURYA_OCR_2`] and
-/// [`OAR_OCR_QWEN`]: Surya's weights aren't on R2 yet, and oar-ocr's files are
-/// pinned with real hashes but not yet uploaded either (see
-/// `setup.rs::get_oar_ocr_asset_specs`). Both gates have to lift before this
-/// preset can ship.
+/// **Not in [`PRESETS`], on hold — see [`SURYA_OCR_2`]'s doc comment.** Still defined
+/// and validated by tests so it does not rot while it waits; runnable by hand against
+/// files placed in AppData, but not offered, recommended, or selectable in any build.
 pub const OAR_OCR_SURYA_QWEN: PipelinePreset = PipelinePreset {
     id: "oar-ocr-surya-qwen3.5-4b",
     label: "Accurate (Rust OCR)",
@@ -920,8 +932,12 @@ columns, Qwen3.5 4B builds the table. Better on dense or irregular tables.",
 /// since the synthesized TSV is built from the exact same words its own
 /// grid-first matcher would match it back to.
 ///
-/// **Debug builds only**, for the same reason as [`OAR_OCR_SURYA_QWEN`]:
-/// depends on Surya, whose weights aren't on R2 yet.
+/// **Not in [`PRESETS`], on hold — see [`SURYA_OCR_2`]'s doc comment.** Still defined
+/// and validated by tests so it does not rot while it waits; runnable by hand against
+/// files placed in AppData, but not offered, recommended, or selectable in any build.
+/// The eval finding that most directly concerns this preset specifically: run alone
+/// (no LLM) against the same 12-image sample it scored 0.304 mean cellAccuracy, well
+/// below either Qwen-based preset's 0.477.
 pub const OAR_OCR_SURYA_NO_LLM: PipelinePreset = PipelinePreset {
     id: "oar-ocr-surya-no-llm",
     label: "Rust OCR + Surya (no LLM)",
@@ -960,14 +976,15 @@ quality depends entirely on OCR + grid accuracy.",
 /// first entry a machine's RAM and VRAM satisfy, so inserting a new preset places it
 /// in the recommendation ladder. A preset added in the wrong position silently becomes
 /// the recommendation for machines that should have got something else.
+///
+/// `TESSERACT_SURYA_QWEN`, `OAR_OCR_SURYA_QWEN`, and `OAR_OCR_SURYA_NO_LLM` are
+/// deliberately **not** listed here, in any build — see [`SURYA_OCR_2`]'s doc comment
+/// for why (an unresolved license concern, plus an eval finding that the grid step
+/// they all depend on doesn't earn its keep). They stay defined and tested above so
+/// the interface survives the hold; only their presence in this array is what a real
+/// user, `recommend_preset`, or the Settings picker can ever see.
 #[cfg(debug_assertions)]
-pub const PRESETS: &[PipelinePreset] = &[
-    OAR_OCR_SURYA_QWEN,
-    TESSERACT_SURYA_QWEN,
-    OAR_OCR_QWEN,
-    TESSERACT_QWEN,
-    OAR_OCR_SURYA_NO_LLM,
-];
+pub const PRESETS: &[PipelinePreset] = &[OAR_OCR_QWEN, TESSERACT_QWEN];
 #[cfg(not(debug_assertions))]
 pub const PRESETS: &[PipelinePreset] = &[TESSERACT_QWEN];
 
