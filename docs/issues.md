@@ -142,6 +142,8 @@ Added excel export support
 **Dark-mode screenshots don't render the cell highlights correctly.** The provenance
    highlight boxes drawn over the source image look wrong (or are missing) when the app is
    in dark mode while capturing/showing the screenshot.
+   - **Resolved** -- confirmed (2026-09-28) no longer reproduces; the highlight boxes render
+     correctly over the source image in dark mode.
 
 **No in-app indication that results are saved.** After an extraction the output is
    persisted, but the UI gives no "saved" affordance, so the user can't tell their work is
