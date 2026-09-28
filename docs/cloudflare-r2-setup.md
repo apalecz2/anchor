@@ -636,7 +636,7 @@ Before going to production, confirm every item below is complete:
 - [x] `ocr.rs::run_oar_ocr` reads from `data_dir/models/oar-ocr/...` instead of asking the crate to auto-download by bare name; the `oar-ocr` crate's `auto-download` Cargo feature was dropped entirely
 - [x] `docs/design.md` §5, `docs/todo.md`, `NOTICES.md` §1.7, and `CLAUDE.md`'s opening paragraph updated to drop the "debug-only" / "unpinned ModelScope path" language for oar-ocr
 - [x] `cargo test --lib`, `cargo clippy -- -D warnings`, `cargo fmt --check` all pass
-- [ ] `oar-ocr-qwen3.5-4b` (and the default preset) walked through the setup wizard end-to-end with no non-R2 network calls
+- [x] `oar-ocr-qwen3.5-4b` (and the default preset) walked through the setup wizard end-to-end with no non-R2 network calls (verified 2026-09-28: incomplete-install detection triggered correctly, all 3 files downloaded byte-exact from R2 and verified, then two fresh extractions ran successfully through the reconnected engine)
 
 **Surya (blocked — do not check any of these off until legal clears the license; see the warning at the top of Step 13):**
 
