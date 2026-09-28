@@ -6,10 +6,6 @@
 - [ ] Fix: dark-mode screenshots don't render the provenance cell highlights correctly (`issues.md` → UI #1)
 - [ ] Indicate in-app that extraction results are saved -- add a save-state affordance so the user can tell their work is persisted (`issues.md` → UI #2)
 
-## Llama
-
-- [ ] Kill the llama-server immediately on a dev Ctrl-C -- a normal window close already stops it and a startup sweep reaps the orphan on next launch, so the only gap is the window between a Ctrl-C and the next start (`issues.md` → Llama #1)
-
 ## Provenance / Matching
 
 - [ ] Fix: alignment breaks when OCR misses a word, especially when the missed word is a duplicate of a common value -- fuzzy second pass now exists, and the grid cross-check (`gridMatchPass`) re-places cells that *desynced* from a dropped word; a *missing* word itself still has no OCR run to match, so assess whether residual cases remain
@@ -66,6 +62,7 @@
 ### Llama
 
 - [x] Verified the llama-server starts in a packaged (built) release (2026-09-28) -- built a real `npm run tauri build` release binary and ran it directly (`target\release\Anchor.exe`) against an existing AppData install. Confirmed: (1) `check_setup_complete` correctly recognized the install as complete for the packaged origin and skipped the wizard; (2) `useSetupCheck.ts`'s settings self-heal populated the packaged origin's empty `hardwareBackend` localStorage from `get_setup_paths` rather than defaulting to `cpu` (the exact failure mode `issues.md`'s Build/Packaging #2 documented); (3) a real "Format as Table" call started `llama-server` with `effective_backend=cuda n_gpu_layers=999`, loaded the model, processed the image, and returned a completion at ~26 t/s (GPU-class speed, not the ~7.6 t/s CPU-fallback symptom) with zero errors in the log. The wizard-downloaded-binary-via-explicit-path approach that replaced the old bundled sidecar is confirmed working end-to-end in a real packaged build, not just dev
+- [x] Kill the llama-server immediately on a dev Ctrl-C (2026-09-28) -- `lib.rs`'s `setup()` now spawns an async task (`tauri::async_runtime::spawn`) that awaits `tokio::signal::ctrl_c()`; when it fires, it calls the existing `sweep_orphan_server(&data_dir)` (previously only run at next-launch) and then `std::process::exit(130)`, since registering a Ctrl-C handler replaces the default terminate behavior. Registered unconditionally (harmless in release -- no console to send Ctrl-C from on Windows; a Terminal-launched macOS build still benefits). Verified live with a real Windows console `CTRL_C_EVENT` (via `GenerateConsoleCtrlEvent`, not a simulated process kill): started `npm run tauri dev` in a real console, triggered a "Format as Table" call to spawn `llama-server` and confirm its pidfile existed, sent a real Ctrl-C to the console's process group, and confirmed both `Anchor.exe` and `llama-server.exe` terminated immediately with the pidfile deleted -- proof the new handler's code path ran (not an incidental OS-level broadcast kill of the child, which wouldn't touch the pidfile)
 
 ### Provenance / Matching
 

@@ -75,8 +75,10 @@ reqwest = { version = "0.12", default-features = false, features = ["stream", "r
 # Async backoff between download retries, plus the pipeline executor's runtime needs.
 # `rt`/`macros` were previously only reaching us through Tauri's feature unification —
 # `spawn_blocking` and `select!` are used directly, so they are declared here rather
-# than relying on another crate happening to enable them.
-tokio = { version = "1", features = ["time", "rt", "sync", "macros"] }
+# than relying on another crate happening to enable them. `signal` backs
+# `tokio::signal::ctrl_c()` in `lib.rs`, reaping an orphaned llama-server the moment a
+# dev Ctrl-C fires rather than waiting for the next launch's `sweep_orphan_server`.
+tokio = { version = "1", features = ["time", "rt", "sync", "macros", "signal"] }
 # CancellationToken: a pipeline step is a single 30-120s await, so cancellation has to
 # be something `select!` can race against, not a flag polled between iterations.
 tokio-util = "0.7"

@@ -75,6 +75,24 @@ pub fn run() {
                 setup::sweep_stale_partials(&data_dir);
             }
 
+            // Reap this process's own llama-server the instant a dev Ctrl-C fires,
+            // rather than leaving it for the next launch's `sweep_orphan_server`
+            // (docs/issues.md "Llama #1"). Ctrl-C bypasses `on_window_event` entirely
+            // — no `CloseRequested` fires — so without this the server keeps holding
+            // multi-GB of RAM until the app is started again. Registering a handler
+            // replaces the default terminate-on-Ctrl-C behavior, so the handler must
+            // exit itself once cleanup is done; `130` is the conventional SIGINT exit
+            // code. Harmless in a release build too (no console to send Ctrl-C from
+            // on Windows; a Terminal-launched macOS build still benefits).
+            if let Ok(data_dir) = app.path().app_data_dir() {
+                tauri::async_runtime::spawn(async move {
+                    if tokio::signal::ctrl_c().await.is_ok() {
+                        sweep_orphan_server(&data_dir);
+                        std::process::exit(130);
+                    }
+                });
+            }
+
             // Reclaim OCR scratch directories a crashed run never got to delete.
             // Age-gated, so it cannot touch a run still in flight in another
             // instance of the app (there is no single-instance lock).
