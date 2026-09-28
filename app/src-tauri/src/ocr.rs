@@ -409,7 +409,7 @@ fn ocr_image_to_page(
     work_dir: &Path,
     allow_upscale: bool,
     engine: &catalog::OcrEngine,
-    data_dir: &Path,
+    oar_engine: Option<&OAROCR>,
 ) -> Result<DocumentPageResult, String> {
     let (ocr_path, scale) = preprocess_for_ocr(image_path, work_dir, allow_upscale)?;
 
@@ -425,15 +425,19 @@ fn ocr_image_to_page(
             scale,
             spec,
         ),
-        catalog::OcrEngine::OarOcr(spec) => run_oar_ocr(
-            &ocr_path,
-            image_path,
-            natural_width,
-            natural_height,
-            scale,
-            spec,
-            data_dir,
-        ),
+        // `oar_engine` is always `Some` here: `process_document_blocking` builds it
+        // exactly when `engine` is `OarOcr`, right before this is ever called.
+        catalog::OcrEngine::OarOcr(_) => match oar_engine {
+            Some(oar_engine) => run_oar_ocr(
+                &ocr_path,
+                image_path,
+                natural_width,
+                natural_height,
+                scale,
+                oar_engine,
+            ),
+            None => Err("internal error: oar-ocr engine was not initialized".to_string()),
+        },
     };
 
     let _ = fs::remove_file(&ocr_path);
@@ -491,39 +495,18 @@ fn run_tesseract(
     })
 }
 
-/// oar-ocr instead of Tesseract (see `prototypes/OarOcr`). Rebuilt per call
-/// rather than cached/shared across the document's pages — not optimized yet,
-/// swappable-via-manifest correctness came first.
-///
-/// `det_model`/`rec_model`/`dict` are read from `{data_dir}/models/oar-ocr/`,
-/// the paths `setup.rs::get_oar_ocr_asset_specs` downloads and pins — not
-/// resolved through the crate's own `auto-download` (ModelScope). No
-/// live network access at OCR time.
+/// oar-ocr instead of Tesseract (see `prototypes/OarOcr`). `engine` is built once
+/// per document by `process_document_blocking` and reused across every page —
+/// building it (loading the ONNX det/rec models) is the expensive part, so a
+/// multi-page PDF no longer pays that cost per page.
 fn run_oar_ocr(
     ocr_path: &Path,
     image_path: &Path,
     natural_width: i32,
     natural_height: i32,
     scale: f32,
-    spec: &catalog::OarOcrSpec,
-    data_dir: &Path,
+    engine: &OAROCR,
 ) -> Result<DocumentPageResult, String> {
-    let models_dir = data_dir.join("models").join("oar-ocr");
-    let engine = OAROCRBuilder::new(
-        models_dir
-            .join(spec.det_model)
-            .to_string_lossy()
-            .into_owned(),
-        models_dir
-            .join(spec.rec_model)
-            .to_string_lossy()
-            .into_owned(),
-        models_dir.join(spec.dict).to_string_lossy().into_owned(),
-    )
-    .return_word_box(spec.word_box)
-    .build()
-    .map_err(|error| format!("failed to build oar-ocr pipeline: {error}"))?;
-
     let rgb_image = image::open(ocr_path)
         .map_err(|error| format!("failed to load image for ocr: {error}"))?
         .to_rgb8();
@@ -779,6 +762,31 @@ fn process_document_blocking(
         ensure_tesseract_tsv_config(&data_dir);
     }
 
+    // Build oar-ocr's engine once for the whole document rather than per page —
+    // loading the ONNX det/rec models is the expensive part, so a multi-page PDF
+    // would otherwise pay that cost on every page (see `run_oar_ocr`).
+    let oar_engine = match engine {
+        catalog::OcrEngine::OarOcr(spec) => {
+            let models_dir = data_dir.join("models").join("oar-ocr");
+            let built = OAROCRBuilder::new(
+                models_dir
+                    .join(spec.det_model)
+                    .to_string_lossy()
+                    .into_owned(),
+                models_dir
+                    .join(spec.rec_model)
+                    .to_string_lossy()
+                    .into_owned(),
+                models_dir.join(spec.dict).to_string_lossy().into_owned(),
+            )
+            .return_word_box(spec.word_box)
+            .build()
+            .map_err(|error| format!("failed to build oar-ocr pipeline: {error}"))?;
+            Some(built)
+        }
+        catalog::OcrEngine::Tesseract(_) => None,
+    };
+
     let session_dir = app_handle
         .path()
         .resolve("sessions", tauri::path::BaseDirectory::AppData)
@@ -895,7 +903,7 @@ fn process_document_blocking(
                     ocr_work_dir,
                     false, // already high-res from pdfium; do not upscale
                     engine,
-                    &data_dir,
+                    oar_engine.as_ref(),
                 )
             };
 
@@ -940,7 +948,7 @@ fn process_document_blocking(
             ocr_work_dir,
             true, // arbitrary resolution; upscale if small
             engine,
-            &data_dir,
+            oar_engine.as_ref(),
         )?);
     } else {
         return Err(format!("Unsupported file format: .{}", extension));
