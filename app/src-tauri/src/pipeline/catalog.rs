@@ -293,9 +293,10 @@ pub struct TesseractSpec {
 }
 
 /// oar-ocr's settings (see `prototypes/OarOcr`): pure Rust, ONNX Runtime via
-/// `ort`, no Python, no Tesseract. `det_model`/`rec_model`/`dict` are names
-/// resolved through the crate's own auto-download registry (ModelScope,
-/// SHA-256-verified against hashes pinned inside the crate) rather than paths.
+/// `ort`, no Python, no Tesseract. `det_model`/`rec_model`/`dict` are
+/// filenames `ocr.rs::run_oar_ocr` resolves under `{data_dir}/models/oar-ocr/`
+/// — the paths `setup.rs::get_oar_ocr_asset_specs` downloads and pins, not
+/// the crate's own ModelScope auto-download.
 #[derive(Serialize, Debug, Clone, Copy)]
 pub struct OarOcrSpec {
     pub det_model: &'static str,
@@ -782,14 +783,11 @@ pub const TESSERACT_QWEN: PipelinePreset = PipelinePreset {
 /// links ONNX Runtime statically at `cargo build` time on Windows — not
 /// verified on macOS).
 ///
-/// **Debug-only for now**, same reason as [`SURYA_OCR_2`]: `auto-download`
-/// fetches oar-ocr's PP-OCRv6 models from ModelScope directly, bypassing the
-/// app's own pinned asset manifest entirely — fine for local testing, not for
-/// a shipped install (the Microsoft Store 10.2.2 claim needs every byte
-/// pinned and verified by *this app*, not fetched live from a third party at
-/// first run). Wiring it through `setup.rs`'s manifest — mirroring the real
-/// files' hashes to R2 like every other asset — is the change that lifts this
-/// gate; see `setup.rs`'s oar-ocr asset entries.
+/// Its three PP-OCRv6 model files are pinned and downloaded through
+/// `setup.rs`'s asset manifest like every other asset (uploaded to R2 under
+/// `models/oar-ocr/`, 2026-09-28) — `ocr.rs::run_oar_ocr` reads them by
+/// explicit path, not through the crate's own ModelScope `auto-download`.
+/// Ships in every build.
 pub const OAR_OCR_QWEN: PipelinePreset = PipelinePreset {
     id: "oar-ocr-qwen3.5-4b",
     label: "Fast (Rust OCR)",
@@ -983,10 +981,7 @@ quality depends entirely on OCR + grid accuracy.",
 /// they all depend on doesn't earn its keep). They stay defined and tested above so
 /// the interface survives the hold; only their presence in this array is what a real
 /// user, `recommend_preset`, or the Settings picker can ever see.
-#[cfg(debug_assertions)]
 pub const PRESETS: &[PipelinePreset] = &[OAR_OCR_QWEN, TESSERACT_QWEN];
-#[cfg(not(debug_assertions))]
-pub const PRESETS: &[PipelinePreset] = &[TESSERACT_QWEN];
 
 /// Tesseract grounds the page and the user's own model builds the table.
 ///
@@ -1025,14 +1020,9 @@ Anchor cannot verify this model or vouch for its output.",
 
 /// The preset used when nothing else is selected.
 ///
-/// oar-ocr is preferred (tested more accurate than Tesseract) but stays
-/// debug-only until its assets are pinned through `setup.rs`'s manifest
-/// rather than fetched live from ModelScope — see [`OAR_OCR_QWEN`]. A release
-/// build falls back to the Tesseract preset until that lands.
-#[cfg(debug_assertions)]
+/// oar-ocr is preferred (tested more accurate than Tesseract) now that its
+/// assets are pinned through `setup.rs`'s manifest — see [`OAR_OCR_QWEN`].
 pub const DEFAULT_PRESET_ID: &str = OAR_OCR_QWEN.id;
-#[cfg(not(debug_assertions))]
-pub const DEFAULT_PRESET_ID: &str = TESSERACT_QWEN.id;
 
 /// A model Anchor ships and installs. Excludes [`CUSTOM_GGUF`] on purpose — callers
 /// that download, verify or size models must not see a model with no files.
@@ -1280,13 +1270,7 @@ mod tests {
     #[test]
     fn default_preset_exists_and_is_word_grounded() {
         let p = preset(DEFAULT_PRESET_ID).expect("default preset must be in the catalog");
-        // Debug (test) builds default to oar-ocr; release falls back to
-        // Tesseract until oar-ocr's assets are pinned through setup.rs.
-        if cfg!(debug_assertions) {
-            assert!(p.uses_oar_ocr());
-        } else {
-            assert!(p.uses_tesseract());
-        }
+        assert!(p.uses_oar_ocr());
         assert_eq!(p.grounding(), Grounding::Word);
         assert_eq!(p.model_ids(), vec!["qwen3.5-4b"]);
     }

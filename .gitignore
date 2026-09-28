@@ -1,0 +1,4 @@
+# Wrangler CLI local state (created by `wrangler login` / `wrangler r2 object put`
+# when run from the repo root) -- not an npm project here, just its runtime cache.
+.wrangler/
+node_modules/

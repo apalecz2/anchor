@@ -1,8 +1,8 @@
 /**
- * Mirrors `app/src-tauri/src/pipeline/catalog.rs` PRESETS (debug-build list) and
- * `DEFAULT_PRESET_ID` — update both sides if either changes. Kept as pure data
- * (no WebdriverIO import) so `config.ts` can validate/default against it without
- * pulling a browser-driving dependency into env-var parsing.
+ * Mirrors `app/src-tauri/src/pipeline/catalog.rs` PRESETS and `DEFAULT_PRESET_ID`
+ * — update both sides if either changes. Kept as pure data (no WebdriverIO import)
+ * so `config.ts` can validate/default against it without pulling a browser-driving
+ * dependency into env-var parsing.
  *
  * The three Surya-grounded presets (`oar-ocr-surya-qwen3.5-4b`,
  * `tesseract-surya-qwen3.5-4b`, `oar-ocr-surya-no-llm`) were removed from `PRESETS`
@@ -17,5 +17,5 @@ export const PRESET_LABELS: Record<string, string> = {
 
 export const ALL_PRESET_IDS = Object.keys(PRESET_LABELS);
 
-/** Mirrors catalog.rs's debug-build DEFAULT_PRESET_ID. */
+/** Mirrors catalog.rs's DEFAULT_PRESET_ID, the same in every build. */
 export const DEFAULT_PRESET_ID = 'oar-ocr-qwen3.5-4b';

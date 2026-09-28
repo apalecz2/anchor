@@ -627,15 +627,15 @@ Before going to production, confirm every item below is complete:
 - [ ] All `sha256` fields populated in the asset manifest (Linux assets may stay empty — later addition)
 - [ ] Setup wizard tested end-to-end on at least one platform
 
-**oar-ocr (Step 13, actionable now):**
+**oar-ocr (Step 13 — done 2026-09-28):**
 
-- [ ] All 3 oar-ocr files uploaded (`models/oar-ocr/pp-ocrv6_small_det.onnx`, `models/oar-ocr/pp-ocrv6_small_rec.onnx`, `models/oar-ocr/ppocrv6_dict.txt`)
-- [ ] All 3 return HTTP 200 with the correct `content-length` via curl
-- [ ] `catalog.rs`'s `MODELS` and `PRESETS` `#[cfg(debug_assertions)]` split removed for the oar-ocr entries (and `DEFAULT_PRESET_ID`'s decided)
-- [ ] `setup.rs`'s `get_oar_ocr_asset_specs` reconnected to `required_assets` / `get_asset_manifest` / `asset_installed`; `#[allow(dead_code)]` attributes removed
-- [ ] `ocr.rs::run_oar_ocr` reads from `data_dir/models/oar-ocr/...` instead of asking the crate to auto-download by bare name
-- [ ] `docs/design.md` §5, `docs/todo.md`, `NOTICES.md` §1.7, and `CLAUDE.md`'s opening paragraph updated to drop the "debug-only" / "unpinned ModelScope path" language for oar-ocr
-- [ ] `cargo test --lib`, `cargo clippy -- -D warnings`, `cargo fmt --check` all pass
+- [x] All 3 oar-ocr files uploaded (`models/oar-ocr/pp-ocrv6_small_det.onnx`, `models/oar-ocr/pp-ocrv6_small_rec.onnx`, `models/oar-ocr/ppocrv6_dict.txt`)
+- [x] All 3 return HTTP 200 with the correct `content-length` via curl
+- [x] `catalog.rs`'s `MODELS` and `PRESETS` `#[cfg(debug_assertions)]` split removed for the oar-ocr entries (`DEFAULT_PRESET_ID` decided: oar-ocr stays the default preset in every build, including release)
+- [x] `setup.rs`'s `get_oar_ocr_asset_specs` reconnected to `required_assets` / `get_asset_manifest` / `asset_installed`; `#[allow(dead_code)]` attributes removed
+- [x] `ocr.rs::run_oar_ocr` reads from `data_dir/models/oar-ocr/...` instead of asking the crate to auto-download by bare name; the `oar-ocr` crate's `auto-download` Cargo feature was dropped entirely
+- [x] `docs/design.md` §5, `docs/todo.md`, `NOTICES.md` §1.7, and `CLAUDE.md`'s opening paragraph updated to drop the "debug-only" / "unpinned ModelScope path" language for oar-ocr
+- [x] `cargo test --lib`, `cargo clippy -- -D warnings`, `cargo fmt --check` all pass
 - [ ] `oar-ocr-qwen3.5-4b` (and the default preset) walked through the setup wizard end-to-end with no non-R2 network calls
 
 **Surya (blocked — do not check any of these off until legal clears the license; see the warning at the top of Step 13):**

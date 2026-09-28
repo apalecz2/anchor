@@ -409,6 +409,7 @@ fn ocr_image_to_page(
     work_dir: &Path,
     allow_upscale: bool,
     engine: &catalog::OcrEngine,
+    data_dir: &Path,
 ) -> Result<DocumentPageResult, String> {
     let (ocr_path, scale) = preprocess_for_ocr(image_path, work_dir, allow_upscale)?;
 
@@ -431,6 +432,7 @@ fn ocr_image_to_page(
             natural_height,
             scale,
             spec,
+            data_dir,
         ),
     };
 
@@ -493,11 +495,10 @@ fn run_tesseract(
 /// rather than cached/shared across the document's pages — not optimized yet,
 /// swappable-via-manifest correctness came first.
 ///
-/// `det_model`/`rec_model`/`dict` are resolved through oar-ocr's own
-/// `auto-download` (ModelScope, hash-verified by the crate) rather than the
-/// paths `setup.rs` pins under `models/oar-ocr/` — that wiring is the
-/// remaining step to make this fully match Tesseract's "everything pinned by
-/// this app" story (see `setup.rs::get_oar_ocr_asset_specs`).
+/// `det_model`/`rec_model`/`dict` are read from `{data_dir}/models/oar-ocr/`,
+/// the paths `setup.rs::get_oar_ocr_asset_specs` downloads and pins — not
+/// resolved through the crate's own `auto-download` (ModelScope). No
+/// live network access at OCR time.
 fn run_oar_ocr(
     ocr_path: &Path,
     image_path: &Path,
@@ -505,11 +506,23 @@ fn run_oar_ocr(
     natural_height: i32,
     scale: f32,
     spec: &catalog::OarOcrSpec,
+    data_dir: &Path,
 ) -> Result<DocumentPageResult, String> {
-    let engine = OAROCRBuilder::new(spec.det_model, spec.rec_model, spec.dict)
-        .return_word_box(spec.word_box)
-        .build()
-        .map_err(|error| format!("failed to build oar-ocr pipeline: {error}"))?;
+    let models_dir = data_dir.join("models").join("oar-ocr");
+    let engine = OAROCRBuilder::new(
+        models_dir
+            .join(spec.det_model)
+            .to_string_lossy()
+            .into_owned(),
+        models_dir
+            .join(spec.rec_model)
+            .to_string_lossy()
+            .into_owned(),
+        models_dir.join(spec.dict).to_string_lossy().into_owned(),
+    )
+    .return_word_box(spec.word_box)
+    .build()
+    .map_err(|error| format!("failed to build oar-ocr pipeline: {error}"))?;
 
     let rgb_image = image::open(ocr_path)
         .map_err(|error| format!("failed to load image for ocr: {error}"))?
@@ -882,6 +895,7 @@ fn process_document_blocking(
                     ocr_work_dir,
                     false, // already high-res from pdfium; do not upscale
                     engine,
+                    &data_dir,
                 )
             };
 
@@ -926,6 +940,7 @@ fn process_document_blocking(
             ocr_work_dir,
             true, // arbitrary resolution; upscale if small
             engine,
+            &data_dir,
         )?);
     } else {
         return Err(format!("Unsupported file format: .{}", extension));

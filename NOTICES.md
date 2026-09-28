@@ -11,10 +11,9 @@ attribution and notice-retention obligations of those licenses.
 Some components are not shipped inside the installer: they are downloaded by the first-run
 setup wizard from `anchor-assets.aidenpaleczny.com` (a mirror operated by the author, with
 Hugging Face as fallback for the model files) and verified against pinned SHA-256 digests
-before use. They are listed in §1. Two entries in §1 (§1.6, §1.7) are redistributed by a
-different mechanism — one linked into the compiled binary at build time, the other
-downloaded on demand by a third-party crate's own verified fetch, neither going through
-Anchor's own wizard/R2 pipeline — and are called out as such where they differ.
+before use. They are listed in §1. One entry in §1 (§1.6, ONNX Runtime) is redistributed by
+a different mechanism — linked into the compiled binary at build time rather than going
+through Anchor's own wizard/R2 pipeline — and is called out as such.
 
 *Last regenerated: 2026-09-23. Regenerate the package tables (§2–§3) whenever dependencies
 change: `npm ls --omit=dev --all --json` in `app/`, and `cargo metadata --format-version 1`
@@ -185,13 +184,12 @@ same repository), copied next to the executable rather than statically linked.
 - License: Apache License 2.0 — the license under which the PaddleOCR repository (code and
   model zoo) is released; PaddleOCR maintains no separate, more restrictive license for its
   pretrained weights. Full text in [Appendix A](#appendix-a-apache-license-20).
-- **Not downloaded by Anchor's own setup wizard.** These three files (~30 MB combined) are
-  fetched, on first use of an oar-ocr-grounded pipeline preset, by the `oar-ocr` crate's own
-  `auto-download` feature directly from ModelScope, and SHA-256-verified by the crate itself
-  against hashes pinned inside it — a separate, narrower download path from the
-  wizard/R2/pinned-manifest mechanism the rest of this file describes (tracked as a gap in
-  `docs/design.md` §7.1: mirroring these to Anchor's own R2 bucket, the way every other model
-  asset is handled, is not yet done).
+- **Downloaded by Anchor's own setup wizard.** These three files (~30 MB combined) are
+  mirrored to Anchor's own R2 bucket under `models/oar-ocr/` (2026-09-28) and pinned by
+  SHA-256 in `setup.rs::get_oar_ocr_asset_specs`, the same wizard/R2/pinned-manifest
+  mechanism every other model asset uses. `ocr.rs::run_oar_ocr` reads them from
+  `{data_dir}/models/oar-ocr/` by explicit path; the `oar-ocr` crate's own `auto-download`
+  feature (which would fetch them live from ModelScope at first use) is not compiled in.
 
 ---
 
