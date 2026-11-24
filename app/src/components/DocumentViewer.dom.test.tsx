@@ -142,6 +142,25 @@ describe('DocumentViewer', () => {
         });
         // words + 1 provenance highlight rect
         expect(container.querySelectorAll('svg rect').length).toBe(3);
+        // Default precision is exact: a solid, filled outline around the source words.
+        const highlight = container.querySelectorAll('svg rect')[2];
+        expect(highlight.getAttribute('stroke-dasharray')).toBeNull();
+        expect(highlight.getAttribute('class')).toContain('fill-');
+        expect(highlight.querySelector('title')).toBeNull();
+    });
+
+    it('draws a coarse highlight as an unfilled dashed outline that says so', () => {
+        // A block-grounded page knows only the region a value sits in. Drawing that as
+        // the confident solid box used for exact word bounds would be a claim the
+        // grounding never made — it would point at an area and say "this is the value".
+        const { container } = renderViewer({
+            provenanceHighlightBox: { left: 5, top: 5, width: 30, height: 10 },
+            highlightPrecision: 'coarse',
+        });
+        const highlight = container.querySelectorAll('svg rect')[2];
+        expect(highlight.getAttribute('stroke-dasharray')).toBe('8 6');
+        expect(highlight.getAttribute('class')).toContain('fill-none');
+        expect(highlight.querySelector('title')?.textContent).toMatch(/Approximate location/);
     });
 });
 

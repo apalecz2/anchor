@@ -11,14 +11,18 @@ mod llama;
 mod menu;
 mod ocr;
 mod paths;
+/// Compiled and unit-tested before anything executes it, so the catalog it holds
+/// can't drift from the code it describes while the executor is still being built.
+mod pipeline;
 mod reset;
 mod setup;
 mod zoom;
 
 use tauri::{Manager, WindowEvent};
 
-use llama::{stop_llama_server_process, sweep_orphan_server, AppState};
+use llama::{stop_all_servers, sweep_orphan_server, AppState};
 use ocr::ProcessState;
+use pipeline::executor::PipelineState;
 use zoom::ZoomState;
 
 /// Label of the primary window (Tauri's default when none is configured). The
@@ -69,6 +73,24 @@ pub fn run() {
                 // Reclaim multi-GB `.part` files from downloads the user abandoned
                 // for good (older than the retention window; recent resumes are kept).
                 setup::sweep_stale_partials(&data_dir);
+            }
+
+            // Reap this process's own llama-server the instant a dev Ctrl-C fires,
+            // rather than leaving it for the next launch's `sweep_orphan_server`
+            // (docs/issues.md "Llama #1"). Ctrl-C bypasses `on_window_event` entirely
+            // — no `CloseRequested` fires — so without this the server keeps holding
+            // multi-GB of RAM until the app is started again. Registering a handler
+            // replaces the default terminate-on-Ctrl-C behavior, so the handler must
+            // exit itself once cleanup is done; `130` is the conventional SIGINT exit
+            // code. Harmless in a release build too (no console to send Ctrl-C from
+            // on Windows; a Terminal-launched macOS build still benefits).
+            if let Ok(data_dir) = app.path().app_data_dir() {
+                tauri::async_runtime::spawn(async move {
+                    if tokio::signal::ctrl_c().await.is_ok() {
+                        sweep_orphan_server(&data_dir);
+                        std::process::exit(130);
+                    }
+                });
             }
 
             // Reclaim OCR scratch directories a crashed run never got to delete.
@@ -141,12 +163,13 @@ pub fn run() {
         .manage(AppState::new())
         .manage(ProcessState::new())
         .manage(ZoomState::new())
+        .manage(PipelineState::new())
         .on_window_event(|window, event| {
             if matches!(event, WindowEvent::CloseRequested { .. })
                 && window.label() == MAIN_WINDOW_LABEL
             {
                 if let Some(state) = window.app_handle().try_state::<AppState>() {
-                    let _ = stop_llama_server_process(&state);
+                    let _ = stop_all_servers(&state);
                 }
             }
         })
@@ -181,6 +204,10 @@ pub fn run() {
             llama::stop_llama_server,
             llama::get_llama_server_port,
             llama::llama_server_status,
+            // Manifest-driven pipeline. Registered but not yet driven by the UI —
+            // the frontend keeps orchestrating until the two are compared.
+            pipeline::executor::run_extraction_pipeline,
+            pipeline::executor::cancel_extraction_pipeline,
             // Setup wizard
             setup::check_setup_complete,
             hardware::detect_hardware,
@@ -190,6 +217,12 @@ pub fn run() {
             setup::verify_file_hash,
             setup::get_setup_paths,
             setup::persist_backend,
+            setup::persist_preset,
+            setup::list_pipeline_presets,
+            setup::active_pipeline_preset,
+            pipeline::custom::set_custom_model,
+            pipeline::custom::get_custom_model,
+            pipeline::custom::clear_custom_model,
             setup::get_asset_manifest,
             setup::extract_archive,
         ])

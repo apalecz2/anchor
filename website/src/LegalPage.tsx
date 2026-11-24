@@ -57,7 +57,7 @@ export default function LegalPage({ doc }: { doc: LegalDocId }): React.ReactElem
                             <div className="flex flex-col gap-3">
                                 <h1 className="font-display-sm text-headline-lg sm:text-display-sm text-primary tracking-tight">{title}</h1>
                                 <p className="font-body-md text-body-md text-on-surface-variant">
-                                    Anchor is built with, and redistributes, the open-source components and AI model
+                                    Anchor is built with, and redistributes, the third-party components and AI models
                                     listed below, each under its own license. Full text follows.
                                 </p>
                                 <pre className="mt-2 overflow-x-auto whitespace-pre-wrap wrap-break-word rounded-lg bg-surface-container p-4 font-mono text-xs leading-relaxed text-on-surface-variant">

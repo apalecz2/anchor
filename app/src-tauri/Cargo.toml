@@ -57,16 +57,34 @@ tauri-plugin-clipboard-manager = "2"
 # PDF to Image conversion (Requires downloading the pdfium binaries)
 pdfium-render = "0.8.10" 
 
-# Tesseract OCR wrapper
+# Tesseract OCR wrapper -- one of the two engines catalog::OcrEngine selects
+# between (TESSERACT_QWEN and the other tesseract-grounded presets).
 rusty-tesseract = "1.1.9"
+# Pure-Rust OCR via ONNX Runtime, no Python -- the other OcrEngine (OAR_OCR_QWEN,
+# the default preset). ocr.rs::run_oar_ocr resolves its PP-OCRv6 models by
+# explicit path under {data_dir}/models/oar-ocr/, pinned and downloaded through
+# setup.rs's asset manifest like every other asset -- no `auto-download`
+# feature, so no live ModelScope access at any point (see prototypes/OarOcr/README.md
+# and catalog::OAR_OCR_QWEN).
+oar-ocr = { version = "0.9" }
 # Pre-OCR preprocessing: grayscale + Lanczos upscale (see ocr.rs::preprocess_for_ocr)
 image = "0.25.10"
 
 # Setup / dependency download
 reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls"] }
-# Async backoff between download retries (Tauri already pulls tokio in transitively).
-tokio = { version = "1", features = ["time"] }
+# Async backoff between download retries, plus the pipeline executor's runtime needs.
+# `rt`/`macros` were previously only reaching us through Tauri's feature unification —
+# `spawn_blocking` and `select!` are used directly, so they are declared here rather
+# than relying on another crate happening to enable them. `signal` backs
+# `tokio::signal::ctrl_c()` in `lib.rs`, reaping an orphaned llama-server the moment a
+# dev Ctrl-C fires rather than waiting for the next launch's `sweep_orphan_server`.
+tokio = { version = "1", features = ["time", "rt", "sync", "macros", "signal"] }
+# CancellationToken: a pipeline step is a single 30-120s await, so cancellation has to
+# be something `select!` can race against, not a flag polled between iterations.
+tokio-util = "0.7"
 sha2 = "0.10"
+# Page images reach the model as `data:image/png;base64,...` chat content parts.
+base64 = "0.22"
 zip = "2"
 # llama.cpp ships macOS releases as .tar.gz (Windows is .zip)
 flate2 = "1"

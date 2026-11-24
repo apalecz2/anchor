@@ -19,6 +19,7 @@ use crate::paths::{
     llama_exe_name, pdfium_lib_name, pdfium_spec, resolve_data_dir, tesseract_exe_name,
     MMPROJ_FILENAME, MODEL_FILENAME,
 };
+use crate::pipeline::catalog::{self, PipelinePreset};
 
 // R2 bucket base URL
 const R2_BASE: &str = "https://anchor-assets.aidenpaleczny.com";
@@ -52,8 +53,14 @@ fn dir_contains_prefix(dir: &Path, prefix: &str) -> bool {
 /// the user already has rather than re-downloading them. The checks target the
 /// *extracted* result (not the archive, which is deleted after extraction).
 fn asset_installed(asset_id: &str, data_dir: &Path) -> bool {
+    // Model files are looked up in the catalog rather than matched here, so adding a
+    // model to a preset never needs a new arm in this function — which is how the
+    // completeness check and the catalog are kept from drifting apart.
+    if let Some(file) = catalog::model_file_by_asset(asset_id) {
+        return data_dir.join("models").join(file.relative_path).exists();
+    }
+
     let binaries = data_dir.join("binaries");
-    let models = data_dir.join("models");
     let tesseract = data_dir.join("tesseract");
     match asset_id {
         "llama_server" => binaries.join(llama_exe_name()).exists(),
@@ -64,8 +71,21 @@ fn asset_installed(asset_id: &str, data_dir: &Path) -> bool {
             tesseract.join(tesseract_exe_name()).exists()
                 && tesseract.join("tessdata").join("eng.traineddata").exists()
         }
-        "mmproj_gguf" => models.join(MMPROJ_FILENAME).exists(),
-        "model_gguf" => models.join(MODEL_FILENAME).exists(),
+        "oar_ocr_det" => data_dir
+            .join("models")
+            .join("oar-ocr")
+            .join(OAR_OCR_DET_FILENAME)
+            .exists(),
+        "oar_ocr_rec" => data_dir
+            .join("models")
+            .join("oar-ocr")
+            .join(OAR_OCR_REC_FILENAME)
+            .exists(),
+        "oar_ocr_dict" => data_dir
+            .join("models")
+            .join("oar-ocr")
+            .join(OAR_OCR_DICT_FILENAME)
+            .exists(),
         _ => false,
     }
 }
@@ -87,13 +107,27 @@ fn includes_cudart(backend: &str) -> bool {
 }
 
 /// The assets that must be present before the app can run, for an install built for
-/// `backend` (`None` when no backend has been recorded yet).
+/// `backend` (`None` when no backend has been recorded yet) running `preset`.
 ///
 /// Pure so the rules are testable without an `AppHandle`. `cudart` cannot go in the
 /// unconditional list — that would block every CPU/Metal user on a file they never
 /// download — which is exactly why it was omitted entirely, and why the gap existed.
-fn required_assets(backend: Option<&str>) -> Vec<&'static str> {
-    let mut required = vec!["llama_server", "tesseract", "mmproj_gguf", "model_gguf"];
+///
+/// Tesseract is on the same footing now that the preset decides whether it is used at
+/// all: demanding it unconditionally would block a model-grounded install on a 38 MB
+/// download it never makes, in exactly the way `cudart`'s absence blocked CUDA users.
+/// The models likewise come from the preset, so installing only what the chosen
+/// pipeline needs is the default rather than a special case.
+fn required_assets(backend: Option<&str>, preset: &PipelinePreset) -> Vec<&'static str> {
+    let mut required = vec!["llama_server"];
+    if preset.uses_tesseract() {
+        required.push("tesseract");
+    }
+    if preset.uses_oar_ocr() {
+        required.push("oar_ocr_det");
+        required.push("oar_ocr_rec");
+        required.push("oar_ocr_dict");
+    }
     // pdfium is required wherever we ship one (Windows + macOS) — PDF rendering
     // depends on it. Gated on pdfium_spec so platforms without an asset (Linux)
     // aren't blocked on a file that never downloads.
@@ -102,6 +136,13 @@ fn required_assets(backend: Option<&str>) -> Vec<&'static str> {
     }
     if backend.is_some_and(includes_cudart) {
         required.push("cudart");
+    }
+    for id in preset.model_ids() {
+        if let Some(model) = catalog::model(id) {
+            for file in model.files {
+                required.push(file.asset_id);
+            }
+        }
     }
     required
 }
@@ -114,7 +155,8 @@ pub fn check_setup_complete(app_handle: tauri::AppHandle) -> Result<bool, String
     // install succeeds — an install that failed partway is precisely the case this
     // check exists for, and a value written only on success would be missing there.
     let backend = read_persisted_backend(&data_dir);
-    Ok(required_assets(backend.as_deref())
+    let preset = read_persisted_preset(&data_dir);
+    Ok(required_assets(backend.as_deref(), preset)
         .iter()
         .all(|id| asset_installed(id, &data_dir)))
 }
@@ -801,6 +843,12 @@ const BACKEND_FILENAME: &str = "hardware_backend";
 /// would later flow into the llama-server `--n-gpu-layers` decision.
 const VALID_BACKENDS: [&str; 4] = ["cpu", "cuda", "rocm", "metal"];
 
+/// The chosen pipeline preset, persisted beside the backend and for the same reason:
+/// it decides which assets an install needs, and `check_setup_complete` runs before
+/// any webview storage is consulted. A preset recorded only in localStorage would
+/// leave the completeness check measuring the install against the wrong pipeline.
+const PRESET_FILENAME: &str = "pipeline_preset";
+
 #[derive(Serialize)]
 pub struct SetupPaths {
     pub llama_server: String,
@@ -808,6 +856,10 @@ pub struct SetupPaths {
     pub mmproj_path: String,
     /// Backend last persisted by the wizard, or `None` if never written / invalid.
     pub hardware_backend: Option<String>,
+    /// Preset last persisted by the wizard, or `None` if never written / unknown.
+    /// Distinct from "the default": absent means the wizard predates presets, which
+    /// the frontend may want to surface differently from a deliberate choice.
+    pub pipeline_preset: Option<String>,
 }
 
 /// Read the backend persisted by the wizard from `data_dir`, ignoring an absent file
@@ -820,10 +872,122 @@ pub fn read_persisted_backend(data_dir: &Path) -> Option<String> {
         .filter(|s| VALID_BACKENDS.contains(&s.as_str()))
 }
 
+/// The preset persisted by the wizard, falling back to the catalog default.
+///
+/// Validity is catalog membership rather than a hand-written list — unlike
+/// `VALID_BACKENDS`, which has no other source of truth. A preset id that is no longer
+/// in the catalog (a downgrade, a removed preset, a hand-edited file) reads as the
+/// default rather than failing the launch, since the alternative is an app that will
+/// not start over a file the user cannot see.
+pub fn read_persisted_preset(data_dir: &Path) -> &'static PipelinePreset {
+    read_persisted_preset_id(data_dir)
+        .and_then(|id| catalog::preset(&id))
+        .unwrap_or_else(|| {
+            catalog::preset(catalog::DEFAULT_PRESET_ID).expect("default preset must exist")
+        })
+}
+
+/// The raw persisted id, or `None` when absent or unrecognized. Kept separate from
+/// `read_persisted_preset` so `get_setup_paths` can report "never chosen" rather than
+/// reporting the default as though the user had picked it.
+fn read_persisted_preset_id(data_dir: &Path) -> Option<String> {
+    fs::read_to_string(data_dir.join(PRESET_FILENAME))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|id| catalog::preset(id).is_some())
+}
+
+/// One selectable pipeline, with everything the picker needs to present it honestly.
+#[derive(Serialize)]
+pub struct PresetOption {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub download_mb: u32,
+    pub min_ram_mb: u32,
+    pub min_vram_mb: Option<u32>,
+    /// This machine meets the preset's declared floor.
+    pub supported: bool,
+    /// Every asset this preset needs is already on disk. A preset that is *not*
+    /// installed can still be chosen — the wizard fetches what is missing — but the
+    /// UI has to say so first, because switching to one sends the next launch back
+    /// through setup.
+    pub installed: bool,
+    pub selected: bool,
+}
+
+/// Every pipeline the user can choose between, in catalog order (most capable first).
+///
+/// `async` for the same reason as `detect_hardware`: it probes the GPU, which shells
+/// out to WMI or `system_profiler` and routinely takes seconds. Doing that on the main
+/// thread would freeze the settings page while it ran.
+#[tauri::command]
+pub async fn list_pipeline_presets(
+    app_handle: tauri::AppHandle,
+) -> Result<Vec<PresetOption>, String> {
+    let data_dir = resolve_data_dir(&app_handle)?;
+    let backend = read_persisted_backend(&data_dir);
+    let selected = read_persisted_preset(&data_dir).id;
+
+    let hardware = tokio::task::spawn_blocking(crate::hardware::probe_hardware)
+        .await
+        .map_err(|e| format!("hardware probe failed: {e}"))?;
+
+    Ok(catalog::PRESETS
+        .iter()
+        .map(|p| PresetOption {
+            id: p.id.into(),
+            label: p.label.into(),
+            description: p.description.into(),
+            download_mb: crate::hardware::download_mb(p),
+            min_ram_mb: p.requires.min_ram_mb,
+            min_vram_mb: p.requires.min_vram_mb,
+            supported: crate::hardware::meets(p, hardware.ram_mb, hardware.vram_mb),
+            installed: required_assets(backend.as_deref(), p)
+                .iter()
+                .all(|id| asset_installed(id, &data_dir)),
+            selected: p.id == selected,
+        })
+        .collect())
+}
+
+/// Persist the wizard's chosen pipeline preset. Rejects an id the catalog does not
+/// know rather than writing it — the same contract `persist_backend` holds.
+#[tauri::command]
+pub fn persist_preset(app_handle: tauri::AppHandle, preset_id: String) -> Result<(), String> {
+    if catalog::preset(&preset_id).is_none() {
+        return Err(format!("unknown pipeline preset: {preset_id}"));
+    }
+    let d = resolve_data_dir(&app_handle)?;
+    fs::write(d.join(PRESET_FILENAME), &preset_id)
+        .map_err(|e| format!("failed to persist pipeline preset: {e}"))
+}
+
+/// The preset currently in effect, as `{id, version}` — a synchronous read of the
+/// persisted file plus a catalog lookup, deliberately not `list_pipeline_presets`
+/// (which probes hardware and returns the whole catalog). Lets a cache-hit path
+/// (e.g. `document_pages`) recognise a stale cache without re-running OCR.
+#[derive(Serialize)]
+pub struct ActivePreset {
+    pub id: String,
+    pub version: u32,
+}
+
+#[tauri::command]
+pub fn active_pipeline_preset(app_handle: tauri::AppHandle) -> Result<ActivePreset, String> {
+    let data_dir = resolve_data_dir(&app_handle)?;
+    let preset = read_persisted_preset(&data_dir);
+    Ok(ActivePreset {
+        id: preset.id.to_string(),
+        version: preset.version,
+    })
+}
+
 #[tauri::command]
 pub fn get_setup_paths(app_handle: tauri::AppHandle) -> Result<SetupPaths, String> {
     let d = resolve_data_dir(&app_handle)?;
     let hardware_backend = read_persisted_backend(&d);
+    let pipeline_preset = read_persisted_preset_id(&d);
     Ok(SetupPaths {
         llama_server: d
             .join("binaries")
@@ -841,6 +1005,7 @@ pub fn get_setup_paths(app_handle: tauri::AppHandle) -> Result<SetupPaths, Strin
             .to_string_lossy()
             .into_owned(),
         hardware_backend,
+        pipeline_preset,
     })
 }
 
@@ -897,6 +1062,135 @@ const LLAMA_CPP_BUILD: &str = "b9596 (18ef86ece)";
 // Pinned model revision for the two GGUF files — the unsloth repo commit the
 // fallback URLs (and SHA-256 pins) reference; see HF_MODEL_URL / HF_MMPROJ_URL.
 const QWEN_MODEL_REVISION: &str = "unsloth/Qwen3.5-4B-GGUF@e87f176";
+
+/// Surya's upstream, deliberately *without* a commit suffix: the prototype fetches
+/// from `resolve/main` and no revision has been pinned yet. Recorded this way rather
+/// than with a made-up pin so the audit field says what is actually known — pin the
+/// revision here at the same time as uploading the objects to R2.
+const SURYA_SOURCE: &str = "datalab-to/surya-ocr-2-gguf (revision not yet pinned)";
+
+/// The pinned download for one model file, keyed by the `asset_id` a catalog
+/// [`catalog::ModelFile`] names.
+///
+/// **This table is what makes the catalog safe to extend.** A `ModelSpec` only says a
+/// file exists and where it lands; the bytes it is allowed to be — size, SHA-256,
+/// origin — are pinned here and nowhere else, exactly as the binary assets are. A test
+/// asserts the two sides cover each other *exactly*, so a model cannot enter the
+/// catalog without its bytes being pinned, and a pin cannot be orphaned by a model's
+/// removal. That is the mechanism behind the Microsoft Store 10.2.2 claim
+/// (release.md §6.4): every downloaded byte is verified against a constant in this
+/// binary, and there is no path by which a user-supplied value reaches a download.
+struct ModelAssetSpec {
+    asset_id: &'static str,
+    /// Shown in the wizard's asset list, so it names the file in user terms.
+    label: &'static str,
+    /// The R2 object's actual Content-Length; seeds the progress estimate before the
+    /// download's own header arrives.
+    size_bytes: u64,
+    sha256: &'static str,
+    /// Object key under `models/` in R2, and the filename the fallback resolves to.
+    r2_key: &'static str,
+    /// Upstream mirror, used when R2 is unreachable — and **only** when it can be
+    /// pinned to an exact repo revision. `None` where no such pin exists yet: a
+    /// `resolve/main` URL would fail verification the moment the repo re-quants, which
+    /// is precisely when the fallback is needed, so no fallback is the safer answer.
+    hf_fallback: Option<&'static str>,
+    version: &'static str,
+}
+
+const MODEL_ASSETS: &[ModelAssetSpec] = &[
+    ModelAssetSpec {
+        asset_id: "mmproj_gguf",
+        label: "Vision projector (672 MB)",
+        size_bytes: 672_423_616, // actual R2 Content-Length (verified 2026-06-16)
+        sha256: "cd88edcf8d031894960bb0c9c5b9b7e1fea6ebee02b9f7ce925a00d12891f864",
+        r2_key: MMPROJ_FILENAME,
+        hf_fallback: Some(HF_MMPROJ_URL),
+        version: QWEN_MODEL_REVISION,
+    },
+    ModelAssetSpec {
+        asset_id: "model_gguf",
+        label: "Qwen language model (2.7 GB)",
+        size_bytes: 2_740_937_888, // actual R2 Content-Length (verified 2026-06-16)
+        sha256: "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
+        r2_key: MODEL_FILENAME,
+        hf_fallback: Some(HF_MODEL_URL),
+        version: QWEN_MODEL_REVISION,
+    },
+    // ---- Surya OCR 2 (the on-hold grid model — see catalog::SURYA_OCR_2) ----
+    //
+    // ⚠️ These digests and sizes are **measured from the real files** (the ones
+    // `prototypes/Surya` downloads from `datalab-to/surya-ocr-2-gguf`), and the R2
+    // objects they name are still **not uploaded**. Uploading them would no longer be
+    // enough to ship this model on its own, though: `catalog::SURYA_OCR_2`'s doc
+    // comment records an unresolved license concern (a competing-product ban and a
+    // share-alike clause reaching Anchor's own output) found after these pins were
+    // written, on top of the accuracy finding that its grid step doesn't earn its
+    // keep. Kept here only so `catalog::MODELS`' debug-only entry keeps validating
+    // against pinned bytes, the same as every other model — not because shipping is
+    // imminent.
+    ModelAssetSpec {
+        asset_id: "surya_gguf",
+        label: "Surya layout model (1.3 GB)",
+        size_bytes: 1_266_400_864,
+        sha256: "1f18abe17b1ed8b4e47ee9b1ad0e274c93daf5efbb6b29a04ff1712e37051e05",
+        r2_key: "surya-2.gguf",
+        hf_fallback: None,
+        version: SURYA_SOURCE,
+    },
+    ModelAssetSpec {
+        asset_id: "surya_mmproj_gguf",
+        label: "Surya vision projector (205 MB)",
+        size_bytes: 204_986_688,
+        sha256: "98c0563673b1657ff6d021d1e5f04af06cbf61bb40c63ac613e8bb71b42fb2c0",
+        r2_key: "surya-2-mmproj.gguf",
+        hf_fallback: None,
+        version: SURYA_SOURCE,
+    },
+    ModelAssetSpec {
+        asset_id: "surya_chat_template",
+        label: "Surya chat template",
+        size_bytes: 2_872,
+        sha256: "86f17a85672e7f367b5e6c6de6f67f53ede0fba4abb3d67c583a6ef647c1aa85",
+        r2_key: "chat_template.jinja",
+        hf_fallback: None,
+        version: SURYA_SOURCE,
+    },
+];
+
+fn model_asset(asset_id: &str) -> Option<&'static ModelAssetSpec> {
+    MODEL_ASSETS.iter().find(|a| a.asset_id == asset_id)
+}
+
+/// Build the manifest entry for one model file.
+///
+/// The destination comes from the *catalog* (a model decides where its files live)
+/// while the bytes come from [`MODEL_ASSETS`] (only this file decides what they may
+/// be). Keeping those two apart is what lets Qwen retain its historical flat filenames
+/// while later models nest, without either fact leaking into the other table.
+fn model_asset_entry(
+    spec: &ModelAssetSpec,
+    file: &catalog::ModelFile,
+    data_dir: &Path,
+) -> AssetManifestEntry {
+    AssetManifestEntry {
+        asset_id: spec.asset_id.into(),
+        label: spec.label.into(),
+        size_bytes: spec.size_bytes,
+        dest_path: data_dir
+            .join("models")
+            .join(file.relative_path)
+            .to_string_lossy()
+            .into_owned(),
+        sha256: spec.sha256.into(),
+        url_primary: format!("{R2_BASE}/models/{}", spec.r2_key),
+        url_fallback: spec.hf_fallback.map(Into::into),
+        extract_to_dir: None,
+        flatten_marker: None,
+        installed: false,
+        version: Some(spec.version.into()),
+    }
+}
 
 // llama.cpp release archives are uploaded to R2 as-is, under `binaries/`, with the
 // build tag and CUDA version stripped from the filename. Examples:
@@ -1001,12 +1295,84 @@ fn get_tesseract_spec(data_dir: &Path) -> AssetManifestEntry {
     }
 }
 
+// oar-ocr's PP-OCRv6 "small" det/rec/dict files (see prototypes/OarOcr and
+// catalog::OAR_OCR_QWEN). Filenames match what `ocr.rs` passes as file paths
+// to `OAROCRBuilder::new` — deliberately NOT the bare names the crate's own
+// `auto-download` would resolve via ModelScope, so these bytes are pinned
+// and verified by this app like every other asset.
+const OAR_OCR_DET_FILENAME: &str = "pp-ocrv6_small_det.onnx";
+const OAR_OCR_REC_FILENAME: &str = "pp-ocrv6_small_rec.onnx";
+const OAR_OCR_DICT_FILENAME: &str = "ppocrv6_dict.txt";
+
+/// oar-ocr's three model files, pinned the same way Tesseract's zip is and
+/// uploaded to R2 under `models/oar-ocr/` (2026-09-28). `ocr.rs::run_oar_ocr`
+/// reads them from `{data_dir}/models/oar-ocr/` by explicit path — the crate's
+/// own `auto-download` (ModelScope) is no longer used.
+fn get_oar_ocr_asset_specs(data_dir: &Path) -> Vec<AssetManifestEntry> {
+    let dest_dir = data_dir.join("models").join("oar-ocr");
+    vec![
+        AssetManifestEntry {
+            asset_id: "oar_ocr_det".into(),
+            label: "Rust OCR: text detection model (9.4 MB)".into(),
+            size_bytes: 9_880_512,
+            dest_path: dest_dir
+                .join(OAR_OCR_DET_FILENAME)
+                .to_string_lossy()
+                .into_owned(),
+            sha256: "d73e0058b7a8086bbd57f3d10b8bcd4ff95363f67e06e2762b5e814fe9c9410e".into(),
+            url_primary: format!("{R2_BASE}/models/oar-ocr/{OAR_OCR_DET_FILENAME}"),
+            url_fallback: None,
+            extract_to_dir: None,
+            flatten_marker: None,
+            installed: false,
+            version: Some("PP-OCRv6-small".into()),
+        },
+        AssetManifestEntry {
+            asset_id: "oar_ocr_rec".into(),
+            label: "Rust OCR: text recognition model (20 MB)".into(),
+            size_bytes: 21_159_378,
+            dest_path: dest_dir
+                .join(OAR_OCR_REC_FILENAME)
+                .to_string_lossy()
+                .into_owned(),
+            sha256: "5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634".into(),
+            url_primary: format!("{R2_BASE}/models/oar-ocr/{OAR_OCR_REC_FILENAME}"),
+            url_fallback: None,
+            extract_to_dir: None,
+            flatten_marker: None,
+            installed: false,
+            version: Some("PP-OCRv6-small".into()),
+        },
+        AssetManifestEntry {
+            asset_id: "oar_ocr_dict".into(),
+            label: "Rust OCR: character dictionary".into(),
+            size_bytes: 74_947,
+            dest_path: dest_dir
+                .join(OAR_OCR_DICT_FILENAME)
+                .to_string_lossy()
+                .into_owned(),
+            sha256: "b5f2bfe2bdd9448429e3e82b51c789775d9b42f2403d082b00662eb77e401c5d".into(),
+            url_primary: format!("{R2_BASE}/models/oar-ocr/{OAR_OCR_DICT_FILENAME}"),
+            url_fallback: None,
+            extract_to_dir: None,
+            flatten_marker: None,
+            installed: false,
+            version: Some("PP-OCRv6-small".into()),
+        },
+    ]
+}
+
 #[tauri::command]
 pub fn get_asset_manifest(
     app_handle: tauri::AppHandle,
     backend: String,
+    preset_id: Option<String>,
 ) -> Result<Vec<AssetManifestEntry>, String> {
     let data_dir = resolve_data_dir(&app_handle)?;
+    let preset = match preset_id {
+        Some(id) => catalog::preset(&id).ok_or_else(|| format!("unknown pipeline preset: {id}"))?,
+        None => read_persisted_preset(&data_dir),
+    };
     let binaries_dir = data_dir.join("binaries").to_string_lossy().into_owned();
     let (label, size_bytes, r2_key, llama_sha) = get_llama_server_spec(&backend);
 
@@ -1068,49 +1434,53 @@ pub fn get_asset_manifest(
         version: None, // pdfium prebuild not separately pinned
     });
 
-    let tesseract = get_tesseract_spec(&data_dir);
+    // Only download Tesseract when the chosen pipeline actually grounds on it.
+    let tesseract = preset
+        .uses_tesseract()
+        .then(|| get_tesseract_spec(&data_dir));
 
-    let mmproj = AssetManifestEntry {
-        asset_id: "mmproj_gguf".into(),
-        label: "Vision projector (672 MB)".into(),
-        size_bytes: 672_423_616, // actual R2 Content-Length (verified 2026-06-16)
-        dest_path: data_dir
-            .join("models")
-            .join(MMPROJ_FILENAME)
-            .to_string_lossy()
-            .into_owned(),
-        sha256: "cd88edcf8d031894960bb0c9c5b9b7e1fea6ebee02b9f7ce925a00d12891f864".into(),
-        url_primary: format!("{R2_BASE}/models/{MMPROJ_FILENAME}"),
-        url_fallback: Some(HF_MMPROJ_URL.into()),
-        extract_to_dir: None,
-        flatten_marker: None,
-        installed: false,
-        version: Some(QWEN_MODEL_REVISION.into()),
+    // Only download oar-ocr's models when the chosen pipeline actually uses it.
+    let oar_ocr = if preset.uses_oar_ocr() {
+        get_oar_ocr_asset_specs(&data_dir)
+    } else {
+        Vec::new()
     };
 
-    let model = AssetManifestEntry {
-        asset_id: "model_gguf".into(),
-        label: "Qwen language model (2.7 GB)".into(),
-        size_bytes: 2_740_937_888, // actual R2 Content-Length (verified 2026-06-16)
-        dest_path: data_dir
-            .join("models")
-            .join(MODEL_FILENAME)
-            .to_string_lossy()
-            .into_owned(),
-        sha256: "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4".into(),
-        url_primary: format!("{R2_BASE}/models/{MODEL_FILENAME}"),
-        url_fallback: Some(HF_MODEL_URL.into()),
-        extract_to_dir: None,
-        flatten_marker: None,
-        installed: false,
-        version: Some(QWEN_MODEL_REVISION.into()),
-    };
+    // Every file of every model the preset names, pinned. A model file with no entry
+    // in MODEL_ASSETS is a hard error rather than a silent omission: shipping a
+    // preset whose weights nobody pinned would produce an install that looks complete
+    // and then fails at the first extraction.
+    let mut models = Vec::new();
+    for id in preset.model_ids() {
+        // A model the *user* supplied is already on their disk — there is nothing to
+        // download and nothing to pin. Skipped by the flag rather than by an id
+        // comparison, so the exemption is a property of the model.
+        if catalog::any_model(id).is_some_and(|m| m.user_supplied) {
+            continue;
+        }
+        let model = catalog::model(id)
+            .ok_or_else(|| format!("preset `{}` names unknown model `{id}`", preset.id))?;
+        for file in model.files {
+            let spec = model_asset(file.asset_id).ok_or_else(|| {
+                format!(
+                    "model `{id}` needs asset `{}`, which is not pinned in MODEL_ASSETS",
+                    file.asset_id
+                )
+            })?;
+            models.push(model_asset_entry(spec, file, &data_dir));
+        }
+    }
+    // Smallest first within the model group, matching the ordering rationale below —
+    // a projector finishing early is visible progress before a multi-GB weights file.
+    models.sort_by_key(|a| a.size_bytes);
 
     // Ordered smallest → largest so early progress is fast.
     let mut assets = vec![llama];
     assets.extend(cudart);
     assets.extend(pdfium);
-    assets.extend([tesseract, mmproj, model]);
+    assets.extend(tesseract);
+    assets.extend(oar_ocr);
+    assets.extend(models);
 
     // Flag assets whose final artifact is already on disk so the wizard can skip
     // re-downloading them (partial-install detection).
@@ -1123,7 +1493,131 @@ pub fn get_asset_manifest(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::catalog::{PipelinePreset, Step};
     use std::time::{Duration, SystemTime};
+
+    fn default_preset() -> &'static PipelinePreset {
+        catalog::preset(catalog::DEFAULT_PRESET_ID).expect("default preset must exist")
+    }
+
+    // ---- the catalog ↔ pinned-asset join ----
+
+    /// **The pinning invariant.** Every model file the catalog declares must have its
+    /// bytes pinned in `MODEL_ASSETS`, and every pin must belong to a real model file.
+    ///
+    /// This is what the Microsoft Store 10.2.2 claim rests on once models become
+    /// catalog data (release.md §6.4): adding a `ModelSpec` without pinning its
+    /// download fails here, at build time, rather than at a user's first extraction —
+    /// and a stale pin left behind by a removed model is caught in the same pass, so
+    /// the audited set never drifts from the shipped one.
+    #[test]
+    fn every_catalog_model_file_has_pinned_bytes_and_vice_versa() {
+        for asset_id in catalog::all_model_asset_ids() {
+            assert!(
+                model_asset(asset_id).is_some(),
+                "catalog asset `{asset_id}` has no pinned download in MODEL_ASSETS",
+            );
+        }
+        for spec in MODEL_ASSETS {
+            assert!(
+                catalog::model_file_by_asset(spec.asset_id).is_some(),
+                "pinned asset `{}` belongs to no catalog model",
+                spec.asset_id,
+            );
+        }
+    }
+
+    /// A pin with no hash would download unverified. `verify_file_hash` skips an empty
+    /// hash by design (it is how not-yet-uploaded *binaries* are handled), which makes
+    /// an empty model hash a silent hole rather than a loud one.
+    #[test]
+    fn every_pinned_model_asset_carries_a_sha256_and_a_size() {
+        for spec in MODEL_ASSETS {
+            assert_eq!(
+                spec.sha256.len(),
+                64,
+                "`{}` must pin a full SHA-256",
+                spec.asset_id
+            );
+            assert!(spec.sha256.chars().all(|c| c.is_ascii_hexdigit()));
+            assert!(spec.size_bytes > 0, "`{}` has no size", spec.asset_id);
+            assert!(
+                !spec.version.is_empty(),
+                "`{}` is unversioned",
+                spec.asset_id
+            );
+        }
+    }
+
+    /// The destination comes from the catalog, not from the pin — which is what lets
+    /// Qwen keep its historical flat filenames while a later model nests.
+    #[test]
+    fn a_model_entry_lands_where_the_catalog_says_it_does() {
+        let file = catalog::model_file_by_asset("model_gguf").expect("catalog file");
+        let spec = model_asset("model_gguf").expect("pinned asset");
+        let entry = model_asset_entry(spec, file, Path::new("/data"));
+        assert!(entry.dest_path.ends_with(file.relative_path));
+        assert!(entry.dest_path.contains("models"));
+        assert!(entry.url_primary.starts_with(R2_BASE));
+        assert!(
+            entry.url_fallback.is_some(),
+            "models keep an upstream mirror"
+        );
+        // A GGUF is used in place, never extracted.
+        assert!(entry.extract_to_dir.is_none());
+    }
+
+    // ---- persisted preset ----
+
+    #[test]
+    fn a_persisted_preset_round_trips_and_an_unknown_one_reads_as_the_default() {
+        let dir = tempfile::tempdir().unwrap();
+        // Nothing written yet: the default, and "never chosen" for the paths report.
+        assert_eq!(
+            read_persisted_preset(dir.path()).id,
+            catalog::DEFAULT_PRESET_ID
+        );
+        assert!(read_persisted_preset_id(dir.path()).is_none());
+
+        fs::write(dir.path().join(PRESET_FILENAME), catalog::DEFAULT_PRESET_ID).unwrap();
+        assert_eq!(
+            read_persisted_preset_id(dir.path()).as_deref(),
+            Some(catalog::DEFAULT_PRESET_ID)
+        );
+
+        // A preset id the catalog no longer knows — a downgrade, or a hand-edited
+        // file. Reading it as the default keeps the app startable; refusing to launch
+        // over a file the user cannot see would be the worse failure.
+        fs::write(dir.path().join(PRESET_FILENAME), "removed-in-a-later-build").unwrap();
+        assert!(read_persisted_preset_id(dir.path()).is_none());
+        assert_eq!(
+            read_persisted_preset(dir.path()).id,
+            catalog::DEFAULT_PRESET_ID
+        );
+    }
+
+    #[test]
+    fn a_persisted_preset_tolerates_surrounding_whitespace() {
+        let dir = tempfile::tempdir().unwrap();
+        let padded = format!("  {}\n", catalog::DEFAULT_PRESET_ID);
+        fs::write(dir.path().join(PRESET_FILENAME), padded).unwrap();
+        assert_eq!(
+            read_persisted_preset_id(dir.path()).as_deref(),
+            Some(catalog::DEFAULT_PRESET_ID)
+        );
+    }
+
+    #[test]
+    fn asset_installed_resolves_model_files_through_the_catalog() {
+        let dir = tempfile::tempdir().unwrap();
+        let models = dir.path().join("models");
+        fs::create_dir_all(&models).unwrap();
+        let file = catalog::model_file_by_asset("mmproj_gguf").unwrap();
+
+        assert!(!asset_installed("mmproj_gguf", dir.path()));
+        fs::write(models.join(file.relative_path), b"x").unwrap();
+        assert!(asset_installed("mmproj_gguf", dir.path()));
+    }
 
     #[test]
     fn is_targz_recognizes_gzip_tarballs() {
@@ -1298,16 +1792,111 @@ mod tests {
         assert!(!includes_cudart(""));
     }
 
+    /// The default preset's assets, which used to be a hardcoded list here. They are
+    /// now derived from the catalog, so this asserts the *derivation* lands on the
+    /// same four rather than restating them: a model added to the preset must show up
+    /// without this test being edited, and a model removed must disappear.
     #[test]
-    fn required_assets_always_covers_the_core_four() {
+    fn required_assets_covers_everything_the_default_preset_needs() {
+        let preset = catalog::preset(catalog::DEFAULT_PRESET_ID).unwrap();
         for backend in [None, Some("cpu"), Some("cuda"), Some("metal")] {
-            let required = required_assets(backend);
-            for id in ["llama_server", "tesseract", "mmproj_gguf", "model_gguf"] {
-                assert!(required.contains(&id), "{id} missing for {backend:?}");
+            let required = required_assets(backend, preset);
+            assert!(required.contains(&"llama_server"));
+            // Tesseract exactly when the preset grounds on it.
+            assert_eq!(required.contains(&"tesseract"), preset.uses_tesseract());
+            // oar-ocr's three model files exactly when the preset uses that engine.
+            assert_eq!(required.contains(&"oar_ocr_det"), preset.uses_oar_ocr());
+            assert_eq!(required.contains(&"oar_ocr_rec"), preset.uses_oar_ocr());
+            assert_eq!(required.contains(&"oar_ocr_dict"), preset.uses_oar_ocr());
+            // Every file of every model the preset names.
+            for id in preset.model_ids() {
+                for file in catalog::model(id).unwrap().files {
+                    assert!(
+                        required.contains(&file.asset_id),
+                        "{} missing for {backend:?}",
+                        file.asset_id
+                    );
+                }
             }
             // pdfium tracks whether we ship one for this platform at all.
             assert_eq!(required.contains(&"pdfium"), pdfium_spec().is_some());
         }
+    }
+
+    /// A model the user supplied is already on their disk. Demanding a download for it
+    /// would make the app report an incomplete install it could never complete.
+    #[test]
+    fn required_assets_demands_no_download_for_a_user_supplied_model() {
+        let required = required_assets(Some("cpu"), &catalog::CUSTOM_PRESET);
+        assert!(required.contains(&"llama_server"));
+        assert!(
+            required.contains(&"tesseract"),
+            "the preset still grounds on it"
+        );
+        assert!(
+            !required.contains(&"model_gguf") && !required.contains(&"mmproj_gguf"),
+            "a custom preset must not demand the bundled model's files: {required:?}"
+        );
+        // And nothing in it is an unpinned asset id.
+        for id in &required {
+            assert!(
+                model_asset(id).is_some() || !catalog::all_model_asset_ids().contains(id),
+                "`{id}` is a model asset with no pin"
+            );
+        }
+    }
+
+    /// Tesseract used to be demanded unconditionally, which alone would have blocked
+    /// a model-grounded install on a download it never makes — the same shape of bug
+    /// `cudart`'s omission caused in the other direction.
+    #[test]
+    fn required_assets_omits_tesseract_for_a_preset_that_does_not_use_it() {
+        const MODEL_GROUNDED: PipelinePreset = PipelinePreset {
+            id: "test-model-grounded",
+            steps: &[
+                Step::Render { target_width: 2000 },
+                Step::Structure {
+                    model_id: "qwen3.5-4b",
+                    prompt: catalog::PromptId::QwenTsvExtract,
+                    residency: catalog::Residency::Exclusive,
+                },
+            ],
+            ..catalog::TESSERACT_QWEN
+        };
+        let required = required_assets(Some("cpu"), &MODEL_GROUNDED);
+        assert!(!required.contains(&"tesseract"));
+        // The model's own files are still demanded.
+        assert!(required.contains(&"model_gguf"));
+        assert!(required.contains(&"llama_server"));
+    }
+
+    /// An oar-ocr preset demands its three pinned model files through the wizard
+    /// (they're downloaded from R2 like every other asset, not self-downloaded by
+    /// the crate) and doesn't demand Tesseract's.
+    #[test]
+    fn required_assets_demands_oar_ocr_but_not_tesseract_for_an_oar_ocr_preset() {
+        let required = required_assets(Some("cpu"), &catalog::OAR_OCR_QWEN);
+        assert!(required.contains(&"oar_ocr_det"));
+        assert!(required.contains(&"oar_ocr_rec"));
+        assert!(required.contains(&"oar_ocr_dict"));
+        assert!(!required.contains(&"tesseract"));
+    }
+
+    /// The combo preset demands Surya's, Qwen's, and oar-ocr's files all
+    /// together — nothing here is preset-specific code, it all falls out of
+    /// `model_ids()` and `uses_oar_ocr()` generically, which is what this guards.
+    #[test]
+    fn required_assets_demands_surya_and_qwen_for_the_oar_ocr_surya_preset() {
+        let required = required_assets(Some("cpu"), &catalog::OAR_OCR_SURYA_QWEN);
+        assert!(required.contains(&"oar_ocr_det"));
+        assert!(required.contains(&"oar_ocr_rec"));
+        assert!(required.contains(&"oar_ocr_dict"));
+        assert!(!required.contains(&"tesseract"));
+        assert!(required.contains(&"surya_gguf"));
+        assert!(required.contains(&"surya_mmproj_gguf"));
+        assert!(required.contains(&"surya_chat_template"));
+        assert!(required.contains(&"model_gguf"));
+        assert!(required.contains(&"mmproj_gguf"));
     }
 
     /// The gap this closes: `cudart` used to be omitted unconditionally, so a CUDA
@@ -1315,7 +1904,7 @@ mod tests {
     /// the wizard, and then could not start llama-server.
     #[test]
     fn required_assets_demands_cudart_for_a_cuda_install() {
-        let required = required_assets(Some("cuda"));
+        let required = required_assets(Some("cuda"), default_preset());
         assert_eq!(
             required.contains(&"cudart"),
             cfg!(target_os = "windows"),
@@ -1329,7 +1918,7 @@ mod tests {
         // would block every user who never downloads it.
         for backend in [None, Some("cpu"), Some("metal")] {
             assert!(
-                !required_assets(backend).contains(&"cudart"),
+                !required_assets(backend, default_preset()).contains(&"cudart"),
                 "cudart must not be required for {backend:?}",
             );
         }
@@ -1357,9 +1946,18 @@ mod tests {
         fs::write(tess.join("eng.traineddata"), b"x").unwrap();
         fs::write(models.join(MODEL_FILENAME), b"x").unwrap();
         fs::write(models.join(MMPROJ_FILENAME), b"x").unwrap();
+        // The default preset grounds on oar-ocr, which *is* wizard-required (see
+        // `required_assets`), so its three files need to exist too. The Tesseract
+        // fixture files above are just along for the ride — harmless, but unused
+        // by `required_assets` for this preset.
+        let oar_ocr = models.join("oar-ocr");
+        fs::create_dir_all(&oar_ocr).unwrap();
+        fs::write(oar_ocr.join(OAR_OCR_DET_FILENAME), b"x").unwrap();
+        fs::write(oar_ocr.join(OAR_OCR_REC_FILENAME), b"x").unwrap();
+        fs::write(oar_ocr.join(OAR_OCR_DICT_FILENAME), b"x").unwrap();
 
         let complete = |backend: Option<&str>| {
-            required_assets(backend)
+            required_assets(backend, default_preset())
                 .iter()
                 .all(|id| asset_installed(id, dir.path()))
         };
@@ -1391,6 +1989,19 @@ mod tests {
         assert!(!asset_installed("tesseract", dir.path()));
         fs::write(tess.join("tessdata").join("eng.traineddata"), b"x").unwrap();
         assert!(asset_installed("tesseract", dir.path()));
+
+        // oar-ocr's three files are checked independently of one another.
+        let oar_ocr = dir.path().join("models").join("oar-ocr");
+        fs::create_dir_all(&oar_ocr).unwrap();
+        assert!(!asset_installed("oar_ocr_det", dir.path()));
+        assert!(!asset_installed("oar_ocr_rec", dir.path()));
+        assert!(!asset_installed("oar_ocr_dict", dir.path()));
+        fs::write(oar_ocr.join(OAR_OCR_DET_FILENAME), b"x").unwrap();
+        fs::write(oar_ocr.join(OAR_OCR_REC_FILENAME), b"x").unwrap();
+        fs::write(oar_ocr.join(OAR_OCR_DICT_FILENAME), b"x").unwrap();
+        assert!(asset_installed("oar_ocr_det", dir.path()));
+        assert!(asset_installed("oar_ocr_rec", dir.path()));
+        assert!(asset_installed("oar_ocr_dict", dir.path()));
     }
 
     #[test]

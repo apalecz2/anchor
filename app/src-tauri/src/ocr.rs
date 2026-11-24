@@ -1,9 +1,10 @@
 //! Document processing and OCR.
 //!
-//! Renders PDFs/images to PNGs, preprocesses them for Tesseract, runs OCR, and
-//! returns per-page text + word bounding boxes. Also owns Tesseract environment
-//! configuration, which must run before every OCR call (see
-//! [`configure_tesseract_env`]).
+//! Renders PDFs/images to PNGs, preprocesses them, and runs whichever classical
+//! OCR engine the active preset names (`catalog::OcrEngine` — Tesseract or
+//! oar-ocr), returning per-page text + word bounding boxes. Also owns Tesseract
+//! environment configuration, which must run before a Tesseract-engine OCR call
+//! (see [`configure_tesseract_env`]).
 
 use std::{
     fs,
@@ -21,9 +22,17 @@ use pdfium_render::prelude::*;
 
 use image::{DynamicImage, GenericImageView, GrayImage};
 
+// oar-ocr (see prototypes/OarOcr): pure-Rust OCR via ONNX Runtime, one of the
+// two engines `catalog::OcrEngine` can select. Aliased because oar-ocr's
+// BoundingBox (a polygon) is a different type from this file's own
+// BoundingBox (left/top/width/height).
+use oar_ocr::prelude::*;
+use oar_ocr::processors::BoundingBox as OarBox;
+
 use tauri::{Emitter, Manager};
 
 use crate::paths::pdfium_lib_name;
+use crate::pipeline::catalog;
 
 const MAX_FILE_SIZE_BYTES: u64 = 500 * 1024 * 1024; // 500 MB
 
@@ -90,7 +99,7 @@ pub fn cancel_process_document(state: tauri::State<'_, ProcessState>) {
     request_cancel_processing(&state);
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
 pub struct BoundingBox {
     pub left: i32,
     pub top: i32,
@@ -98,9 +107,23 @@ pub struct BoundingBox {
     pub height: i32,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct OcrWord {
+    /// Stable identifier, minted by the frontend rather than here — `CellProvenance`
+    /// stores these ids, so they must survive edits that reorder the array.
+    ///
+    /// Absent on freshly-OCR'd words (nothing has named them yet) and carried
+    /// through unchanged when the frontend sends words back into the pipeline. That
+    /// round-trip is what keeps a stored `wordIds` resolvable: if the pipeline
+    /// returned re-identified words, click-to-highlight would break on reload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub text: String,
+    /// Independently meaningful only when the source engine is Tesseract. When
+    /// oar-ocr produced this word, `confidence` is its parent line's single score
+    /// copied unchanged into every word split from that line (see
+    /// `oar_region_to_word`) — the crate has no per-word signal, so this is not a
+    /// precise per-word measurement the way Tesseract's is.
     pub confidence: f32,
     pub box_coords: BoundingBox,
 }
@@ -130,10 +153,17 @@ struct ProcessProgress {
     total_pages: usize,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 pub struct ExtractionResult {
     pub session_id: String,
     pub pages: Vec<DocumentPageResult>,
+    /// Which preset's classical-OCR step produced `pages[*].words`, so the frontend
+    /// cache can recognise a result as stale when the persisted preset later changes
+    /// (see `page_extraction_meta` in db.ts) — mirrors `PageArtifact::preset_id` in
+    /// the structuring stage, which the OCR stage never had an equivalent for.
+    pub preset_id: String,
+    pub preset_version: u32,
+    pub grounding: catalog::Grounding,
 }
 
 const UPSCALE_NARROW_SIDE_THRESHOLD: u32 = 1500;
@@ -378,56 +408,241 @@ fn ocr_image_to_page(
     natural_height: i32,
     work_dir: &Path,
     allow_upscale: bool,
+    engine: &catalog::OcrEngine,
+    oar_engine: Option<&OAROCR>,
 ) -> Result<DocumentPageResult, String> {
     let (ocr_path, scale) = preprocess_for_ocr(image_path, work_dir, allow_upscale)?;
 
     // The preprocessed copy is a throwaway OCR working file. Run OCR, then delete
     // it regardless of outcome so these copies never accumulate (they used to be
     // written into the persistent sessions/ folder, untracked, and pile up forever).
-    let result = (|| -> Result<DocumentPageResult, String> {
-        let args = rusty_tesseract::Args {
-            lang: "eng".to_string(),
-            psm: Some(6), // single uniform block — better for tabular layouts
-            dpi: None, // let Tesseract estimate from image; the default 150 misrepresents upscaled content
-            ..Default::default()
-        };
-
-        let tesseract_image = rusty_tesseract::tesseract::input::Image::from_path(&ocr_path)
-            .map_err(|error| format!("failed to load image for ocr: {error}"))?;
-
-        let ocr_output =
-            rusty_tesseract::tesseract::output_data::image_to_data(&tesseract_image, &args)
-                .map_err(|error| format!("ocr failed: {error}"))?;
-
-        let words = ocr_output
-            .data
-            .into_iter()
-            .filter(|item| item.level == 5 && !item.text.trim().is_empty())
-            .map(|item| OcrWord {
-                text: item.text,
-                confidence: item.conf,
-                box_coords: BoundingBox {
-                    left: map_coord(item.left, scale),
-                    top: map_coord(item.top, scale),
-                    width: map_coord(item.width, scale),
-                    height: map_coord(item.height, scale),
-                },
-            })
-            .collect::<Vec<_>>();
-
-        Ok(DocumentPageResult {
-            image_path: image_path.to_string_lossy().into_owned(),
+    let result = match engine {
+        catalog::OcrEngine::Tesseract(spec) => run_tesseract(
+            &ocr_path,
+            image_path,
             natural_width,
             natural_height,
-            words,
-            text: ocr_output.output,
-            error: None,
-        })
-    })();
+            scale,
+            spec,
+        ),
+        // `oar_engine` is always `Some` here: `process_document_blocking` builds it
+        // exactly when `engine` is `OarOcr`, right before this is ever called.
+        catalog::OcrEngine::OarOcr(_) => match oar_engine {
+            Some(oar_engine) => run_oar_ocr(
+                &ocr_path,
+                image_path,
+                natural_width,
+                natural_height,
+                scale,
+                oar_engine,
+            ),
+            None => Err("internal error: oar-ocr engine was not initialized".to_string()),
+        },
+    };
 
     let _ = fs::remove_file(&ocr_path);
 
     result
+}
+
+fn run_tesseract(
+    ocr_path: &Path,
+    image_path: &Path,
+    natural_width: i32,
+    natural_height: i32,
+    scale: f32,
+    spec: &catalog::TesseractSpec,
+) -> Result<DocumentPageResult, String> {
+    let args = rusty_tesseract::Args {
+        lang: spec.lang.to_string(),
+        psm: Some(spec.psm.into()),
+        dpi: None, // let Tesseract estimate from image; the default 150 misrepresents upscaled content
+        ..Default::default()
+    };
+
+    let tesseract_image = rusty_tesseract::tesseract::input::Image::from_path(ocr_path)
+        .map_err(|error| format!("failed to load image for ocr: {error}"))?;
+
+    let ocr_output =
+        rusty_tesseract::tesseract::output_data::image_to_data(&tesseract_image, &args)
+            .map_err(|error| format!("ocr failed: {error}"))?;
+
+    let words = ocr_output
+        .data
+        .into_iter()
+        .filter(|item| item.level == 5 && !item.text.trim().is_empty())
+        .map(|item| OcrWord {
+            // The frontend assigns ids once, on first load, and persists them.
+            id: None,
+            text: item.text,
+            confidence: item.conf,
+            box_coords: BoundingBox {
+                left: map_coord(item.left, scale),
+                top: map_coord(item.top, scale),
+                width: map_coord(item.width, scale),
+                height: map_coord(item.height, scale),
+            },
+        })
+        .collect::<Vec<_>>();
+
+    Ok(DocumentPageResult {
+        image_path: image_path.to_string_lossy().into_owned(),
+        natural_width,
+        natural_height,
+        words,
+        text: ocr_output.output,
+        error: None,
+    })
+}
+
+/// oar-ocr instead of Tesseract (see `prototypes/OarOcr`). `engine` is built once
+/// per document by `process_document_blocking` and reused across every page —
+/// building it (loading the ONNX det/rec models) is the expensive part, so a
+/// multi-page PDF no longer pays that cost per page.
+fn run_oar_ocr(
+    ocr_path: &Path,
+    image_path: &Path,
+    natural_width: i32,
+    natural_height: i32,
+    scale: f32,
+    engine: &OAROCR,
+) -> Result<DocumentPageResult, String> {
+    let rgb_image = image::open(ocr_path)
+        .map_err(|error| format!("failed to load image for ocr: {error}"))?
+        .to_rgb8();
+
+    let mut results = engine
+        .predict(vec![rgb_image])
+        .map_err(|error| format!("ocr failed: {error}"))?;
+    let page_result = results.pop().ok_or("oar-ocr returned no page result")?;
+
+    let mut words = Vec::new();
+    let mut full_text_lines = Vec::new();
+    for region in &page_result.text_regions {
+        let Some((text, confidence)) = region.text_with_confidence() else {
+            continue;
+        };
+        full_text_lines.push(text.to_string());
+
+        match &region.word_boxes {
+            // oar-ocr's word_boxes is one box PER CHARACTER, not per word
+            // (see prototypes/OarOcr/README.md) -- reconstruct real word
+            // boxes by splitting on whitespace and unioning the runs.
+            // Confidence has no per-word signal, so every word inherits
+            // its parent line's score.
+            Some(char_boxes) => {
+                let split = split_into_words(text, char_boxes);
+                if split.is_empty() {
+                    words.push(oar_region_to_word(
+                        text,
+                        &region.bounding_box,
+                        confidence,
+                        scale,
+                    ));
+                } else {
+                    for (word_text, word_box) in split {
+                        words.push(oar_region_to_word(&word_text, &word_box, confidence, scale));
+                    }
+                }
+            }
+            None => words.push(oar_region_to_word(
+                text,
+                &region.bounding_box,
+                confidence,
+                scale,
+            )),
+        }
+    }
+
+    Ok(DocumentPageResult {
+        image_path: image_path.to_string_lossy().into_owned(),
+        natural_width,
+        natural_height,
+        words,
+        text: full_text_lines.join("\n"),
+        error: None,
+    })
+}
+
+// ---- oar-ocr helpers (see prototypes/OarOcr) ----
+
+/// oar-ocr's `word_boxes` is one box per CHARACTER of the recognized line, not
+/// per word (see its `ctc_word_boxes`) -- split `text` on whitespace and union
+/// the corresponding run of character boxes into real word boxes.
+fn split_into_words(text: &str, char_boxes: &[OarBox]) -> Vec<(String, OarBox)> {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() != char_boxes.len() {
+        return Vec::new();
+    }
+
+    let mut words = Vec::new();
+    let mut cur_text = String::new();
+    let mut cur_boxes: Vec<&OarBox> = Vec::new();
+
+    for (ch, b) in chars.iter().zip(char_boxes.iter()) {
+        if ch.is_whitespace() {
+            if !cur_text.is_empty() {
+                words.push((std::mem::take(&mut cur_text), union_boxes(&cur_boxes)));
+                cur_boxes.clear();
+            }
+        } else {
+            cur_text.push(*ch);
+            cur_boxes.push(b);
+        }
+    }
+    if !cur_text.is_empty() {
+        words.push((cur_text, union_boxes(&cur_boxes)));
+    }
+    words
+}
+
+fn union_boxes(boxes: &[&OarBox]) -> OarBox {
+    let mut x_min = f32::INFINITY;
+    let mut y_min = f32::INFINITY;
+    let mut x_max = f32::NEG_INFINITY;
+    let mut y_max = f32::NEG_INFINITY;
+    for b in boxes {
+        x_min = x_min.min(b.x_min());
+        y_min = y_min.min(b.y_min());
+        x_max = x_max.max(b.x_max());
+        y_max = y_max.max(b.y_max());
+    }
+    OarBox::from_coords(x_min, y_min, x_max, y_max)
+}
+
+/// Maps an oar-ocr box (in preprocessed-image pixels) + line-level confidence
+/// into an `OcrWord` in the original image's coordinate space, via the same
+/// `map_coord` scale-division Tesseract's path uses.
+///
+/// `confidence` here is the *line's* score, copied verbatim into every word split
+/// from that line (see the callers in `run_oar_ocr`) — oar-ocr's Rust crate exposes
+/// no per-word or per-character signal to score them independently with, unlike
+/// Tesseract (`run_tesseract`, independently-scored word rows from
+/// `image_to_data`) or the Python RapidOCR prototype (`result.word_results`, same
+/// PP-OCR model family, per-word scores via a different API). A single
+/// mis-recognized word inside an otherwise-confident oar-ocr line will therefore
+/// NOT show a locally low score the way it would under Tesseract — this is a
+/// limitation of the data available from this crate, not a bug here, and no
+/// heuristic (e.g. scoring by word length) should be added to fake independence
+/// that doesn't exist. Whether it's worth investigating a finer-grained signal
+/// upstream (e.g. per-character CTC-decode confidence the crate's API doesn't
+/// currently surface) is an open, unscheduled question — see docs/design.md §5.
+fn oar_region_to_word(text: &str, region_box: &OarBox, confidence: f32, scale: f32) -> OcrWord {
+    let left = region_box.x_min();
+    let top = region_box.y_min();
+    let width = region_box.x_max() - left;
+    let height = region_box.y_max() - top;
+    OcrWord {
+        id: None,
+        text: text.to_string(),
+        confidence: confidence * 100.0, // oar-ocr is 0-1; OcrWord/Tesseract is 0-100
+        box_coords: BoundingBox {
+            left: map_coord(left.round() as i32, scale),
+            top: map_coord(top.round() as i32, scale),
+            width: map_coord(width.round() as i32, scale),
+            height: map_coord(height.round() as i32, scale),
+        },
+    }
 }
 
 /// User-facing error returned when a job is aborted via `cancel_process_document`.
@@ -441,6 +656,7 @@ pub async fn process_document(
     state: tauri::State<'_, ProcessState>,
     session_id: String,
     file_path: String,
+    preset_id: Option<String>,
 ) -> Result<ExtractionResult, String> {
     // All the heavy work below — pdfium rendering, image resizing, the Tesseract
     // subprocess — is synchronous and CPU/IO-bound. Running it directly in this async
@@ -455,7 +671,7 @@ pub async fn process_document(
     let app_handle = app_handle.clone();
 
     tokio::task::spawn_blocking(move || {
-        process_document_blocking(app_handle, generation, session_id, file_path)
+        process_document_blocking(app_handle, generation, session_id, file_path, preset_id)
     })
     .await
     .map_err(|error| format!("document processing task failed: {error}"))?
@@ -467,6 +683,7 @@ fn process_document_blocking(
     generation: Arc<AtomicU64>,
     session_id: String,
     file_path: String,
+    preset_id: Option<String>,
 ) -> Result<ExtractionResult, String> {
     // Snapshot the cancellation generation at entry. If `cancel_process_document`
     // bumps it while we're working, the per-page check below aborts this run.
@@ -508,20 +725,67 @@ fn process_document_blocking(
         .app_data_dir()
         .map_err(|error| format!("failed to resolve app data directory: {error}"))?;
 
-    let eng_traineddata = data_dir
-        .join("tesseract")
-        .join("tessdata")
-        .join("eng.traineddata");
-    if !eng_traineddata.exists() {
-        return Err(format!(
-            "Tesseract English language data not found at {}. Re-run setup to reinstall Tesseract.",
-            eng_traineddata.display()
-        ));
+    // Which classical OCR engine grounds this run's words — the preset the caller
+    // named, or (mirroring `run_extraction_pipeline`) whatever this install was set
+    // up for. A preset with no `GroundOcr` step (none exist today, but `GroundModel`
+    // makes it possible in principle) can't be run through this word-grounding path.
+    let preset = match preset_id {
+        Some(id) => catalog::preset(&id).ok_or_else(|| format!("unknown preset `{id}`"))?,
+        None => crate::setup::read_persisted_preset(&data_dir),
+    };
+    let engine = preset.ocr_engine().ok_or_else(|| {
+        format!(
+            "preset `{}` has no classical OCR step for process_document to run",
+            preset.id
+        )
+    })?;
+
+    // Tesseract's PATH / TESSDATA_PREFIX is configured once at startup regardless of
+    // which preset is selected, but its language data is only demanded when the
+    // resolved engine actually needs it — a preset grounded on oar-ocr never
+    // downloads Tesseract at all (see `setup.rs::required_assets`), so requiring its
+    // traineddata unconditionally would block a perfectly complete install.
+    if matches!(engine, catalog::OcrEngine::Tesseract(_)) {
+        let eng_traineddata = data_dir
+            .join("tesseract")
+            .join("tessdata")
+            .join("eng.traineddata");
+        if !eng_traineddata.exists() {
+            return Err(format!(
+                "Tesseract English language data not found at {}. Re-run setup to reinstall Tesseract.",
+                eng_traineddata.display()
+            ));
+        }
+
+        // Ensure the `tsv` output config exists even if the Tesseract package shipped
+        // without its configs/ dir — otherwise OCR silently returns plain text.
+        ensure_tesseract_tsv_config(&data_dir);
     }
 
-    // Ensure the `tsv` output config exists even if the Tesseract package shipped
-    // without its configs/ dir — otherwise OCR silently returns plain text.
-    ensure_tesseract_tsv_config(&data_dir);
+    // Build oar-ocr's engine once for the whole document rather than per page —
+    // loading the ONNX det/rec models is the expensive part, so a multi-page PDF
+    // would otherwise pay that cost on every page (see `run_oar_ocr`).
+    let oar_engine = match engine {
+        catalog::OcrEngine::OarOcr(spec) => {
+            let models_dir = data_dir.join("models").join("oar-ocr");
+            let built = OAROCRBuilder::new(
+                models_dir
+                    .join(spec.det_model)
+                    .to_string_lossy()
+                    .into_owned(),
+                models_dir
+                    .join(spec.rec_model)
+                    .to_string_lossy()
+                    .into_owned(),
+                models_dir.join(spec.dict).to_string_lossy().into_owned(),
+            )
+            .return_word_box(spec.word_box)
+            .build()
+            .map_err(|error| format!("failed to build oar-ocr pipeline: {error}"))?;
+            Some(built)
+        }
+        catalog::OcrEngine::Tesseract(_) => None,
+    };
 
     let session_dir = app_handle
         .path()
@@ -638,6 +902,8 @@ fn process_document_blocking(
                     natural_height,
                     ocr_work_dir,
                     false, // already high-res from pdfium; do not upscale
+                    engine,
+                    oar_engine.as_ref(),
                 )
             };
 
@@ -681,12 +947,20 @@ fn process_document_blocking(
             natural_height,
             ocr_work_dir,
             true, // arbitrary resolution; upscale if small
+            engine,
+            oar_engine.as_ref(),
         )?);
     } else {
         return Err(format!("Unsupported file format: .{}", extension));
     }
 
-    Ok(ExtractionResult { session_id, pages })
+    Ok(ExtractionResult {
+        session_id,
+        pages,
+        preset_id: preset.id.to_owned(),
+        preset_version: preset.version,
+        grounding: preset.grounding(),
+    })
 }
 
 /// Prepend the bundled Tesseract dir to PATH and point TESSDATA_PREFIX at its

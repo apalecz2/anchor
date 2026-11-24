@@ -1,0 +1,15 @@
+[package]
+name = "oar-ocr-surya-spike"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+oar-ocr = { version = "0.9", features = ["auto-download"] }
+image = "0.25"
+imageproc = "0.25"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Synchronous HTTP client -- this is a one-shot script, no async runtime needed.
+ureq = { version = "2", features = ["json"] }
+base64 = "0.22"

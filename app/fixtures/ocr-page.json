@@ -1,0 +1,27 @@
+{
+  "_comment": "Shared fixture for the Rust/TypeScript prompt-equivalence tests. Stage 1's prompt is built from these words, and the derivation is being moved from TypeScript to Rust — if the two implementations disagree, provenance matches against a different word list than the model actually saw. Both sides run this input and must produce the golden files beside it (regenerate with `npx vitest run -u promptEquivalence`). Word widths are 10px per UTF-16 code unit, so avgCharWidth works out to exactly 10 and the expected column maths is checkable by hand. Cases covered: a centred title line that must NOT win anchor selection, a department code and course number that must stay in one column, right-justified sparse rows, pipe glyphs for the sanitizer, and a non-ASCII cell (Crédit) that is 6 UTF-16 units but 7 UTF-8 bytes — the padding after it is wrong by one if either side measures in bytes.",
+  "naturalHeight": 1000,
+  "words": [
+    { "id": "w01", "text": "TRANSCRIPT", "confidence": 96, "box_coords": { "left": 400, "top": 10, "width": 100, "height": 20 } },
+
+    { "id": "w02", "text": "Course", "confidence": 95, "box_coords": { "left": 20, "top": 100, "width": 60, "height": 20 } },
+    { "id": "w03", "text": "Description", "confidence": 94, "box_coords": { "left": 200, "top": 100, "width": 110, "height": 20 } },
+    { "id": "w04", "text": "Crédit", "confidence": 88, "box_coords": { "left": 600, "top": 100, "width": 60, "height": 20 } },
+    { "id": "w05", "text": "Grade", "confidence": 93, "box_coords": { "left": 750, "top": 100, "width": 50, "height": 20 } },
+
+    { "id": "w06", "text": "BUSINESS", "confidence": 92, "box_coords": { "left": 20, "top": 200, "width": 80, "height": 20 } },
+    { "id": "w07", "text": "1299E", "confidence": 91, "box_coords": { "left": 110, "top": 200, "width": 50, "height": 20 } },
+    { "id": "w08", "text": "Intro", "confidence": 90, "box_coords": { "left": 200, "top": 200, "width": 50, "height": 20 } },
+    { "id": "w09", "text": "Systems", "confidence": 89, "box_coords": { "left": 260, "top": 200, "width": 70, "height": 20 } },
+    { "id": "w10", "text": "1.00", "confidence": 97, "box_coords": { "left": 600, "top": 200, "width": 40, "height": 20 } },
+    { "id": "w11", "text": "A+", "confidence": 85, "box_coords": { "left": 750, "top": 200, "width": 20, "height": 20 } },
+
+    { "id": "w12", "text": "||", "confidence": 12, "box_coords": { "left": 20, "top": 300, "width": 20, "height": 20 } },
+    { "id": "w13", "text": "MATH", "confidence": 93, "box_coords": { "left": 60, "top": 300, "width": 40, "height": 20 } },
+    { "id": "w14", "text": "|Calc|", "confidence": 71, "box_coords": { "left": 200, "top": 300, "width": 60, "height": 20 } },
+    { "id": "w15", "text": "0.50", "confidence": 96, "box_coords": { "left": 600, "top": 300, "width": 40, "height": 20 } },
+
+    { "id": "w16", "text": "Total", "confidence": 94, "box_coords": { "left": 20, "top": 400, "width": 50, "height": 20 } },
+    { "id": "w17", "text": "2.50", "confidence": 95, "box_coords": { "left": 600, "top": 400, "width": 40, "height": 20 } }
+  ]
+}

@@ -71,6 +71,34 @@ export const MIGRATIONS: string[][] = [
             FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
         )`,
     ],
+
+    // v3: which pipeline produced a page's table.
+    //
+    // Extraction is no longer one hardcoded model. A preset decides what grounds the
+    // page — Tesseract's per-word boxes, or a model reporting its own regions — and
+    // that choice changes what a cell's stored `wordIds` *mean*, and therefore how
+    // precisely the UI can highlight a source. Reopening a session has to render it
+    // the way it was produced, not the way the current default would produce it.
+    //
+    // `preset_version` is recorded alongside the id because a preset's behaviour can
+    // change under a fixed id; together they say "this is what ran", which is also
+    // what makes a cached result recognisable as stale.
+    //
+    // A side table rather than columns on `csv_outputs`, for the same reason v2 chose
+    // one: SQLite has no `ALTER TABLE … ADD COLUMN IF NOT EXISTS`, and a re-run of a
+    // partially-applied version would throw "duplicate column".
+    [
+        `CREATE TABLE IF NOT EXISTS page_extraction_meta (
+            session_id TEXT NOT NULL,
+            page_index INTEGER NOT NULL,
+            preset_id TEXT NOT NULL,
+            preset_version INTEGER NOT NULL,
+            grounding TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(session_id, page_index),
+            FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+        )`,
+    ],
 ];
 
 // Child tables of `sessions`, ordered so that deleting them first leaves no
@@ -80,6 +108,7 @@ export const SESSION_CHILD_TABLES = [
     'csv_outputs',
     'document_page_sets',
     'document_pages',
+    'page_extraction_meta',
     'files',
 ] as const;
 

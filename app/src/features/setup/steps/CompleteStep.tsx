@@ -6,10 +6,15 @@ import Icon from '../../../components/Icon';
 
 interface Props {
     backend: Backend;
+    /** Persisted alongside the backend on completion, belt-and-suspenders: the
+     *  install step (DownloadStep) already persists this before the first byte
+     *  downloads, but a successful run re-affirming it here means a completed
+     *  wizard never leaves a stale/broken preset id on disk from before this run. */
+    presetId?: string;
     onLaunch: () => void;
 }
 
-export default function CompleteStep({ backend, onLaunch }: Props): React.ReactElement {
+export default function CompleteStep({ backend, presetId, onLaunch }: Props): React.ReactElement {
     const [ready, setReady] = useState(false);
 
     useEffect(() => {
@@ -22,9 +27,12 @@ export default function CompleteStep({ backend, onLaunch }: Props): React.ReactE
             // shared AppData assets already exist) can restore it instead of falling
             // back to the cpu default and running generation on the CPU.
             await invoke('persist_backend', { backend }).catch(() => { /* non-fatal */ });
+            if (presetId) {
+                await invoke('persist_preset', { presetId }).catch(() => { /* non-fatal */ });
+            }
             setReady(true);
         });
-    }, [backend]);
+    }, [backend, presetId]);
 
     return (
         <div className="flex flex-col gap-8 items-center text-center py-4">

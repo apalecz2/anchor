@@ -82,9 +82,17 @@ describe('cellTrust', () => {
         expect(cellTrust('agree', 0.65, 0.65, 65)).toBe('medium');
     });
 
-    it('treats null OCR as 0 in the blend for an agreeing cell', () => {
-        // blended = 0.4*1 + 0.6*0 = 0.4 < 0.65 -> low even with a perfect LLM
-        expect(cellTrust('agree', 1, 1, null)).toBe('low');
+    it('scores an agreeing cell on the LLM alone when grounding reports no confidence', () => {
+        // Not every grounding source has a confidence number to give. Tesseract does;
+        // row/column bands from a model do not. Blending against the missing term as
+        // zero caps such a cell at 0.4 — under the 0.65 rung — so a perfectly matched
+        // table would render entirely red, with no error anywhere to explain it.
+        // Agreement was established by the match; the surviving signal grades it.
+        expect(cellTrust('agree', 1, 1, null)).toBe('high');
+        expect(cellTrust('agree', 0.7, 0.7, null)).toBe('medium');
+        expect(cellTrust('agree', 0.4, 0.4, null)).toBe('low');
+        // The shaky-token gate still applies on this branch.
+        expect(cellTrust('agree', 0.9, 0.2, null)).toBe('medium');
     });
 
     it('falls back to OCR alone when the LLM is unscored (null)', () => {
@@ -94,6 +102,39 @@ describe('cellTrust', () => {
         expect(cellTrust('agree', null, null, 40)).toBe('low');
         // image-only with no LLM signal has nothing to vouch for it -> low
         expect(cellTrust('image_only', null, null, null)).toBe('low');
+    });
+
+    it('is low for an agreeing cell with neither signal', () => {
+        // Nothing to grade the match with at all. Unchanged from before the axis
+        // generalized — the old code reached the same answer via a 0.0 blend.
+        expect(cellTrust('agree', null, null, null)).toBe('low');
+    });
+
+    it('caps a self-reported cell at medium however certain the model sounds', () => {
+        // A preset with no grounding step: the model is its own only source, so the
+        // green that means "two independent sources agree" is never available.
+        expect(cellTrust('self_reported', 1, 1, null)).toBe('medium');
+        expect(cellTrust('self_reported', 0.95, 0.9, null)).toBe('medium');
+        // Below the cap the ladder runs unchanged, so the tier still discriminates.
+        expect(cellTrust('self_reported', 0.7, 0.7, null)).toBe('medium');
+        expect(cellTrust('self_reported', 0.5, 0.5, null)).toBe('low');
+        expect(cellTrust('self_reported', null, null, null)).toBe('low');
+    });
+
+    it('self-reported is more generous than image_only at the same score', () => {
+        // The two differ in kind, not degree: `image_only` means grounding looked and
+        // found nothing (evidence against), while `self_reported` means there was
+        // nothing to look with (absence of evidence). A 0.7 model score is therefore
+        // low in the first case and medium in the second.
+        expect(cellTrust('image_only', 0.7, 0.7, null)).toBe('low');
+        expect(cellTrust('self_reported', 0.7, 0.7, null)).toBe('medium');
+    });
+
+    it('a model-grounded, model-verified cell can still reach high', () => {
+        // The payoff the generalized axis exists for: two independent sources that are
+        // both models are still two sources. This must take the blended branch, not
+        // the capped single-source one.
+        expect(cellTrust('agree', 0.95, 0.9, 92)).toBe('high');
     });
 });
 
@@ -114,6 +155,60 @@ describe('computeProvenanceCells', () => {
         expect(cells[0][0].confidence.agreement).toBe('agree');
         expect(cells[0][1].confidence.ocr).toBeNull();
         expect(cells[0][1].confidence.agreement).toBe('image_only');
+    });
+
+    it('defaults to word grounding, so existing callers score exactly as before', () => {
+        const raw = 'Hi';
+        const prov: CellProvenance[][] = [[
+            { rowIndex: 0, colIndex: 0, value: 'Hi', wordIds: ['a'], matchStatus: 'matched' },
+        ]];
+        const logprobs: TokenLogprob[] = [{ token: 'Hi', logprob: 0, charOffset: 0 }];
+        const implicit = computeProvenanceCells(prov, logprobs, raw, [wordA])[0][0];
+        const explicit = computeProvenanceCells(prov, logprobs, raw, [wordA], 'word')[0][0];
+        expect(implicit.confidence).toEqual(explicit.confidence);
+        expect(implicit.confidence.agreement).toBe('agree');
+    });
+
+    it('scores an ungrounded page as self-reported and caps it at medium', () => {
+        // A preset with no grounding step. Every cell is the model's own word, so no
+        // cell may claim the green that means two sources agreed — even this one,
+        // whose logprob is a perfect 1.0 and which would otherwise score high.
+        const raw = 'Hi';
+        const prov: CellProvenance[][] = [[
+            { rowIndex: 0, colIndex: 0, value: 'Hi', wordIds: [], matchStatus: 'matched' },
+        ]];
+        const logprobs: TokenLogprob[] = [{ token: 'Hi', logprob: 0, charOffset: 0 }];
+        const cell = computeProvenanceCells(prov, logprobs, raw, [], 'none')[0][0];
+        expect(cell.confidence.agreement).toBe('self_reported');
+        expect(cell.confidence.trust).toBe('medium');
+        expect(cell.confidence.ocr).toBeNull();
+    });
+
+    it('does not call an ungrounded blank cell verified', () => {
+        // A grounded run earns `high` on a blank cell by *checking* the region is
+        // empty (verifyEmptyCellsPass). With no grounding source there was no region
+        // to check, so the same `high` would be an unearned claim — but `low` would
+        // paint every blank cell red and bury the ones that matter.
+        const prov: CellProvenance[][] = [[
+            { rowIndex: 0, colIndex: 0, value: '', wordIds: [], matchStatus: 'empty' },
+        ]];
+        const grounded = computeProvenanceCells(prov, [], '', [])[0][0];
+        const ungrounded = computeProvenanceCells(prov, [], '', [], 'none')[0][0];
+        expect(grounded.confidence.trust).toBe('high');
+        expect(ungrounded.confidence.trust).toBe('medium');
+        expect(ungrounded.confidence.agreement).toBe('self_reported');
+    });
+
+    it('treats cell and block grounding as corroborating sources, not self-report', () => {
+        // Every tier that locates *something* can confirm a value; only `none` cannot.
+        const raw = 'Hi';
+        const prov: CellProvenance[][] = [[
+            { rowIndex: 0, colIndex: 0, value: 'Hi', wordIds: ['a'], matchStatus: 'matched' },
+        ]];
+        for (const grounding of ['word', 'cell', 'block'] as const) {
+            const cell = computeProvenanceCells(prov, [], raw, [wordA], grounding)[0][0];
+            expect(cell.confidence.agreement, grounding).toBe('agree');
+        }
     });
 
     it('knocks fuzzy-matched cells down one trust level', () => {

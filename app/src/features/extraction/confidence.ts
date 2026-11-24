@@ -4,6 +4,7 @@ import type {
     TokenLogprob,
     ProvenanceCell,
     AgreementStatus,
+    GroundingKind,
     TrustLevel,
 } from './types';
 
@@ -119,6 +120,26 @@ function mapLogprobsToCells(
 const arithmeticMean = (values: number[]): number =>
     values.length === 0 ? 0 : values.reduce((a, b) => a + b, 0) / values.length;
 
+// The trust ladder: one 0–1 score in, one level out. Every branch below is this same
+// ladder over a different score, so the thresholds live in exactly one place.
+//
+// `canReachHigh` gates the top rung on the LLM's *minimum* per-token probability —
+// a cell whose mean looks fine but hides one shaky token is not high-trust. It is a
+// caller's decision rather than a null check here, because a branch scoring on the
+// grounding source alone has no per-token minimum to consult and must not be capped
+// for lacking one.
+const ladder = (score: number, canReachHigh: boolean): TrustLevel => {
+    if (score >= 0.85 && canReachHigh) return "high";
+    if (score >= 0.65) return "medium";
+    return "low";
+};
+
+/** No token in the value arrived shakier than this, so the top rung is available. */
+const noShakyToken = (llmMin: number | null): boolean => (llmMin ?? 0) >= 0.5;
+
+/** No single-source cell may be called high-trust, however certain the model sounds. */
+const capAtMedium = (trust: TrustLevel): TrustLevel => (trust === "high" ? "medium" : trust);
+
 export const cellTrust = (
     agreement: AgreementStatus,
     llmMean: number | null,
@@ -127,37 +148,57 @@ export const cellTrust = (
 ): TrustLevel => {
     if (agreement === "disagree") return "low";
 
-    const ocrNorm = (ocrConfidence ?? 0) / 100;
-
     if (agreement === "image_only") {
-        // No OCR to corroborate. With no LLM signal either, we can't vouch for it.
+        // Grounding found nothing matching this value. With no LLM signal either, we
+        // can't vouch for it. Deliberately not the ladder: an unmatched value is a
+        // signal *against* the cell, so it never reaches the 0.65 rung on its own.
         if (llmMean == null) return "low";
         return llmMean >= 0.85 ? "medium" : "low";
     }
 
-    // agree: when the LLM gave us no usable value signal (llmMean null), trust the
-    // OCR match alone rather than dragging the cell down — a strong OCR agreement is
-    // still trustworthy even though we can't read the model's certainty here.
-    if (llmMean == null) {
-        if (ocrNorm >= 0.85) return "high";
-        if (ocrNorm >= 0.65) return "medium";
-        return "low";
+    if (agreement === "self_reported") {
+        // One source, by design — a preset with no grounding step. There is nothing to
+        // corroborate with, so run the same ladder with that single source standing in
+        // for both terms (`0.4·x + 0.6·x` is just `x`) and cap the result. No new
+        // thresholds: the cap is the only difference, and it is the honest one.
+        if (llmMean == null) return "low";
+        return capAtMedium(ladder(llmMean, noShakyToken(llmMin)));
     }
 
-    const blended = 0.4 * llmMean + 0.6 * ocrNorm;
-    if (blended >= 0.85 && (llmMin ?? 0) >= 0.5) return "high";
-    if (blended >= 0.65) return "medium";
-    return "low";
+    // `agree`: the structured value was found in the grounded source. Blend the two
+    // numeric signals — but only when there are two.
+    //
+    // Either side can be absent for a reason that is not a defect: the LLM's value may
+    // have arrived as a single boundary-merged token (llmMean null), and a grounding
+    // source may report no confidence at all (Tesseract does; bands from a model with
+    // logprobs disabled would not). In both cases the agreement was established by the
+    // *match*; the surviving signal grades it. Feeding a missing term in as zero is
+    // what would cap such a cell at 0.4 and render a correctly-matched table entirely
+    // red — silently, with no error anywhere.
+    if (llmMean == null && ocrConfidence == null) return "low";
+    // A strong grounding match is trustworthy even though the model's certainty here
+    // is unreadable, so this branch is not gated on a minimum it doesn't have.
+    if (llmMean == null) return ladder(ocrConfidence! / 100, true);
+    if (ocrConfidence == null) return ladder(llmMean, noShakyToken(llmMin));
+
+    return ladder(0.4 * llmMean + 0.6 * (ocrConfidence / 100), noShakyToken(llmMin));
 };
 
 // Attach per-cell confidence to existing CellProvenance data.
 // rawContent is the unmodified streamed output (same coord space as logprob offsets).
+//
+// `grounding` names what located the source text, and decides only which agreement
+// axis applies: every tier that locates *something* can corroborate a cell, while
+// `none` means the structuring model is vouching for itself. It defaults to `word`,
+// the tier every shipped preset uses, so today's scoring is unchanged.
 export const computeProvenanceCells = (
     cellProvenance: CellProvenance[][],
     logprobs: TokenLogprob[],
     rawContent: string,
     ocrWords: OcrWord[],
+    grounding: GroundingKind = 'word',
 ): ProvenanceCell[][] => {
+    const ungrounded = grounding === 'none';
     const { cellRanges } = parseTSVWithOffsets(rawContent);
     const tokenIndicesMap = mapLogprobsToCells(logprobs, cellRanges);
 
@@ -173,6 +214,20 @@ export const computeProvenanceCells = (
             // nothing, a genuine disagreement to surface. A clean empty is
             // agreement — blank output over a blank region — not a low score.
             if (cell.matchStatus === "empty") {
+                // Without a grounding source there was no region to check the claim
+                // against — `verifyEmptyCellsPass` had nothing to run on. That is
+                // unverified, not verified-clean, so it must not inherit the `high`
+                // a real spatial check earns. Nor is it `low`: nothing is wrong with
+                // it, and painting every blank cell red would bury the ones that are.
+                if (ungrounded) {
+                    return {
+                        ...cell,
+                        confidence: {
+                            llmMean: null, llmMin: null, ocr: null,
+                            agreement: "self_reported", trust: "medium",
+                        },
+                    };
+                }
                 const overlooked = cell.wordIds.length > 0;
                 return {
                     ...cell,
@@ -219,8 +274,12 @@ export const computeProvenanceCells = (
                 ? null
                 : arithmeticMean(ocrConfidences);
 
-            const agreement: AgreementStatus =
-                cell.matchStatus === "unmatched" ? "image_only" : "agree";
+            // With no grounding source there is no second opinion to agree or disagree
+            // with — every cell is the model's own word. `unmatched` cannot arise there
+            // (nothing was matched against), so this is a clean split, not a priority.
+            const agreement: AgreementStatus = ungrounded
+                ? "self_reported"
+                : cell.matchStatus === "unmatched" ? "image_only" : "agree";
 
             // A fuzzy match means OCR and the LLM only roughly agree, so cap
             // certainty by knocking the computed trust down one level.

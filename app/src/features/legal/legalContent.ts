@@ -23,7 +23,7 @@ export { privacyMarkdown, eulaMarkdown, noticesMarkdown };
  * now parses the date out of the bundled markdown and fails if the two disagree —
  * edit the date in EULA.md and this constant together, or the test will say so.
  */
-export const EULA_VERSION = '2026-08-04';
+export const EULA_VERSION = '2026-11-24';
 
 export type LegalDocId = 'privacy' | 'terms' | 'notices';
 

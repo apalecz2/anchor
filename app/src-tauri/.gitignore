@@ -21,3 +21,6 @@ models/
 /binaries/macos/*
 /binaries/linux/*
 
+
+# Load-time DLLs staged for the Windows installer by app/scripts/stage-windows-runtime.mjs
+/windows-runtime/

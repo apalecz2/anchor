@@ -1,6 +1,6 @@
 # Anchor End User License Agreement & Terms of Use
 
-**Effective date / last updated: August 4, 2026**
+**Effective date / last updated: November 24, 2026**
 
 This End User License Agreement ("**Agreement**") is between you and **Aiden Paleczny**
 ("**Licensor**", "we") and governs your use of the **Anchor** desktop application,
@@ -91,13 +91,32 @@ verified/certified data where accuracy is legally required.
 
 ## 7. Third-party components
 
-The App is built with, downloads, and redistributes third-party open-source software, font
-software, and an AI model — including llama.cpp, Tesseract OCR, PDFium, NVIDIA CUDA runtime
-libraries where applicable, the Qwen3.5 model, and the Inter, Source Serif 4, and Material
-Symbols typefaces. These components are licensed under their own terms, reproduced in the
-App's **Licenses & Notices** screen and in the repository's `NOTICES.md`; this Agreement
-does not modify those licenses. Downloaded components are fetched from Licensor's mirror
-(or the upstream source) and verified against pinned SHA-256 checksums.
+The App is built with, downloads, and redistributes third-party software, font software,
+and AI models — including llama.cpp, Tesseract OCR, PDFium, ONNX Runtime and the
+PaddleOCR PP-OCRv6 recognition models, Microsoft DirectML, the Microsoft Visual C++ runtime
+libraries and NVIDIA CUDA runtime libraries (Windows only, the latter where applicable), the
+Qwen3.5 model, and the Inter, Source Serif 4, and Material Symbols typefaces. These
+components are licensed under their own terms, reproduced in the App's **Licenses &
+Notices** screen and in the repository's `NOTICES.md`; this Agreement does not modify those
+licenses. Some components are included in the installer; the rest are fetched on first run
+from Licensor's mirror (or the upstream source) and verified against pinned SHA-256
+checksums.
+
+**Proprietary runtime components.** The Microsoft Visual C++ runtime libraries and the NVIDIA
+CUDA runtime libraries are proprietary to Microsoft Corporation and NVIDIA Corporation
+respectively, not open source. They are redistributed under those companies' redistribution
+terms and are licensed, not sold, solely for use as part of the App. You may not (a) use them
+separately from the App, provide them as a stand-alone offering, or incorporate them into other
+software; (b) copy (except as part of installing the App), share, publish, distribute, rent,
+lease, lend, sublicense, or transfer them; (c) modify them or create derivative works of them;
+(d) reverse engineer, decompile, or disassemble them, or otherwise attempt to derive their
+source code, except to the extent applicable law expressly permits despite this limitation;
+(e) work around any technical limitations, security, or authentication mechanisms in them; or
+(f) remove, minimize, block, or modify any copyright, trademark, or other notice of Microsoft,
+NVIDIA, or their suppliers in them. Microsoft, NVIDIA, and their suppliers
+provide these components "as is", without any warranty, and are not liable to you for any
+damages arising from your use of them; Section 9 and Section 10 apply to them as they do to
+the rest of the App.
 
 ## 8. Updates
 

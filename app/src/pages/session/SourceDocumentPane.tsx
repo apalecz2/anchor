@@ -118,6 +118,9 @@ interface SourceDocumentPaneProps {
     setHighlightedWordId: (id: string | null) => void;
     onWordClick: (wordId: string) => void;
     provenanceHighlightBox: BoundingBox | null;
+    /** Whether that box bounds the value itself or only the region it sits in —
+     *  decided by the grounding tier the page was extracted at. */
+    highlightPrecision: 'exact' | 'coarse';
 
     // Tool + viewport. Zoom is relative to the fitted size (1 = the image
     // exactly fits the pane); the viewer clamps it to [MIN_ZOOM, maxZoomFor(fit)].
@@ -146,6 +149,7 @@ export function SourceDocumentPane(props: SourceDocumentPaneProps): React.ReactE
         fileUrl, activePage, viewerRef,
         addWord, editWord, deleteWord, editingState, setEditingState,
         highlightedWordId, setHighlightedWordId, onWordClick, provenanceHighlightBox,
+        highlightPrecision,
         activeTool, setActiveTool, zoom, setZoom,
         overlayMode, setOverlayMode,
         totalPages, activePageIndex, goToPage, pageInputValue, setPageInputValue,
@@ -275,6 +279,7 @@ export function SourceDocumentPane(props: SourceDocumentPaneProps): React.ReactE
                         onZoomChange={setZoom}
                         onFitScaleChange={setFitScale}
                         provenanceHighlightBox={provenanceHighlightBox}
+                        highlightPrecision={highlightPrecision}
                         onLoadError={() => setImageLoadFailed(true)}
                         overlayMode={overlayMode}
                     />

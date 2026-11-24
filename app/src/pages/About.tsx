@@ -400,7 +400,7 @@ export default function About(): React.ReactElement {
                     {[
                         { to: '/legal/privacy', icon: 'shield', label: 'Privacy Policy', note: 'What Anchor processes and where (everything stays on your device).' },
                         { to: '/legal/terms', icon: 'gavel', label: 'Terms of Use & EULA', note: 'License to use, AI-output disclaimer, and warranty terms.' },
-                        { to: '/legal/notices', icon: 'balance', label: 'Licenses & Notices', note: 'Open-source components and the AI model Anchor is built with.' },
+                        { to: '/legal/notices', icon: 'balance', label: 'Licenses & Notices', note: 'Third-party components and AI models Anchor is built with.' },
                     ].map(({ to, icon, label, note }) => (
                         <Link key={to} to={to} className="flex items-center gap-4 px-5 py-4 hover:bg-surface-container-high transition-colors no-underline">
                             <Icon name={icon} size={20} weight={300} className="text-primary shrink-0" />

@@ -1,0 +1,7 @@
+# rapidocr-onnxruntime (the old package name) caps at Python <3.13 and is no
+# longer the actively maintained line; `rapidocr` is its successor and needs
+# an inference backend installed separately -- onnxruntime is the CPU one.
+rapidocr>=3.0.0
+onnxruntime>=1.18.0
+Pillow>=10.0.0
+numpy>=1.24.0

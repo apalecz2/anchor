@@ -119,6 +119,12 @@ const chooseAnchorLine = (lineGroups: OcrWord[][], columnGap: number, tolerance:
 /**
  * Rebuild spatially-accurate text from the structured words array.
  *
+ * **Not dead code, despite having no runtime caller.** Prompt building moved to
+ * Rust (`src-tauri/src/pipeline/prompt.rs`); this is the reference the port is held
+ * against. `promptEquivalence.test.ts` runs it over the shared fixture to write the
+ * golden files that the Rust tests then assert against, so deleting it would leave
+ * the port's byte-for-byte fidelity claim resting on nothing. Keep the two in step.
+ *
  * Column boundaries are derived once from a single representative line (see
  * `chooseAnchorLine`) and every row is snapped to those columns. Real columns
  * are vertically consistent across rows, whereas a wide cell holding left- and

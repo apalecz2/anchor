@@ -41,8 +41,10 @@ Microsoft Store generative-AI policy (11.16).
 
 ## Copyright / takedown contact
 
-Anchor's first-run wizard downloads third-party open-source binaries and an AI model from
-a mirror operated by the author (licenses and attributions in [NOTICES.md](NOTICES.md)).
+Anchor's first-run wizard downloads third-party open-source binaries and AI models from
+a mirror operated by the author, and the Windows installer ships Microsoft's DirectML and
+Visual C++ runtime libraries alongside the app (licenses and attributions in
+[NOTICES.md](NOTICES.md)).
 If you believe any hosted or redistributed asset infringes your rights, contact
 **aiden.paleczny@gmail.com** with the subject `[COPYRIGHT] Anchor`, identifying the
 material, your rights in it, and the requested action. Good-faith reports are acted on
@@ -52,3 +54,8 @@ promptly.
 
 Only the **latest released version** receives security fixes. Update via the Microsoft
 Store or the latest GitHub Release.
+
+On Windows, the DirectML and Visual C++ runtime libraries installed next to `Anchor.exe`
+are private copies. Windows Update does not service them, so security fixes to those
+libraries reach you only through a new Anchor release. Each release is built with the
+latest Visual C++ runtime available to the build machine.

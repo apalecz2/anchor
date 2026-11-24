@@ -120,7 +120,76 @@ rows for 718 packages, with nothing missing, nothing extra, and no licence strin
 disagrees with the crate's own manifest. Reconcile that way rather than eyeballing the
 table; the drift that hid there was an entire plugin's subtree.
 
-Two traps:
+Three traps:
+
+- **Native DLLs that ship in the Windows installer.** Neither `npm ls` nor
+  `cargo metadata` sees them, because they aren't packages: `DirectML.dll` (MIT, noted under
+  §1.6) and the Microsoft Visual C++ runtime (§1.8) come from `ort-sys`'s prebuilt ONNX
+  Runtime and from Visual Studio's redist folder, staged by
+  `app/scripts/stage-windows-runtime.mjs`. That script prints every DLL it staged on each
+  `tauri build`. **If that list changes, NOTICES §1.6/§1.8 and EULA §7 change with it.**
+  The Visual C++ runtime is proprietary Microsoft "Distributable Code", and its terms require
+  end users to be bound by terms at least as protective as Microsoft's. EULA §7's
+  *Proprietary runtime components* paragraph is that flow-down, and it covers the NVIDIA
+  CUDA runtime on the same basis. Don't drop it from the EULA while either component ships.
+  Checked 2026-11-24 against:
+  - the Visual Studio 2026 distributable list
+    (<https://learn.microsoft.com/visualstudio/releases/2026/redistribution>: `VC\redist`
+    and its subfolders may be distributed unmodified, excluding `debug_nonredist` and
+    anything marked pre-release or preview, so build only from a `VisualStudio.*.Release`
+    channel install);
+  - Microsoft's end-user license for the runtime itself (`Cpp_2015-2022_ENU.1033`, extracted
+    from `vc_redist.x64.exe`), whose restrictions §7 mirrors;
+  - the NVIDIA CUDA EULA v13.5 (last updated 2026-01-26). Its §1.1.2(5) requires consistent
+    downstream terms; §1.2(2) bars modification and derivative works; Attachment A lists
+    `cudart`/`cublas`/`cublasLt` as redistributable.
+
+  Two obligations of yours that are not EULA text:
+  - **NVIDIA §1.1.2(6):** notify NVIDIA in writing of any known or suspected non-compliant
+    distribution or use, and enforce the EULA with respect to the CUDA runtime.
+  - **NVIDIA §1.2(3):** never present Anchor as sponsored or endorsed by NVIDIA. The same
+    applies to Microsoft.
+
+  **Build Tools 2026 license (last updated 2025-10-01), read 2026-11-24.** It has **no
+  Distributable Code section**:
+  - §4(e) forbids distributing "the software or any of its code" under it.
+  - §1(a) licenses it only as a supplement to Visual Studio Community, Professional or
+    Enterprise, and requires a valid license to one of those.
+
+  So the right to ship the runtime DLLs comes from the **Visual Studio Community** license's
+  Distributable Code section (Anchor's author qualifies for Community as an individual
+  developer), via the distributable list. Two consequences:
+  - **Build devices (§2(b)).** Build Tools may run only on machines you own, machines
+    "hosted on Microsoft Azure for you", or machines an Authorized Outsourcer manages solely
+    for you. A GitHub-hosted runner is Microsoft-owned and runs on Azure, but it is neither
+    dedicated to you nor running a Visual Studio you installed. `release.yml` stages the CRT
+    from that runner, so this is the least clear-cut link. Building releases on your own
+    machine removes the question.
+
+  **Visual Studio Community 2026 license (last updated 2025-10-01), read 2026-11-24.**
+  §2(b) covers an individual working on their own applications, including to sell them. §8
+  (Distributable Code) grants the Distributable List. §8(b) imposes three requirements:
+  1. **Add significant primary functionality.** Met.
+  2. **"Require distributors and external end users to agree to terms that protect the
+     Distributable Code at least as much as these license terms."** The content is met: EULA
+     §7's (a)–(f) mirror Community §11 item for item, unlawful use is covered by EULA §6(a),
+     and export by EULA §14. The *timing* is met because the installer's license page shows
+     the EULA (`bundle.licenseFile` in `tauri.conf.json`). The DLLs land on disk at install,
+     before the in-app clickwrap runs, so the installer page is where users first agree. Until
+     2026-11-24 that page showed `LICENSE` (Elastic-2.0, the *source* license, which grants
+     copy/distribute/modify rights), so it must stay the EULA. A third-party distributor
+     (Microsoft Store, winget) must also present the EULA.
+  3. **"Indemnify, defend, and hold harmless Microsoft from any claims, including attorneys'
+     fees, related to the distribution or use of your applications, except to the extent
+     that any claim is based solely on the Distributable Code."** This obligation falls on
+     the author personally and cannot be passed to users. With no corporate entity, it is
+     unlimited personal exposure, which is one more reason for the "incorporate before
+     charging" item in `release.md`.
+
+  §8(c) is met: release-channel components only, no Microsoft trademarks in the app's name
+  or presented as an endorsement, and no Microsoft source code shipped. §7(c) repeats the
+  Build Devices definition above, so the GitHub-runner question applies under this license
+  too.
 
 - **Fonts.** `§2.1` covers Inter, Source Serif 4 (both SIL OFL 1.1) and Material Symbols
   (Apache-2.0). These are font *binaries* shipped in the installer and in the website
@@ -152,3 +221,12 @@ Recorded so the same drift is recognisable if it recurs.
   pulled in 18 crates that were never added to §3, and the three bundled fonts had never
   been listed at all — while EULA §7 and `release.md`'s Store-policy 11.2 row both asserted
   the file was complete.
+- **Load-time DLLs missing from the Windows installer (fixed 2026-11-24).** The oar-ocr
+  integration made `Anchor.exe` import `DirectML.dll` and the MSVC C++ runtime at load time.
+  Every dev build and the `target\release` smoke test found them anyway: `ort-sys` symlinks
+  DirectML beside the exe, and a dev machine has the redistributable installed. The installer
+  shipped neither, so a clean Windows machine would have failed before the clickwrap could
+  even be shown. NOTICES §1.6 also claimed DirectML was "copied next to the executable", and
+  EULA §7 named neither component. Fixed by bundling both (`stage-windows-runtime.mjs`), adding
+  NOTICES §1.8 and the EULA §7 flow-down, and bumping the terms to 2026-11-24 so every user is
+  asked to accept again.

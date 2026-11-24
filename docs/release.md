@@ -24,8 +24,8 @@ Verified 2026-07-27 (GitHub API + HTTP checks against the live site).
 | **Repo** | `github.com/apalecz2/anchor`, public, Elastic License 2.0. **Renamed** from `DataExtractionAI` — the local `origin` remote still points at the old URL and works only via GitHub's redirect (§8). |
 | **Website** | Live at **https://anchor.aidenpaleczny.com** (set as the repo homepage). `/privacy`, `/terms`, `/licenses` all return 200 as pre-rendered static routes. |
 | **Releases** | **Public on GitHub Releases**: `v0.1.0` and `v0.1.1` (2026-06-23), `v0.2.0` (2026-07-24). All three are flagged **pre-release**. |
-| **Release automation** | [`.github/workflows/release.yml`](../.github/workflows/release.yml) — tag-triggered (`v*`) or manual; builds **Windows** + **macOS universal** via `tauri-action` and publishes a **draft** release. |
-| **v0.2.0 artifacts** | `Anchor_0.2.0_x64-setup.exe` (6.8 MB, NSIS), `Anchor_0.2.0_x64_en-US.msi` (9.9 MB), `Anchor_0.2.0_universal.dmg` (20.1 MB), `Anchor_universal.app.tar.gz` (20 MB). |
+| **Release automation** | [`.github/workflows/release.yml`](../.github/workflows/release.yml) — tag-triggered (`v*`) or manual; builds **Windows** + **macOS (Apple Silicon, `aarch64-apple-darwin`)** via `tauri-action` and publishes a **draft** release. |
+| **v0.2.0 artifacts** | `Anchor_0.2.0_x64-setup.exe` (6.8 MB, NSIS), `Anchor_0.2.0_x64_en-US.msi` (9.9 MB), `Anchor_0.2.0_universal.dmg` (20.1 MB), `Anchor_universal.app.tar.gz` (20 MB). From the next release the macOS build is Apple Silicon-only, so expect `Anchor_<ver>_aarch64.dmg` instead (§5.2). |
 | **Versioning** | `productName: "Anchor"`, `version: 0.3.0` in [tauri.conf.json](../app/src-tauri/tauri.conf.json); `app/package.json` and `app/src-tauri/Cargo.toml` match and carry `author`/`description`/`license: Elastic-2.0`. Five files hold the version — §4.1. |
 | **Executable name** | `Anchor.exe`, from the `[[bin]] name` in [Cargo.toml](../app/src-tauri/Cargo.toml) — **not** from `productName`. Renamed for 0.3.0: the package was called `app`, so v0.1.x–v0.2.0 installed as `app.exe` (`%LOCALAPPDATA%\Anchor\app.exe`). Existing installs get the new name via the NSIS uninstall-then-install upgrade; pinned shortcuts to the old path break and need re-pinning. |
 | **Code signing** | ❌ **None on either platform.** No Authenticode/Azure Trusted Signing, no Apple Developer ID, no notarization, no `entitlements.plist`. The site says "Unsigned for now" on both download cards. |
@@ -78,7 +78,7 @@ published release is a pre-release, so the flag is being flipped by hand each ti
 **Exit:** the website's Windows and macOS buttons land a user on an actual installer file.
 
 ### N2 — macOS signing + notarization · ~½ day + Apple Developer enrollment ($99/yr)
-The unsigned universal DMG is the worst install experience of the two: Gatekeeper reports
+The unsigned DMG is the worst install experience of the two: Gatekeeper reports
 `"Anchor" is damaged and can't be opened` (quarantine + no valid signature), which reads as
 malware, not as an unsigned app. There is no "More info → Run anyway" escape hatch like
 Windows has.
@@ -175,7 +175,7 @@ optional rather than the only affordable path.
    ```bash
    git tag v0.3.0 && git push origin v0.3.0
    ```
-   `release.yml` builds Windows and macOS-universal in parallel and creates a **draft**
+   `release.yml` builds Windows and macOS (Apple Silicon) in parallel and creates a **draft**
    GitHub Release named `Anchor v0.3.0`, with the first-run-download disclosure already in
    the release body.
 
@@ -246,7 +246,7 @@ export APPLE_ID="aiden.paleczny@gmail.com"
 export APPLE_PASSWORD="app-specific-password"
 export APPLE_TEAM_ID="XXXXXXXXXX"
 export APPLE_SIGNING_IDENTITY="Developer ID Application: Aiden Paleczny (XXXXXXXXXX)"
-cd app && npm run tauri build --target universal-apple-darwin
+cd app && npm run tauri build --target aarch64-apple-darwin
 ```
 
 Verify:
@@ -254,7 +254,7 @@ Verify:
 ```bash
 codesign -dvvv "…/bundle/macos/Anchor.app" 2>&1 | grep -i runtime
 codesign -d --entitlements - "…/Anchor.app" 2>&1 | grep library-validation
-xcrun stapler validate "…/bundle/dmg/Anchor_0.3.0_universal.dmg"
+xcrun stapler validate "…/bundle/dmg/Anchor_0.3.0_aarch64.dmg"
 ```
 
 The wizard-downloaded child binaries (`llama-server`, `tesseract`) need no separate
@@ -262,9 +262,15 @@ signing — they're spawned as child processes, not loaded into Anchor's address
 the upstream arm64 builds are already ad-hoc signed. (Re-sign with
 `codesign -s - --force <binary>` only if you ever repackage them.)
 
-> **Universal build, arm64-only runtime.** The DMG is a universal binary, but the assets
-> the wizard downloads (`llama-server`, PDFium) are **arm64-only**, so setup cannot complete
-> on Intel Macs. Keep "Apple Silicon only" stated on the website and in the release notes.
+> **Apple Silicon only — no universal build.** The macOS build targets `aarch64-apple-darwin`
+> alone. A `universal-apple-darwin` build can't link: oar-ocr pulls in ONNX Runtime through
+> `ort-sys`'s `download-binaries` feature, and `ort-sys` ships no prebuilt for
+> `x86_64-apple-darwin`, so the Intel slice is left with unresolved ONNX Runtime symbols and
+> the whole build fails. Intel was never a working target anyway — the assets the wizard
+> downloads (`llama-server`, PDFium) are **arm64-only** — so an arm64 DMG drops nothing real
+> and is about half the size. Keep "Apple Silicon only" stated on the website and in the
+> release notes. (Regular PR CI won't catch a regression here: `test.yml` builds natively on
+> an arm64 `macos-latest` runner and never touches the x86_64 target.)
 
 ---
 
@@ -301,7 +307,11 @@ Two facts shape the whole effort:
 2. **Tooling:** Windows 10/11 SDK (`makeappx`, `makepri`, `signtool`).
 3. **Build unpackaged:** `cd app && npm run tauri build`, then stage
    `app/src-tauri/target/release/` (the `Anchor.exe` + DLLs/resources — *not* the
-   NSIS/MSI output). The exe name comes from the `[[bin]] name` in `Cargo.toml`; it must
+   NSIS/MSI output). Take the load-time DLLs (`DirectML.dll`, `msvcp140*.dll`,
+   `vcruntime140*.dll`) from `app/src-tauri/windows-runtime/`, where the build staged real
+   copies. `target/release/DirectML.dll` is only a symlink into `ort-sys`'s cache, and the
+   package must contain the file itself. Without them, the packaged app fails to launch on a
+   machine without the Visual C++ Redistributable (§7). Leave out the stale `app_lib.dll`. The exe name comes from the `[[bin]] name` in `Cargo.toml`; it must
    equal the manifest's `Executable=` below, and a `target/` dir carrying a stale `app.exe`
    from before the 0.3.0 rename should be cleaned first so the wrong binary can't be staged.
 4. **Author `AppxManifest.xml`** next to the staged binaries:
@@ -373,17 +383,21 @@ Two facts shape the whole effort:
 | Policy | Requirement | Status |
 |---|---|---|
 | **10.2.4** dependency disclosure | Non-integrated components delivering primary functionality must be disclosed **at the beginning of the description**. | 🔶 Draft text ready (§6.5) — paste at submission. |
-| **10.2.2** no undisclosed dynamic code | Downloads *are* the described functionality; each is SHA-256-pinned and verified before use (`download_file` in [setup.rs](../app/src-tauri/src/setup.rs)). | ✅ Compliant — say so in cert notes. |
+| **10.2.2** no undisclosed dynamic code | Downloads *are* the described functionality; each is SHA-256-pinned and verified before use (`download_file` in [setup.rs](../app/src-tauri/src/setup.rs)). See the note below on what "pinned" now rests on. | ✅ Compliant — say so in cert notes. |
 | **10.2.9** standalone installer | The installer installs a complete runnable app; the 3.5 GB fetch happens at *first run*, not during install. **Never move app code into a post-install fetch.** | ✅ Compliant. |
 | **10.2** signing | Store signs the MSIX on ingestion. (Fallback path requires the installer *and every installed PE* to be signed — see §5.1.) | ✅ N/A for MSIX. |
 | **10.2.7** clean uninstall | Must enable removal of everything, incl. the downloaded GB. | ✅ In-app *Remove all data and quit* (N5); 🔶 confirm what MSIX uninstall clears on a VM (§6.4). |
 | **10.5.1** privacy policy URL | Mandatory for Win32/packaged products. | ✅ Live at https://anchor.aidenpaleczny.com/privacy |
 | **11.16** generative-AI | Declare live GenAI in Partner Center + listing; provide a report path. | ✅ In-app note + EULA §4 + `SECURITY.md` contact exist; 🔶 tick the declaration at submission. |
-| **11.2** licensing/attribution | Third-party components properly licensed and attributed. | ✅ `NOTICES.md` + in-app Licenses screen + `/licenses`. Reconciled 2026-08-04: §3 matches `cargo metadata` by name and version (718/718), and §2.1 now covers the bundled Inter / Source Serif 4 (OFL-1.1, full text in Appendix E) and Material Symbols (Apache-2.0) — previously unlisted while this row claimed ✅. Qwen verified Apache-2.0 (base + unsloth GGUF) for R2 redistribution. |
+| **11.2** licensing/attribution | Third-party components properly licensed and attributed. | ✅ `NOTICES.md` + in-app Licenses screen + `/licenses`. Reconciled 2026-08-04: §3 matches `cargo metadata` by name and version (718/718), and §2.1 now covers the bundled Inter / Source Serif 4 (OFL-1.1, full text in Appendix E) and Material Symbols (Apache-2.0) — previously unlisted while this row claimed ✅. Qwen verified Apache-2.0 (base + unsloth GGUF) for R2 redistribution. 2026-11-24: the installer-bundled `DirectML.dll` (MIT, §1.6) and Microsoft Visual C++ runtime (§1.8, proprietary "Distributable Code", with end-user flow-down terms in EULA §7) are now listed too; neither shows up in `npm ls`/`cargo metadata`, see [compliance-documents.md](compliance-documents.md) §4. |
 | **10.1.1** title/metadata accuracy | Unique title; state limitations (English-only OCR, one-time download, CPU works but slower). | 🔶 Reserve the name; listing copy at submission. |
 | **10.3.1** login | No account required — state in cert notes. | ✅ |
 | **10.4.1** graceful on incompatible hardware | Must degrade/message, not fail silently, on a GPU-less VM. | ✅ Wizard selects the CPU backend; re-verify per §7. |
 | **11.11** age rating | IARC questionnaire → Everyone / PEGI 3. | 🔶 At submission. |
+
+**What the 10.2.2 claim rests on now that models are catalog data.** Which models an install downloads is derived from the chosen pipeline preset rather than from a fixed list ([design.md](design.md) §7.1), so "every download is pinned" had to stop being a property of one hand-maintained array. It is now enforced by a build-time test: the catalog declares that a model needs a file, `MODEL_ASSETS` in [setup.rs](../app/src-tauri/src/setup.rs) pins what bytes that file may be, and `every_catalog_model_file_has_pinned_bytes_and_vice_versa` asserts the two cover each other **exactly**. A model added without a pin fails `cargo test`; an orphaned pin fails the same way. Empty digests are rejected outright, because `verify_file_hash` skips them by design. The catalog itself is compiled Rust constants, not a user-editable manifest — that is deliberate and is part of this claim.
+
+**One carve-out, and it is not a download.** Settings ▸ AI model lets a user point Anchor at a GGUF **already on their own disk** (design.md §7.5). Nothing is fetched: the app accepts only an absolute path to an existing local file whose contents begin with the `GGUF` magic bytes, and it explicitly refuses any URL. The in-app text states that a user-supplied model is not verified. This is the user running their own file on their own machine — the same category as opening a document — and it introduces no code path that downloads anything unpinned. If a certification reviewer asks, that is the answer: there is exactly one way bytes arrive over the network, it is `download_file`, and it verifies against a constant compiled into the binary.
 
 ### 6.4 The uninstall/AppData problem (10.2.7)
 
@@ -450,6 +464,15 @@ install/uninstall/path checks stay manual.
 **Every run must verify**
 
 - [ ] Install completes from the published artifact (and, for MSIX, one-click/silent).
+- [ ] **Windows: the app launches on a machine that has never had the Visual C++
+      Redistributable installed.** `Anchor.exe` imports `DirectML.dll` and the MSVC C++ runtime
+      (`msvcp140*.dll`, `vcruntime140*.dll`) at load time, via ONNX Runtime/oar-ocr. The
+      installer ships them next to the exe (`app/scripts/stage-windows-runtime.mjs`, run as
+      `beforeBundleCommand` from `tauri.windows.conf.json`). A miss shows up as a "DLL not found"
+      or "entry point not found" dialog *before* the wizard appears. A dev build or
+      `target\release\Anchor.exe` can never catch this: `ort-sys` symlinks `DirectML.dll` beside
+      it, and a dev machine always has the redistributable. The staging script fails the build if
+      the exe gains any other non-Windows load-time dependency.
 - [ ] First-run wizard downloads ~3.5 GB, SHA-256 verifies, and **resume works** (kill the
       network mid-download, reconnect).
 - [ ] `pdfium` loads and `llama-server`/`tesseract` spawn — the load/spawn check that also
@@ -489,7 +512,7 @@ git remote set-url origin https://github.com/apalecz2/anchor.git
 | **winget / Homebrew Cask** | After N2+N3 — both want signed artifacts. |
 | **In-app auto-update** | After signing; or when users are on ≥2 versions behind. |
 | **Enterprise hardening** (bundle signed native binaries so only model data downloads, Intune/winget deployment, offline provisioning, required-domains doc) | A managed-fleet/B2B customer. Don't build it for one developer on an open laptop. |
-| **Intel Mac support** | Needs x86_64 llama-server + PDFium assets in R2 (`paths.rs::pdfium_spec`, `setup.rs::get_llama_server_spec`). Only with real demand. |
+| **Intel Mac support** | Needs x86_64 llama-server + PDFium assets in R2 (`paths.rs::pdfium_spec`, `setup.rs::get_llama_server_spec`), an x86_64 ONNX Runtime built from source and linked into `ort` (no `ort-sys` prebuilt exists for that target — §5.2), and `release.yml` switched back to `universal-apple-darwin`. Only with real demand. |
 | **Linux packaging** | Code paths are best-effort placeholders today. |
 | **Paid tier / licensing keys** | The Elastic License 2.0 choice already protects license-key-gated functionality; EULA §2 pre-drafts refund terms. Add Store/Stripe payment terms when you charge. |
 | **Full DMCA §512 program** | Only if Anchor ever hosts user content (cloud sync, sharing, a web app). Today a copyright/takedown contact in `SECURITY.md` covers the realistic case. |

@@ -16,10 +16,32 @@ export interface HardwareInfo {
     recommended_backend: Backend;
     os: OS;
     available_backends: Backend[];
+    /** Id of the pipeline preset this machine should run — the wizard pre-selects it.
+     *  Chosen by `hardware.rs::recommend_preset` from RAM and VRAM, which is what the
+     *  probe collected `ram_mb` for all along. */
+    recommended_preset: string;
+    /** Every catalog preset with whether this machine meets its requirements.
+     *  Unsupported ones are listed too, so the picker can show what the hardware
+     *  rules out instead of silently hiding the option. */
+    presets: PresetAvailability[];
+}
+
+export interface PresetAvailability {
+    id: string;
+    label: string;
+    description: string;
+    /** Total model weights this preset downloads, in MB. */
+    download_mb: number;
+    min_ram_mb: number;
+    min_vram_mb: number | null;
+    supported: boolean;
 }
 
 export interface SetupConfig {
     backend: Backend;
+    /** Pipeline preset to install. Absent means "whatever the backend implies",
+     *  i.e. the catalog default — the shape every install had before presets. */
+    presetId?: string;
 }
 
 export interface AssetManifestEntry {
@@ -56,4 +78,9 @@ export interface SetupPaths {
      *  Lets a wizard-skipping launch restore the GPU choice instead of defaulting
      *  to cpu — see useSetupCheck auto-heal. */
     hardware_backend: Backend | null;
+    /** Pipeline preset last persisted by the wizard, or null if never saved. Null is
+     *  "never chosen" (an install predating presets), not "the default" — the backend
+     *  falls back to the catalog default on its own, so this stays honest about
+     *  whether the user actually picked. */
+    pipeline_preset: string | null;
 }

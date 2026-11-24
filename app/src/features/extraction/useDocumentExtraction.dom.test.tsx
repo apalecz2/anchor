@@ -126,7 +126,7 @@ describe('useDocumentExtraction — cache', () => {
 
         const { result } = renderHook(() => useDocumentExtraction('sess', 0));
         await waitFor(() => expect(result.current.extractionResult).not.toBeNull());
-        expect(invoke).toHaveBeenCalledWith('process_document', { sessionId: 'sess', filePath: '/doc.pdf' });
+        expect(invoke).toHaveBeenCalledWith('process_document', { sessionId: 'sess', filePath: '/doc.pdf', presetId: null });
         // Persisted via INSERT, and a UUID id was attached to the word.
         expect(executed.some(e => e.sql.includes('INSERT OR IGNORE INTO document_pages'))).toBe(true);
         expect(result.current.extractionResult!.pages[0].words[0].id).toBeTruthy();
@@ -148,7 +148,7 @@ describe('useDocumentExtraction — cache', () => {
         const { result } = renderHook(() => useDocumentExtraction('sess', 0));
         await waitFor(() => expect(result.current.isLoading).toBe(false));
 
-        expect(invoke).toHaveBeenCalledWith('process_document', { sessionId: 'sess', filePath: '/doc.pdf' });
+        expect(invoke).toHaveBeenCalledWith('process_document', { sessionId: 'sess', filePath: '/doc.pdf', presetId: null });
         // The wreckage is cleared first — rows, marker and the orphaned render.
         expect(executed.some(e => e.sql.includes('DELETE FROM document_pages'))).toBe(true);
         expect(executed.some(e => e.sql.includes('DELETE FROM document_page_sets'))).toBe(true);
@@ -217,7 +217,7 @@ describe('useDocumentExtraction — cache', () => {
 
         act(() => result.current.retry());
         await waitFor(() => expect(fsRemove).toHaveBeenCalledWith('/p1.png'));
-        expect(invoke).toHaveBeenCalledWith('process_document', { sessionId: 'sess', filePath: '/doc.pdf' });
+        expect(invoke).toHaveBeenCalledWith('process_document', { sessionId: 'sess', filePath: '/doc.pdf', presetId: null });
     });
 });
 

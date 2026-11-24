@@ -115,7 +115,33 @@ describe('DownloadStep', () => {
     it('asks for the manifest matching the chosen backend', async () => {
         render(<DownloadStep config={config('cuda')} onComplete={vi.fn()} onError={vi.fn()} onCancel={vi.fn()} />);
         await waitFor(() =>
-            expect(invoke).toHaveBeenCalledWith('get_asset_manifest', { backend: 'cuda' }),
+            expect(invoke).toHaveBeenCalledWith('get_asset_manifest', { backend: 'cuda', presetId: null }),
         );
+    });
+
+    it('records the chosen preset before downloading, and asks for its manifest', async () => {
+        // The preset decides which assets the install needs, so it has to be on disk
+        // before the first byte — an install that fails partway is exactly the case
+        // `check_setup_complete` exists for, and it reads this file.
+        const withPreset: SetupConfig = { backend: 'cpu', presetId: 'tesseract-qwen3.5-4b' };
+        render(<DownloadStep config={withPreset} onComplete={vi.fn()} onError={vi.fn()} onCancel={vi.fn()} />);
+        await waitFor(() =>
+            expect(invoke).toHaveBeenCalledWith('get_asset_manifest', {
+                backend: 'cpu',
+                presetId: 'tesseract-qwen3.5-4b',
+            }),
+        );
+        expect(invoke).toHaveBeenCalledWith('persist_preset', { presetId: 'tesseract-qwen3.5-4b' });
+        expect(commands().indexOf('persist_preset'))
+            .toBeLessThan(commands().indexOf('get_asset_manifest'));
+    });
+
+    it('omits the preset entirely when the config names none', async () => {
+        // An install with no preset chosen must not write one: the backend falls back
+        // to the catalog default on its own, and recording a guess as though the user
+        // had picked it would outlive the guess.
+        render(<DownloadStep config={config('cpu')} onComplete={vi.fn()} onError={vi.fn()} onCancel={vi.fn()} />);
+        await waitFor(() => expect(commands()).toContain('get_asset_manifest'));
+        expect(commands()).not.toContain('persist_preset');
     });
 });

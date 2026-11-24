@@ -46,6 +46,7 @@ interface ExtractionOutputPaneProps {
     isExtracting: boolean;
     isCancelling: boolean;
     extractionPhase: ExtractionPhase;
+    currentStepLabel: string | null;
     streamingContent: string;
     streamRef: React.RefObject<HTMLPreElement | null>;
     cancelTableFormat: () => void;
@@ -69,7 +70,6 @@ interface ExtractionOutputPaneProps {
 
     // Errors / warnings + actions
     extractionError: string | null;
-    llamaError: string | null;
     truncated: boolean;
     contextOverflow: boolean;
     handleFormatTable: (boostTokens?: boolean) => void;
@@ -176,9 +176,9 @@ export function ExtractionOutputPane(props: ExtractionOutputPaneProps): React.Re
         outputView, setOutputView,
         activePage, isDbLoading, showProcessing, processingCancelled,
         rawLines, selectedWordId, highlightedWordId, setHighlightedWordId, selectWord, selectedWordRef, handleCopyRawText, rawTextSaved,
-        isExtracting, isCancelling, extractionPhase, streamingContent, streamRef, cancelTableFormat,
+        isExtracting, isCancelling, extractionPhase, currentStepLabel, streamingContent, streamRef, cancelTableFormat,
         provenanceCells, selectedCell, handleCellClick, clearCellSelection, onApplyGrid, tableKey, savedCsv, handleCopyTable, hasTable,
-        extractionError, llamaError, truncated, contextOverflow, handleFormatTable,
+        extractionError, truncated, contextOverflow, handleFormatTable,
         fileStem,
     } = props;
 
@@ -624,7 +624,7 @@ export function ExtractionOutputPane(props: ExtractionOutputPaneProps): React.Re
                                 {/* Dim the in-progress detail once cancelling so the
                                     pending "Cancelling…" state reads as the active one. */}
                                 <div className={isCancelling ? 'opacity-40 transition-opacity' : 'transition-opacity'}>
-                                    <ExtractionProgress phase={extractionPhase} />
+                                    <ExtractionProgress phase={extractionPhase} currentStepLabel={currentStepLabel} />
                                 </div>
                                 {/* Fixed height and reserved for the whole generation
                                     phase so streaming tokens fill a stable box instead of
@@ -793,10 +793,10 @@ export function ExtractionOutputPane(props: ExtractionOutputPaneProps): React.Re
                                     </OutputCard>
                                 );
                             })()
-                        ) : (extractionError || llamaError) ? (
+                        ) : extractionError ? (
                             <div className="flex flex-col h-full items-center justify-center gap-3">
                                 <Icon name="error" size={28} className="text-error" />
-                                <p className="text-error text-sm text-center max-w-sm">{extractionError || llamaError}</p>
+                                <p className="text-error text-sm text-center max-w-sm">{extractionError}</p>
                                 <button
                                     onClick={() => handleFormatTable()}
                                     className="px-4 py-1 text-sm bg-primary text-on-primary rounded-lg hover:bg-primary/90"
