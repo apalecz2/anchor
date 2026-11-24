@@ -18,11 +18,10 @@ const LINKS = {
     releases: 'https://github.com/apalecz2/anchor/releases/latest',
     /** Microsoft Store listing, planned (docs/release.md §6). Leave empty until live. */
     microsoftStore: '',
-    /** macOS DMG fallback — same caveat as `releases` above. The .app itself is
-     *  a universal build, but the AI runtime it downloads on first launch
-     *  (llama-server, PDFium) is Apple Silicon-only (see paths.rs::pdfium_spec /
-     *  setup.rs::get_llama_server_spec) — it does not actually run on Intel Macs.
-     *  Unsigned for now. */
+    /** macOS DMG fallback — same caveat as `releases` above. The .app is built
+     *  for Apple Silicon only (aarch64-apple-darwin; see docs/release.md §5.2),
+     *  matching the AI runtime it downloads on first launch (llama-server, PDFium),
+     *  which is arm64-only too. Unsigned for now. */
     macDownload: 'https://github.com/apalecz2/anchor/releases/latest',
 };
 

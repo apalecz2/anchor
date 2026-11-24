@@ -24,8 +24,8 @@ Verified 2026-07-27 (GitHub API + HTTP checks against the live site).
 | **Repo** | `github.com/apalecz2/anchor`, public, Elastic License 2.0. **Renamed** from `DataExtractionAI` — the local `origin` remote still points at the old URL and works only via GitHub's redirect (§8). |
 | **Website** | Live at **https://anchor.aidenpaleczny.com** (set as the repo homepage). `/privacy`, `/terms`, `/licenses` all return 200 as pre-rendered static routes. |
 | **Releases** | **Public on GitHub Releases**: `v0.1.0` and `v0.1.1` (2026-06-23), `v0.2.0` (2026-07-24). All three are flagged **pre-release**. |
-| **Release automation** | [`.github/workflows/release.yml`](../.github/workflows/release.yml) — tag-triggered (`v*`) or manual; builds **Windows** + **macOS universal** via `tauri-action` and publishes a **draft** release. |
-| **v0.2.0 artifacts** | `Anchor_0.2.0_x64-setup.exe` (6.8 MB, NSIS), `Anchor_0.2.0_x64_en-US.msi` (9.9 MB), `Anchor_0.2.0_universal.dmg` (20.1 MB), `Anchor_universal.app.tar.gz` (20 MB). |
+| **Release automation** | [`.github/workflows/release.yml`](../.github/workflows/release.yml) — tag-triggered (`v*`) or manual; builds **Windows** + **macOS (Apple Silicon, `aarch64-apple-darwin`)** via `tauri-action` and publishes a **draft** release. |
+| **v0.2.0 artifacts** | `Anchor_0.2.0_x64-setup.exe` (6.8 MB, NSIS), `Anchor_0.2.0_x64_en-US.msi` (9.9 MB), `Anchor_0.2.0_universal.dmg` (20.1 MB), `Anchor_universal.app.tar.gz` (20 MB). From the next release the macOS build is Apple Silicon-only, so expect `Anchor_<ver>_aarch64.dmg` instead (§5.2). |
 | **Versioning** | `productName: "Anchor"`, `version: 0.3.0` in [tauri.conf.json](../app/src-tauri/tauri.conf.json); `app/package.json` and `app/src-tauri/Cargo.toml` match and carry `author`/`description`/`license: Elastic-2.0`. Five files hold the version — §4.1. |
 | **Executable name** | `Anchor.exe`, from the `[[bin]] name` in [Cargo.toml](../app/src-tauri/Cargo.toml) — **not** from `productName`. Renamed for 0.3.0: the package was called `app`, so v0.1.x–v0.2.0 installed as `app.exe` (`%LOCALAPPDATA%\Anchor\app.exe`). Existing installs get the new name via the NSIS uninstall-then-install upgrade; pinned shortcuts to the old path break and need re-pinning. |
 | **Code signing** | ❌ **None on either platform.** No Authenticode/Azure Trusted Signing, no Apple Developer ID, no notarization, no `entitlements.plist`. The site says "Unsigned for now" on both download cards. |
@@ -78,7 +78,7 @@ published release is a pre-release, so the flag is being flipped by hand each ti
 **Exit:** the website's Windows and macOS buttons land a user on an actual installer file.
 
 ### N2 — macOS signing + notarization · ~½ day + Apple Developer enrollment ($99/yr)
-The unsigned universal DMG is the worst install experience of the two: Gatekeeper reports
+The unsigned DMG is the worst install experience of the two: Gatekeeper reports
 `"Anchor" is damaged and can't be opened` (quarantine + no valid signature), which reads as
 malware, not as an unsigned app. There is no "More info → Run anyway" escape hatch like
 Windows has.
@@ -175,7 +175,7 @@ optional rather than the only affordable path.
    ```bash
    git tag v0.3.0 && git push origin v0.3.0
    ```
-   `release.yml` builds Windows and macOS-universal in parallel and creates a **draft**
+   `release.yml` builds Windows and macOS (Apple Silicon) in parallel and creates a **draft**
    GitHub Release named `Anchor v0.3.0`, with the first-run-download disclosure already in
    the release body.
 
@@ -246,7 +246,7 @@ export APPLE_ID="aiden.paleczny@gmail.com"
 export APPLE_PASSWORD="app-specific-password"
 export APPLE_TEAM_ID="XXXXXXXXXX"
 export APPLE_SIGNING_IDENTITY="Developer ID Application: Aiden Paleczny (XXXXXXXXXX)"
-cd app && npm run tauri build --target universal-apple-darwin
+cd app && npm run tauri build --target aarch64-apple-darwin
 ```
 
 Verify:
@@ -254,7 +254,7 @@ Verify:
 ```bash
 codesign -dvvv "…/bundle/macos/Anchor.app" 2>&1 | grep -i runtime
 codesign -d --entitlements - "…/Anchor.app" 2>&1 | grep library-validation
-xcrun stapler validate "…/bundle/dmg/Anchor_0.3.0_universal.dmg"
+xcrun stapler validate "…/bundle/dmg/Anchor_0.3.0_aarch64.dmg"
 ```
 
 The wizard-downloaded child binaries (`llama-server`, `tesseract`) need no separate
@@ -262,9 +262,15 @@ signing — they're spawned as child processes, not loaded into Anchor's address
 the upstream arm64 builds are already ad-hoc signed. (Re-sign with
 `codesign -s - --force <binary>` only if you ever repackage them.)
 
-> **Universal build, arm64-only runtime.** The DMG is a universal binary, but the assets
-> the wizard downloads (`llama-server`, PDFium) are **arm64-only**, so setup cannot complete
-> on Intel Macs. Keep "Apple Silicon only" stated on the website and in the release notes.
+> **Apple Silicon only — no universal build.** The macOS build targets `aarch64-apple-darwin`
+> alone. A `universal-apple-darwin` build can't link: oar-ocr pulls in ONNX Runtime through
+> `ort-sys`'s `download-binaries` feature, and `ort-sys` ships no prebuilt for
+> `x86_64-apple-darwin`, so the Intel slice is left with unresolved ONNX Runtime symbols and
+> the whole build fails. Intel was never a working target anyway — the assets the wizard
+> downloads (`llama-server`, PDFium) are **arm64-only** — so an arm64 DMG drops nothing real
+> and is about half the size. Keep "Apple Silicon only" stated on the website and in the
+> release notes. (Regular PR CI won't catch a regression here: `test.yml` builds natively on
+> an arm64 `macos-latest` runner and never touches the x86_64 target.)
 
 ---
 
@@ -493,7 +499,7 @@ git remote set-url origin https://github.com/apalecz2/anchor.git
 | **winget / Homebrew Cask** | After N2+N3 — both want signed artifacts. |
 | **In-app auto-update** | After signing; or when users are on ≥2 versions behind. |
 | **Enterprise hardening** (bundle signed native binaries so only model data downloads, Intune/winget deployment, offline provisioning, required-domains doc) | A managed-fleet/B2B customer. Don't build it for one developer on an open laptop. |
-| **Intel Mac support** | Needs x86_64 llama-server + PDFium assets in R2 (`paths.rs::pdfium_spec`, `setup.rs::get_llama_server_spec`). Only with real demand. |
+| **Intel Mac support** | Needs x86_64 llama-server + PDFium assets in R2 (`paths.rs::pdfium_spec`, `setup.rs::get_llama_server_spec`), an x86_64 ONNX Runtime built from source and linked into `ort` (no `ort-sys` prebuilt exists for that target — §5.2), and `release.yml` switched back to `universal-apple-darwin`. Only with real demand. |
 | **Linux packaging** | Code paths are best-effort placeholders today. |
 | **Paid tier / licensing keys** | The Elastic License 2.0 choice already protects license-key-gated functionality; EULA §2 pre-drafts refund terms. Add Store/Stripe payment terms when you charge. |
 | **Full DMCA §512 program** | Only if Anchor ever hosts user content (cloud sync, sharing, a web app). Today a copyright/takedown contact in `SECURITY.md` covers the realistic case. |
