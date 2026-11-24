@@ -1,7 +1,7 @@
 {
   "name": "anchor",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Anchor: desktop app that extracts structured tables from scanned PDFs and images, fully on-device",
   "author": "Aiden Paleczny <aiden.paleczny@gmail.com>",
   "license": "Elastic-2.0",
