@@ -40,7 +40,7 @@ jobs:
         working-directory: app/src-tauri
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.95.0 # keep in sync with app/src-tauri/rust-toolchain.toml
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
@@ -60,7 +60,7 @@ jobs:
         os: [windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.95.0 # keep in sync with app/src-tauri/rust-toolchain.toml
       - uses: actions/setup-node@v5
         with:
           node-version: 22

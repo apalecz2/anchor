@@ -307,7 +307,11 @@ Two facts shape the whole effort:
 2. **Tooling:** Windows 10/11 SDK (`makeappx`, `makepri`, `signtool`).
 3. **Build unpackaged:** `cd app && npm run tauri build`, then stage
    `app/src-tauri/target/release/` (the `Anchor.exe` + DLLs/resources — *not* the
-   NSIS/MSI output). The exe name comes from the `[[bin]] name` in `Cargo.toml`; it must
+   NSIS/MSI output). Take the load-time DLLs (`DirectML.dll`, `msvcp140*.dll`,
+   `vcruntime140*.dll`) from `app/src-tauri/windows-runtime/`, where the build staged real
+   copies. `target/release/DirectML.dll` is only a symlink into `ort-sys`'s cache, and the
+   package must contain the file itself. Without them, the packaged app fails to launch on a
+   machine without the Visual C++ Redistributable (§7). Leave out the stale `app_lib.dll`. The exe name comes from the `[[bin]] name` in `Cargo.toml`; it must
    equal the manifest's `Executable=` below, and a `target/` dir carrying a stale `app.exe`
    from before the 0.3.0 rename should be cleaned first so the wrong binary can't be staged.
 4. **Author `AppxManifest.xml`** next to the staged binaries:
@@ -385,7 +389,7 @@ Two facts shape the whole effort:
 | **10.2.7** clean uninstall | Must enable removal of everything, incl. the downloaded GB. | ✅ In-app *Remove all data and quit* (N5); 🔶 confirm what MSIX uninstall clears on a VM (§6.4). |
 | **10.5.1** privacy policy URL | Mandatory for Win32/packaged products. | ✅ Live at https://anchor.aidenpaleczny.com/privacy |
 | **11.16** generative-AI | Declare live GenAI in Partner Center + listing; provide a report path. | ✅ In-app note + EULA §4 + `SECURITY.md` contact exist; 🔶 tick the declaration at submission. |
-| **11.2** licensing/attribution | Third-party components properly licensed and attributed. | ✅ `NOTICES.md` + in-app Licenses screen + `/licenses`. Reconciled 2026-08-04: §3 matches `cargo metadata` by name and version (718/718), and §2.1 now covers the bundled Inter / Source Serif 4 (OFL-1.1, full text in Appendix E) and Material Symbols (Apache-2.0) — previously unlisted while this row claimed ✅. Qwen verified Apache-2.0 (base + unsloth GGUF) for R2 redistribution. |
+| **11.2** licensing/attribution | Third-party components properly licensed and attributed. | ✅ `NOTICES.md` + in-app Licenses screen + `/licenses`. Reconciled 2026-08-04: §3 matches `cargo metadata` by name and version (718/718), and §2.1 now covers the bundled Inter / Source Serif 4 (OFL-1.1, full text in Appendix E) and Material Symbols (Apache-2.0) — previously unlisted while this row claimed ✅. Qwen verified Apache-2.0 (base + unsloth GGUF) for R2 redistribution. 2026-11-24: the installer-bundled `DirectML.dll` (MIT, §1.6) and Microsoft Visual C++ runtime (§1.8, proprietary "Distributable Code", with end-user flow-down terms in EULA §7) are now listed too; neither shows up in `npm ls`/`cargo metadata`, see [compliance-documents.md](compliance-documents.md) §4. |
 | **10.1.1** title/metadata accuracy | Unique title; state limitations (English-only OCR, one-time download, CPU works but slower). | 🔶 Reserve the name; listing copy at submission. |
 | **10.3.1** login | No account required — state in cert notes. | ✅ |
 | **10.4.1** graceful on incompatible hardware | Must degrade/message, not fail silently, on a GPU-less VM. | ✅ Wizard selects the CPU backend; re-verify per §7. |
@@ -460,6 +464,15 @@ install/uninstall/path checks stay manual.
 **Every run must verify**
 
 - [ ] Install completes from the published artifact (and, for MSIX, one-click/silent).
+- [ ] **Windows: the app launches on a machine that has never had the Visual C++
+      Redistributable installed.** `Anchor.exe` imports `DirectML.dll` and the MSVC C++ runtime
+      (`msvcp140*.dll`, `vcruntime140*.dll`) at load time, via ONNX Runtime/oar-ocr. The
+      installer ships them next to the exe (`app/scripts/stage-windows-runtime.mjs`, run as
+      `beforeBundleCommand` from `tauri.windows.conf.json`). A miss shows up as a "DLL not found"
+      or "entry point not found" dialog *before* the wizard appears. A dev build or
+      `target\release\Anchor.exe` can never catch this: `ort-sys` symlinks `DirectML.dll` beside
+      it, and a dev machine always has the redistributable. The staging script fails the build if
+      the exe gains any other non-Windows load-time dependency.
 - [ ] First-run wizard downloads ~3.5 GB, SHA-256 verifies, and **resume works** (kill the
       network mid-download, reconnect).
 - [ ] `pdfium` loads and `llama-server`/`tesseract` spawn — the load/spawn check that also

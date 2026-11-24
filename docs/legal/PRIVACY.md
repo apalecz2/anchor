@@ -1,6 +1,6 @@
 # Anchor Privacy Policy
 
-**Effective date / last updated: August 4, 2026**
+**Effective date / last updated: November 24, 2026**
 
 This Privacy Policy describes how **Anchor** (the desktop application for Windows and
 macOS, the "App"), its marketing website, and its download service handle information.
@@ -21,8 +21,8 @@ following is created and stored **only on your device**, in the App's data direc
 - a local SQLite database of your sessions and settings.
 
 **None of this content is transmitted to us or to any third party.** Optical character
-recognition and AI extraction both run on your device: OCR via a bundled Tesseract
-engine, and extraction via a local AI model served by a `llama-server` process that
+recognition and AI extraction both run on your device: OCR via a local OCR engine
+(oar-ocr by default, or Tesseract), and extraction via a local AI model served by a `llama-server` process that
 listens only on your own machine's loopback interface (`127.0.0.1`). Exported files
 (XLSX/CSV) are written only where you choose to save them.
 
@@ -34,11 +34,11 @@ recover, or delete them for you.
 The App makes network connections in exactly one situation: the **first-run setup
 download** (and any later re-download you initiate, e.g. after removing downloaded data).
 During setup, the App downloads the components it needs to work (the Tesseract OCR
-engine, the llama.cpp model server, the PDFium renderer, optional GPU runtime libraries,
-and AI model files, ~3.5 GB total) from:
+engine, the OCR recognition models, the llama.cpp model server, the PDFium renderer,
+optional GPU runtime libraries, and AI model files, ~3.5 GB total) from:
 
 - `anchor-assets.aidenpaleczny.com`, a download mirror we operate on Cloudflare R2; with
-- `huggingface.co` as a fallback source for the model files.
+- `huggingface.co` as a fallback source for the AI model files.
 
 These requests **send no personal information and no document content**; they are plain
 file downloads. Like any web server, the download service receives standard connection
@@ -58,8 +58,9 @@ SHA-256 checksum before use.
 After setup completes, the App works **fully offline**. It performs no update checks, no
 crash reporting, no analytics, and no other network calls. (The App's internal
 communication with its local model server stays on `127.0.0.1` and never leaves your
-machine.) The App's fonts and icons are bundled into the installer rather than fetched
-from a font CDN, so nothing is requested from a third party at launch or afterwards.
+machine.) The App's fonts and icons, and on Windows the runtime libraries it needs in
+order to start, are bundled into the installer rather than fetched at launch, so nothing is
+requested from a third party at launch or afterwards.
 
 If you install Anchor from the Microsoft Store, Microsoft may process installation and
 licensing data under [Microsoft's privacy statement](https://privacy.microsoft.com/); we

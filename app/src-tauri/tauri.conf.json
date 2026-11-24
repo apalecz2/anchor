@@ -40,7 +40,7 @@
         "homepage": "https://anchor.aidenpaleczny.com",
         "copyright": "Copyright © 2026 Aiden Paleczny. Licensed under the Elastic License 2.0.",
         "license": "Elastic-2.0",
-        "licenseFile": "../../LICENSE",
+        "licenseFile": "../../docs/legal/EULA.md",
         "shortDescription": "Extract tables from scanned documents, entirely on your device.",
         "longDescription": "Anchor turns tables in scanned PDFs and photographed pages into spreadsheets using on-device OCR and a local AI model. Every extracted cell is scored for confidence and linked back to the exact spot on the page it was read from, so results can be verified against the source. No account, no uploads, and no internet connection after first-run setup.",
         "icon": [

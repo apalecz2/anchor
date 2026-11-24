@@ -55,6 +55,20 @@ fn main() {
         "cargo:rerun-if-changed={}",
         manifest_dir.join("tauri.conf.json").display()
     );
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest_dir.join("tauri.windows.conf.json").display()
+    );
+
+    // tauri.windows.conf.json bundles `windows-runtime/` (load-time DLLs Anchor.exe
+    // imports — DirectML + the MSVC C++ runtime — staged by
+    // scripts/stage-windows-runtime.mjs just before bundling). tauri_build copies
+    // resources at *compile* time and errors on a missing path, but skips an empty
+    // directory, so make sure it exists for every plain cargo build/check/clippy.
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        fs::create_dir_all(manifest_dir.join("windows-runtime"))
+            .expect("failed to create src-tauri/windows-runtime");
+    }
 
     tauri_build::build()
 }

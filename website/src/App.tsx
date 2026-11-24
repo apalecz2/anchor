@@ -977,8 +977,8 @@ export default function App(): React.ReactElement {
                         />
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-12 gap-y-3">
                             <PipelineStep number="1" title="Ingest & validate" body="Drop a PDF, PNG, or JPEG. Anchor validates the format and checks whether the document contains extractable content." />
-                            <PipelineStep number="2" title="OCR" body="Files are rendered to high-resolution images (PDFs rendered with PDFium) and passed through Tesseract for word-level text and bounding boxes." />
-                            <PipelineStep number="3" title="OCR image preprocessing" body="A separate copy is prepared just for Tesseract: grayscaled and, for small uploads, upscaled with Lanczos resampling. The original image is untouched, so click-to-highlight boxes always land on the right spot." />
+                            <PipelineStep number="2" title="OCR" body="Files are rendered to high-resolution images (PDFs rendered with PDFium) and passed through an on-device OCR engine (oar-ocr, running PaddleOCR PP-OCRv6 models, by default, or Tesseract) for word-level text and bounding boxes." />
+                            <PipelineStep number="3" title="OCR image preprocessing" body="A separate copy is prepared just for OCR: grayscaled and, for small uploads, upscaled with Lanczos resampling. The original image is untouched, so click-to-highlight boxes always land on the right spot." />
                             <PipelineStep number="4" title="Context assembly" body="OCR words are sanitized and sorted into reading order. Two views are built from the same word array: spatially-aligned text for the AI, and an indexed word list with bounding boxes for provenance." />
                             <PipelineStep number="5" title="AI extraction" body="The local vision-language model reads the image alongside the spatial OCR text and emits a table with greedy decoding. Token log-probabilities are captured during streaming." />
                             <PipelineStep number="6" title="Grid matching" body="Anchor detects the table's column and row layout from the OCR word positions, then links each cell to its source word within that exact row and column, with no extra model tokens or added latency. Duplicate values are placed correctly by position instead of guesswork." />
@@ -998,7 +998,7 @@ export default function App(): React.ReactElement {
                                 { label: 'Framework', value: 'Tauri', note: 'Lightweight native desktop shell with lower overhead than Electron' },
                                 { label: 'AI runtime', value: 'llama.cpp server', note: 'Open-source inference engine; not tied to a proprietary API' },
                                 { label: 'Vision model', value: 'Qwen3.5-4b (multimodal)', note: 'Reads the document image directly to extract table values' },
-                                { label: 'OCR engine', value: 'Tesseract', note: 'Word-level bounding boxes and per-word confidence' },
+                                { label: 'OCR engine', value: 'oar-ocr (PP-OCRv6) or Tesseract', note: 'Word-level bounding boxes and confidence; oar-ocr runs on ONNX Runtime, with no Python' },
                                 { label: 'Image preprocessing', value: 'image crate (Rust)', note: 'Grayscale + Lanczos upscaling before OCR, with no system OpenCV dependency' },
                                 { label: 'PDF rendering', value: 'PDFium', note: '2000px renders from native PDF pages' },
                                 { label: 'Storage', value: 'SQLite', note: 'Session and file metadata stored entirely on-device' },

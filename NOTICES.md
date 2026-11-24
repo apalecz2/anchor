@@ -13,7 +13,9 @@ setup wizard from `anchor-assets.aidenpaleczny.com` (a mirror operated by the au
 Hugging Face as fallback for the model files) and verified against pinned SHA-256 digests
 before use. They are listed in §1. One entry in §1 (§1.6, ONNX Runtime) is redistributed by
 a different mechanism — linked into the compiled binary at build time rather than going
-through Anchor's own wizard/R2 pipeline — and is called out as such.
+through Anchor's own wizard/R2 pipeline — and is called out as such. Two further entries
+ship inside the Windows installer itself, because `Anchor.exe` cannot start without them:
+DirectML (noted under §1.6) and the Microsoft Visual C++ Runtime (§1.8).
 
 *Last regenerated: 2026-09-23. Regenerate the package tables (§2–§3) whenever dependencies
 change: `npm ls --omit=dev --all --json` in `app/`, and `cargo metadata --format-version 1`
@@ -170,7 +172,11 @@ apply the same build-time mechanism there). It is therefore present in every bui
 regardless of which pipeline preset the user selects, since the crate is an unconditional
 Cargo dependency — not merely a wizard-downloaded runtime asset a user could decline. Also
 pulled in as an execution-provider dependency on Windows: `DirectML.dll` (Microsoft, MIT,
-same repository), copied next to the executable rather than statically linked.
+<https://github.com/microsoft/DirectML>), which is dynamically linked rather than
+statically linked. `Anchor.exe` imports it at load time, so **the Windows installer ships
+it next to `Anchor.exe`** (unmodified, from the same prebuilt ONNX Runtime distribution;
+staged by `app/scripts/stage-windows-runtime.mjs`). The copy that ships in Windows itself
+(`System32`) is too old to be used.
 
 ### 1.7 PP-OCRv6 detection/recognition models (oar-ocr OCR engine, ONNX format)
 
@@ -190,6 +196,31 @@ same repository), copied next to the executable rather than statically linked.
   mechanism every other model asset uses. `ocr.rs::run_oar_ocr` reads them from
   `{data_dir}/models/oar-ocr/` by explicit path; the `oar-ocr` crate's own `auto-download`
   feature (which would fetch them live from ModelScope at first use) is not compiled in.
+
+### 1.8 Microsoft Visual C++ Runtime (`msvcp140*.dll`, `vcruntime140*.dll`): Windows installer only
+
+- Copyright (c) Microsoft Corporation
+- Files: `msvcp140.dll`, `msvcp140_1.dll`, `vcruntime140.dll`, `vcruntime140_1.dll`
+- License: the "Distributable Code" section of the Microsoft Software License Terms for
+  Visual Studio Community 2026 (<https://visualstudio.microsoft.com/license-terms/>). The
+  Build Tools used to compile Anchor are licensed only as a supplement to that product and
+  grant no redistribution rights of their own. Used together with the Visual Studio 2026
+  distributable list
+  (<https://learn.microsoft.com/visualstudio/releases/2026/redistribution>). That list
+  permits files in `[VisualStudioFolder]\VC\redist` and its subfolders to be copied and
+  distributed with a program, unmodified, excluding the `debug_nonredist` folders and any
+  file marked pre-release or preview. The files here ship unmodified from a release-channel
+  Build Tools install's `VC\Redist\MSVC\<version>\x64\Microsoft.VC14x.CRT` folder. End users
+  receive them under EULA §7 ("Proprietary runtime components"), whose restrictions mirror
+  Microsoft's own end-user license for these files ("Microsoft Visual C++ 2015 - 2022
+  Runtime", EULA ID `Cpp_2015-2022_ENU.1033`). They are proprietary to Microsoft and
+  governed by those terms, not by any open-source license in this file.
+- **Shipped inside the Windows installer**, next to `Anchor.exe`, unlike the rest of §1.
+  ONNX Runtime (§1.6) uses the dynamically linked MSVC C++ runtime. These DLLs are not
+  part of Windows: they are present only where the Visual C++ Redistributable has been
+  installed. Without them Anchor would fail to launch on a clean Windows install, before
+  the setup wizard could run, so they cannot be a wizard download. Staged by
+  `app/scripts/stage-windows-runtime.mjs`.
 
 ---
 

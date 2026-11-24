@@ -1,0 +1,11 @@
+# Pinned, not `stable`: ort-sys 2.0.0-rc.13 (oar-ocr's ONNX Runtime) locates the
+# target directory as OUT_DIR's 3rd ancestor, which assumes Cargo's original
+# build-dir layout (`build/<pkg>-<hash>/out`). Newer Cargo nests one level deeper
+# (`build/<pkg>/<hash>/out`), so its copy-dylibs step resolves `target/debug/build`
+# instead of `target/debug`, then panics copying DirectML.dll into a nonexistent
+# `build/examples/` — breaking every Windows build (CI clippy failed exactly this way).
+# Lift this pin only once oar-ocr moves to an ort-sys that handles the new layout.
+[toolchain]
+channel = "1.95.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"
